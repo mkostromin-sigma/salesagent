@@ -24,7 +24,7 @@ BANNED_METHODS = {"model_dump", "model_dump_internal"}
 
 # Known violations — allowlist shrinks as violations are fixed.
 # Each entry is (relative_path_from_tools_dir, line_number).
-# FIXME(salesagent-hr8n): 24 violations remain (5 fixed by salesagent-lfto;
+# FIXME(salesagent-hr8n): 23 violations remain (5 fixed by salesagent-lfto;
 # 1 retired in PR #1276 round-5 by switching property_targeting validation
 # to `raise AdCPValidationError` — boundary now handles the audit write).
 # Line numbers reflect merged state after the property_targeting validation
@@ -57,8 +57,6 @@ KNOWN_VIOLATIONS = {
     ("media_buy_update.py", 1342),
     ("media_buy_update.py", 1376),
     ("media_buy_update.py", 1438),
-    # _get_products_impl: 1 violation (logging)
-    ("products.py", 622),
     # _list_creatives_impl: 1 violation (filter dict conversion)
     ("creatives/listing.py", 143),  # filters.model_dump(exclude_none=True)
 }
