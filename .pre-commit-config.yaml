@@ -268,9 +268,12 @@ repos:
         always_run: false  # Only run when test files change
 
 
-      # ast-grep BDD guards (structural AST pattern detection)
+      # ast-grep BDD guards — scaffold only, no rules enforced yet.
+      # Real BDD structural patterns will be added in a follow-up PR.
+      # The hook wires the tool into the pre-commit pipeline so the
+      # infrastructure is in place when rules are ready.
       - id: ast-grep-bdd-guards
-        name: ast-grep BDD step guards
+        name: ast-grep BDD step guards (scaffold — no rules yet)
         entry: ast-grep scan
         language: system
         files: '^tests/bdd/steps/.*\.py$'
