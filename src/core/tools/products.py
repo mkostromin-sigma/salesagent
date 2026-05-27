@@ -12,8 +12,7 @@ from typing import Annotated, Any, cast
 from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
-from adcp.types import PropertyListReference
-from adcp.types import BrandReference, ContextObject
+from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field, ValidationError
@@ -620,7 +619,7 @@ async def _get_products_impl(
             filtered_products.append(product)
 
         products = filtered_products
-        logger.info(f"Applied filters: {req.filters.model_dump(exclude_none=True)}. {len(products)} products remain.")
+        logger.info("Applied filters: %r. %d products remain.", req.filters, len(products))
 
     # Filter products based on policy compliance (if policy checks are enabled)
     eligible_products = []
