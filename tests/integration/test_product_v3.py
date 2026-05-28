@@ -479,7 +479,7 @@ class TestMainFlow:
         result = await _call_get_products(brief="adapter test")
         for product in result.products:
             for po in product.pricing_options:
-                inner = po.root if hasattr(po, "root") else po
+                inner = getattr(po, "root", po)
                 # Mock adapter supports CPM, so should be annotated
                 assert hasattr(inner, "supported") or hasattr(inner, "pricing_model")
 
@@ -494,7 +494,7 @@ class TestMainFlow:
         for product in result.products:
             assert len(product.pricing_options) > 0
             for po in product.pricing_options:
-                inner = po.root if hasattr(po, "root") else po
+                inner = getattr(po, "root", po)
                 assert inner.pricing_option_id is not None
                 assert inner.currency is not None
 
@@ -1097,9 +1097,9 @@ class TestFilteredDiscovery:
         # restricted_product, global_audio) and 1 auction (auction_video).
         # With is_fixed_price=true, we should get at least the fixed ones.
         fixed_ids = {p.product_id for p in result.products}
-        assert len(fixed_ids) > 0, (
-            "is_fixed_price=True filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
-        )
+        assert (
+            len(fixed_ids) > 0
+        ), "is_fixed_price=True filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
         assert "guaranteed_display" in fixed_ids
 
     @pytest.mark.asyncio
@@ -1116,9 +1116,9 @@ class TestFilteredDiscovery:
             filters={"is_fixed_price": False},
         )
         auction_ids = {p.product_id for p in result.products}
-        assert len(auction_ids) > 0, (
-            "is_fixed_price=False filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
-        )
+        assert (
+            len(auction_ids) > 0
+        ), "is_fixed_price=False filter returned 0 products — PricingOption RootModel getattr bug (salesagent-srim)"
         assert "auction_video" in auction_ids
 
 

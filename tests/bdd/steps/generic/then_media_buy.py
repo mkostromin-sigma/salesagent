@@ -88,9 +88,9 @@ def then_response_has_packages(ctx: dict) -> None:
     request_kwargs = ctx.get("request_kwargs", {})
     expected_packages = request_kwargs.get("packages")
     if expected_packages is not None:
-        assert len(packages) == len(expected_packages), (
-            f"Expected {len(expected_packages)} packages (matching request), got {len(packages)}"
-        )
+        assert len(packages) == len(
+            expected_packages
+        ), f"Expected {len(expected_packages)} packages (matching request), got {len(packages)}"
     # "with allocations" means each package has a product_id (allocation to a product)
     for i, pkg in enumerate(packages):
         pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
@@ -166,9 +166,9 @@ def then_adapter_executed(ctx: dict) -> None:
         )
         call_args = adapter_mock.create_media_buy.call_args
         assert call_args is not None, "adapter.create_media_buy was called but call_args is None"
-        assert len(call_args.args) > 0 or len(call_args.kwargs) > 0, (
-            "adapter.create_media_buy was called with no arguments"
-        )
+        assert (
+            len(call_args.args) > 0 or len(call_args.kwargs) > 0
+        ), "adapter.create_media_buy was called with no arguments"
 
 
 @then("the approval path should be manual")
@@ -349,9 +349,9 @@ def then_webhook_notification(ctx: dict) -> None:
     # --- Extract media_buy_id and tenant ---
     resp = ctx.get("response")
     existing_mb = ctx.get("existing_media_buy")
-    assert resp is not None or existing_mb is not None, (
-        "No response or existing media buy in ctx — nothing to notify the Buyer about"
-    )
+    assert (
+        resp is not None or existing_mb is not None
+    ), "No response or existing media buy in ctx — nothing to notify the Buyer about"
 
     media_buy_id = None
     if resp is not None:
@@ -435,9 +435,9 @@ def then_webhook_notification(ctx: dict) -> None:
         )
 
         step = wf_repo.get_step_by_id(mapping.step_id)
-        assert step is not None, (
-            f"Workflow step {mapping.step_id} not found — context_manager cannot dispatch without a step record"
-        )
+        assert (
+            step is not None
+        ), f"Workflow step {mapping.step_id} not found — context_manager cannot dispatch without a step record"
         terminal_step_statuses = {"rejected", "completed", "approved", "failed"}
         assert step.status in terminal_step_statuses, (
             f"Workflow step {mapping.step_id} has status '{step.status}' — "
@@ -565,9 +565,9 @@ def then_package_records_persisted(ctx: dict) -> None:
         request_kwargs = ctx.get("request_kwargs", {})
         expected_count = len(request_kwargs.get("packages", []))
         if expected_count > 0:
-            assert count == expected_count, (
-                f"Expected {expected_count} package record(s) for media buy {media_buy_id}, found {count}"
-            )
+            assert (
+                count == expected_count
+            ), f"Expected {expected_count} package record(s) for media buy {media_buy_id}, found {count}"
 
 
 @then("no package records should be persisted")
@@ -744,9 +744,9 @@ def then_campaign_immediately_activating(ctx: dict) -> None:
         assert mb.start_time is not None, "start_time not set — campaign cannot be 'immediately activating'"
         now = datetime.now(UTC)
         delta = abs((mb.start_time - now).total_seconds())
-        assert delta < 60, (
-            f"start_time {mb.start_time} is {delta}s from now — expected within 60s for 'immediately activating'"
-        )
+        assert (
+            delta < 60
+        ), f"start_time {mb.start_time} is {delta}s from now — expected within 60s for 'immediately activating'"
 
 
 @then('the response should include resolved start_time (not literal "asap")')
@@ -818,9 +818,9 @@ def then_response_has_success_fields(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a success response but none found"
     media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert isinstance(media_buy_id, str) and len(media_buy_id) > 0, (
-        f"Expected non-empty string media_buy_id in success response, got: {media_buy_id!r}"
-    )
+    assert (
+        isinstance(media_buy_id, str) and len(media_buy_id) > 0
+    ), f"Expected non-empty string media_buy_id in success response, got: {media_buy_id!r}"
     packages = _get_response_field(resp, "packages")
     assert isinstance(packages, list), f"Expected packages to be a list, got: {type(packages).__name__}"
     assert len(packages) > 0, "Expected at least one package in success response"
@@ -842,9 +842,9 @@ def then_response_no_errors_field(ctx: dict) -> None:
     # Check the inner response (unwrap CreateMediaBuyResult)
     inner = getattr(resp, "response", resp)
     if isinstance(inner, dict):
-        assert "errors" not in inner or inner["errors"] is None, (
-            f'Expected no "errors" field on success response, got: {inner.get("errors")}'
-        )
+        assert (
+            "errors" not in inner or inner["errors"] is None
+        ), f'Expected no "errors" field on success response, got: {inner.get("errors")}'
     else:
         errors = getattr(inner, "errors", None)
         assert errors is None, f'Expected "errors" field to be absent/None on success response, got: {errors!r}'
@@ -854,9 +854,9 @@ def then_response_no_errors_field(ctx: dict) -> None:
 def then_response_has_errors_array(ctx: dict) -> None:
     """Assert the response contains a non-empty errors array."""
     error_response = ctx.get("error_response")
-    assert error_response is not None, (
-        "Expected error_response in ctx (dispatch promotes errors from CreateMediaBuyError)"
-    )
+    assert (
+        error_response is not None
+    ), "Expected error_response in ctx (dispatch promotes errors from CreateMediaBuyError)"
     errors = getattr(error_response, "errors", None)
     assert errors and len(errors) > 0, f"Expected non-empty errors array, got: {errors}"
 
@@ -958,9 +958,9 @@ def then_error_has_retry_after(ctx: dict) -> None:
             retry_after = (error.details or {}).get("retry_after")
     assert retry_after is not None, f"Expected retry_after field on error, but it is absent: {error}"
     # retry_after should be a positive number (seconds to wait before retrying)
-    assert isinstance(retry_after, (int, float)), (
-        f"Expected retry_after to be a number (seconds), got {type(retry_after).__name__}: {retry_after!r}"
-    )
+    assert isinstance(
+        retry_after, (int, float)
+    ), f"Expected retry_after to be a number (seconds), got {type(retry_after).__name__}: {retry_after!r}"
     assert retry_after > 0, f"Expected positive retry_after value, got {retry_after}"
 
 

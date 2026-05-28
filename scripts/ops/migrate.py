@@ -104,14 +104,12 @@ if __name__ == "__main__":
         elif sys.argv[1] == "upgrade":
             run_migrations()
         else:
-            print(
-                """Usage:
+            print("""Usage:
     python migrate.py               # Run all pending migrations
     python migrate.py upgrade       # Run all pending migrations
     python migrate.py status        # Check current migration status
     python migrate.py create <msg>  # Create a new migration
-            """
-            )
+            """)
     else:
         # Default action is to run migrations
         run_migrations()

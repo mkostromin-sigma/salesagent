@@ -76,8 +76,7 @@ def init_db(exit_on_error=False):
 
         if not existing_tenant and not create_demo_tenant:
             # Demo tenant disabled - user will create their own via signup flow or CLI
-            print(
-                """
+            print("""
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                        🚀 ADCP SALES AGENT READY                         ║
 ╠══════════════════════════════════════════════════════════════════════════╣
@@ -91,8 +90,7 @@ def init_db(exit_on_error=False):
 ║    python -m scripts.setup.setup_tenant "My Publisher" --adapter gam     ║
 ║                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-"""
-            )
+""")
             return
 
         if not existing_tenant:
@@ -340,8 +338,7 @@ def init_db(exit_on_error=False):
 
             # Update the print statement based on whether sample data was created
             if os.environ.get("CREATE_SAMPLE_DATA", "false").lower() == "true":
-                print(
-                    f"""
+                print(f"""
 ╔══════════════════════════════════════════════════════════════════╗
 ║                 🚀 ADCP SALES AGENT INITIALIZED                  ║
 ╠══════════════════════════════════════════════════════════════════╣
@@ -365,11 +362,9 @@ def init_db(exit_on_error=False):
 ║     http://[subdomain].localhost:8080                            ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
-                """
-                )
+                """)
             else:
-                print(
-                    """
+                print("""
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║                        🚀 ADCP SALES AGENT READY                         ║
 ╠══════════════════════════════════════════════════════════════════════════╣
@@ -395,24 +390,21 @@ def init_db(exit_on_error=False):
 ║       -m scripts.setup.setup_tenant "My Publisher" --adapter mock        ║
 ║                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
-                """
-                )
+                """)
         else:
             # Tenant already exists - show ready message with quick-start info
             from sqlalchemy import func, select
 
             stmt = select(func.count()).select_from(Tenant)
             tenant_count = session.scalar(stmt)
-            print(
-                f"""
+            print(f"""
 ✅ Database ready ({tenant_count} tenant(s))
 
 ⚡ Quick test: uvx adcp http://localhost:8080/mcp/ --auth test-token list_tools
 
 🌐 Admin UI: http://localhost:8001
    Login: test_super_admin@example.com / test123
-"""
-            )
+""")
 
 
 if __name__ == "__main__":

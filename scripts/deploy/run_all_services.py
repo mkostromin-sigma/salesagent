@@ -142,13 +142,11 @@ def check_schema_issues():
         ]
 
         for table, column in checks:
-            cursor = conn.execute(
-                f"""
+            cursor = conn.execute(f"""
                 SELECT column_name
                 FROM information_schema.columns
                 WHERE table_name = '{table}' AND column_name = '{column}'
-            """
-            )
+            """)
             if not cursor.fetchone():
                 issues.append(f"Missing column: {table}.{column}")
 

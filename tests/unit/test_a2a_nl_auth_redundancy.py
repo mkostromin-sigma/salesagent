@@ -88,9 +88,9 @@ async def test_nl_pricing_query_calls_resolve_identity_once():
 
             await handler.on_message_send(params, context=ctx)
 
-    assert mock_resolve.call_count == 1, (
-        f"resolve_identity called {mock_resolve.call_count} times for pricing NL request. Expected 1."
-    )
+    assert (
+        mock_resolve.call_count == 1
+    ), f"resolve_identity called {mock_resolve.call_count} times for pricing NL request. Expected 1."
 
 
 @pytest.mark.asyncio
@@ -113,9 +113,9 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
 
             await handler.on_message_send(params, context=ctx)
 
-    assert mock_resolve.call_count == 1, (
-        f"resolve_identity called {mock_resolve.call_count} times for targeting NL request. Expected 1."
-    )
+    assert (
+        mock_resolve.call_count == 1
+    ), f"resolve_identity called {mock_resolve.call_count} times for targeting NL request. Expected 1."
 
 
 @pytest.mark.asyncio

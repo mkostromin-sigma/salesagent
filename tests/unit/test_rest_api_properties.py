@@ -42,7 +42,7 @@ class TestRESTPropertiesFilterForwarding:
             headers={"Authorization": "Bearer test-token"},
         )
 
-        (_, call_kwargs) = mock_impl.call_args
+        _, call_kwargs = mock_impl.call_args
         req = call_kwargs.get("req") or mock_impl.call_args[0][0]
         assert req is not None, "req must not be None when filters are provided"
         assert getattr(req, field) == expected

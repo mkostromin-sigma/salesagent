@@ -438,9 +438,9 @@ def given_creatives_in_valid_state(ctx: dict) -> None:
                 f"Creative {cid} not found in DB for tenant {tenant.tenant_id} — "
                 "step claims creatives are 'in valid state' but creative doesn't exist"
             )
-            assert cr.status not in invalid_statuses, (
-                f"Creative {cid} is in '{cr.status}' state — step claims 'not error or rejected'"
-            )
+            assert (
+                cr.status not in invalid_statuses
+            ), f"Creative {cid} is in '{cr.status}' state — step claims 'not error or rejected'"
 
 
 @given("all placement_ids are valid for the product")
@@ -552,9 +552,9 @@ def given_package_update_optimization_goals(ctx: dict, goals_value: str) -> None
         # convention: the field slot exists in the template but this row omits the value.
         kwargs["packages"][0].pop("optimization_goals", None)
         ctx["optimization_goals_omitted"] = True
-        assert "optimization_goals" not in kwargs["packages"][0], (
-            "optimization_goals should be absent after '<not provided>' — preservation test requires omission"
-        )
+        assert (
+            "optimization_goals" not in kwargs["packages"][0]
+        ), "optimization_goals should be absent after '<not provided>' — preservation test requires omission"
     else:
         kwargs["packages"][0]["optimization_goals"] = json.loads(goals_value)
 
@@ -762,9 +762,9 @@ def then_response_has_media_buy_id(ctx: dict) -> None:
     mb = ctx.get("existing_media_buy")
     if mb is not None:
         expected = mb.media_buy_id
-        assert actual == expected, (
-            f"media_buy_id mismatch: expected '{expected}' from existing media buy, got '{actual}'"
-        )
+        assert (
+            actual == expected
+        ), f"media_buy_id mismatch: expected '{expected}' from existing media buy, got '{actual}'"
 
 
 @then("the response should contain buyer_ref")
@@ -811,18 +811,18 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     # Step text claims "not null" unconditionally — hard assert.
     # If production doesn't populate this, the SCENARIO should be xfailed in conftest.py,
     # not the step body. See salesagent-ghgx.
-    assert impl_date is not None, (
-        "implementation_date is None in response — step text claims 'not null' unconditionally"
-    )
+    assert (
+        impl_date is not None
+    ), "implementation_date is None in response — step text claims 'not null' unconditionally"
     # impl_date is not None — verify it's a meaningful datetime
     if isinstance(impl_date, str):
         parsed = datetime.fromisoformat(impl_date.replace("Z", "+00:00"))
         assert parsed.year >= 2020, f"implementation_date parsed to implausible date: {parsed!r}"
         assert parsed.year <= 2100, f"implementation_date is implausibly far in the future: {parsed!r}"
     else:
-        assert isinstance(impl_date, datetime), (
-            f"implementation_date should be datetime or ISO string, got {type(impl_date).__name__}: {impl_date!r}"
-        )
+        assert isinstance(
+            impl_date, datetime
+        ), f"implementation_date should be datetime or ISO string, got {type(impl_date).__name__}: {impl_date!r}"
         assert impl_date.year >= 2020, f"implementation_date has implausible year: {impl_date!r}"
         assert impl_date.year <= 2100, f"implementation_date is implausibly far in the future: {impl_date!r}"
 
@@ -861,9 +861,9 @@ def then_affected_packages_present(ctx: dict) -> None:
         f"affected_packages is None on response (type: {type(resp).__name__}) — "
         "step text claims response should contain affected_packages"
     )
-    assert isinstance(affected, list), (
-        f"affected_packages should be a list, got {type(affected).__name__}: {affected!r}"
-    )
+    assert isinstance(
+        affected, list
+    ), f"affected_packages should be a list, got {type(affected).__name__}: {affected!r}"
     existing_pkg = ctx.get("existing_package")
     assert existing_pkg is not None, (
         "Test harness did not register ctx['existing_package'] — cannot verify "
@@ -874,9 +874,9 @@ def then_affected_packages_present(ctx: dict) -> None:
     actual_pkg_ids = {
         getattr(p, "package_id", None) or (p.get("package_id") if isinstance(p, dict) else None) for p in affected
     }
-    assert expected_pkg_id in actual_pkg_ids, (
-        f"Expected package '{expected_pkg_id}' in affected_packages, got {actual_pkg_ids}"
-    )
+    assert (
+        expected_pkg_id in actual_pkg_ids
+    ), f"Expected package '{expected_pkg_id}' in affected_packages, got {actual_pkg_ids}"
 
 
 @then(parsers.parse("the affected package should show the updated budget of {budget:d}"))
@@ -894,9 +894,9 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
     assert "error" not in ctx, f"Response is an error ({ctx.get('error')}) — cannot check budget on error"
     affected = getattr(resp, "affected_packages", None) or []
     existing_pkg = ctx.get("existing_package")
-    assert existing_pkg is not None, (
-        "Test harness did not register ctx['existing_package'] — cannot identify which affected package to check"
-    )
+    assert (
+        existing_pkg is not None
+    ), "Test harness did not register ctx['existing_package'] — cannot identify which affected package to check"
     expected_pkg_id = getattr(existing_pkg, "package_id", None)
     assert expected_pkg_id is not None, f"existing_package has no package_id (type: {type(existing_pkg).__name__})"
     # Locate the specific package we updated — not just "the first one".
@@ -924,12 +924,12 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
         f"'updated budget of {budget}' unconditionally"
     )
     # actual_budget is not None — validate type and value
-    assert isinstance(actual_budget, (int, float)), (
-        f"Expected budget to be numeric, got {type(actual_budget).__name__}: {actual_budget!r}"
-    )
-    assert float(actual_budget) == float(budget), (
-        f"Expected budget {budget} on affected package '{expected_pkg_id}', got {actual_budget}"
-    )
+    assert isinstance(
+        actual_budget, (int, float)
+    ), f"Expected budget to be numeric, got {type(actual_budget).__name__}: {actual_budget!r}"
+    assert float(actual_budget) == float(
+        budget
+    ), f"Expected budget {budget} on affected package '{expected_pkg_id}', got {actual_budget}"
 
 
 @then("the response envelope should include a sandbox flag")
@@ -948,9 +948,9 @@ def then_response_has_sandbox(ctx: dict) -> None:
     assert "error" not in ctx, f"Update errored ({ctx['error']}) — cannot check sandbox flag on an error response"
     # Guard: response must be a Pydantic model (not a raw dict/string) — the
     # transport dispatch always yields a typed response on success.
-    assert isinstance(resp, BaseModel), (
-        f"Response is not a Pydantic model (type: {type(resp).__name__}) — cannot inspect for sandbox flag"
-    )
+    assert isinstance(
+        resp, BaseModel
+    ), f"Response is not a Pydantic model (type: {type(resp).__name__}) — cannot inspect for sandbox flag"
     # sandbox may live on the response directly or on a wrapper envelope
     sandbox = getattr(resp, "sandbox", None)
     if sandbox is None:
@@ -981,9 +981,9 @@ def then_no_errors_field(ctx: dict) -> None:
     # Use exclude_none=True (AdCP default) so errors=None is excluded from the dict.
     if hasattr(resp, "model_dump"):
         data = resp.model_dump(exclude_none=True)
-        assert "errors" not in data, (
-            f"Expected 'errors' key absent from response (exclude_none=True), but found: {data.get('errors')!r}"
-        )
+        assert (
+            "errors" not in data
+        ), f"Expected 'errors' key absent from response (exclude_none=True), but found: {data.get('errors')!r}"
     else:
         errors = getattr(resp, "errors", None)
         assert errors is None, f"Expected no 'errors' field in response, got: {errors}"
@@ -1000,9 +1000,9 @@ def then_response_has_errors_array(ctx: dict) -> None:
     error_resp = ctx.get("error_response")
     if error_resp is not None:
         if hasattr(error_resp, "errors"):
-            assert error_resp.errors is not None and len(error_resp.errors) > 0, (
-                f"Error response has empty/None errors: {error_resp}"
-            )
+            assert (
+                error_resp.errors is not None and len(error_resp.errors) > 0
+            ), f"Error response has empty/None errors: {error_resp}"
             return
     # Fallback: _promote_update_errors sets ctx["error"] from errors[0]
     error = ctx.get("error")
@@ -1029,9 +1029,9 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
             data = {k: v for k, v in response.items() if v is not None}
         else:
             data = {}
-        assert field_name not in data, (
-            f"Response should NOT contain '{field_name}' field (BR-RULE-018), but found: {data.get(field_name)!r}"
-        )
+        assert (
+            field_name not in data
+        ), f"Response should NOT contain '{field_name}' field (BR-RULE-018), but found: {data.get(field_name)!r}"
         return
     # Error-path response (BR-RULE-018 INV-2)
     error_resp = ctx.get("error_response")
@@ -1046,9 +1046,9 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     error = ctx.get("error")
     assert error is not None, f"Cannot check absence of '{field_name}' — no response, error_response, or error in ctx"
     field_val = getattr(error, field_name, None)
-    assert field_val is None, (
-        f"Error should NOT contain '{field_name}' field (BR-RULE-018 INV-2), but found: {field_val!r}"
-    )
+    assert (
+        field_val is None
+    ), f"Error should NOT contain '{field_name}' field (BR-RULE-018 INV-2), but found: {field_val!r}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1187,9 +1187,9 @@ def given_tenant_max_daily_spend(ctx: dict, cap_config: str) -> None:
                 cl.max_daily_package_spend = None
                 session.commit()
         else:
-            assert cl is not None, (
-                f"No CurrencyLimit for tenant {tenant.tenant_id} — cannot set max_daily_package_spend"
-            )
+            assert (
+                cl is not None
+            ), f"No CurrencyLimit for tenant {tenant.tenant_id} — cannot set max_daily_package_spend"
             cl.max_daily_package_spend = float(stripped)
             session.commit()
 
@@ -1431,9 +1431,9 @@ def given_new_end_time_after_existing_start(ctx: dict) -> None:
     existing_start = mb.start_time
     if existing_start.tzinfo is None:
         existing_start = existing_start.replace(tzinfo=UTC)
-    assert new_end > existing_start, (
-        f"New end_time {new_end} is not after existing start_time {existing_start} — step precondition violated"
-    )
+    assert (
+        new_end > existing_start
+    ), f"New end_time {new_end} is not after existing start_time {existing_start} — step precondition violated"
 
 
 @given(parsers.parse("the budget {amount:d} is greater than zero"))
@@ -1451,9 +1451,9 @@ def given_budget_greater_than_zero(ctx: dict, amount: int) -> None:
         "update_kwargs has no 'budget' — step claims budget is greater than zero "
         "but no budget was set by a prior Given step"
     )
-    assert float(actual_budget) == float(amount), (
-        f"Budget in update_kwargs ({actual_budget}) does not match step text ({amount})"
-    )
+    assert float(actual_budget) == float(
+        amount
+    ), f"Budget in update_kwargs ({actual_budget}) does not match step text ({amount})"
 
 
 # ═══════════════════════════════════════════════════════════════════════

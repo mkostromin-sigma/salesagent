@@ -206,6 +206,6 @@ class TestMultiTenantIsolation:
         # And the rejection must be auth/authorization-related, not an unrelated
         # transport failure that happens to be a ToolError/McpError.
         error_str = str(raised).lower()
-        assert any(keyword in error_str for keyword in AUTH_ERROR_KEYWORDS), (
-            f"Expected an authentication/authorization rejection, got {type(raised).__name__}: {raised}"
-        )
+        assert any(
+            keyword in error_str for keyword in AUTH_ERROR_KEYWORDS
+        ), f"Expected an authentication/authorization rejection, got {type(raised).__name__}: {raised}"

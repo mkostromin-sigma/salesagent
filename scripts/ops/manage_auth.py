@@ -18,13 +18,11 @@ def list_principals():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    cursor.execute(
-        """
+    cursor.execute("""
         SELECT principal_id, name, access_token, platform_mappings
         FROM principals
         ORDER BY name
-    """
-    )
+    """)
 
     rows = cursor.fetchall()
     conn.close()

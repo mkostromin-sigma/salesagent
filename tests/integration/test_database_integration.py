@@ -124,12 +124,10 @@ def test_settings_queries(integration_db):
         # Test 6: Workflow steps query (human_tasks table was deprecated)
         print("\n6. Testing workflow steps query...")
         try:
-            cursor.execute(
-                """
+            cursor.execute("""
                 SELECT COUNT(*) FROM workflow_steps
                 WHERE status IN ('pending', 'in_progress')
-            """
-            )
+            """)
             count = cursor.fetchone()[0]
             print(f"   ✓ Open workflow steps: {count}")
         except Exception as e:

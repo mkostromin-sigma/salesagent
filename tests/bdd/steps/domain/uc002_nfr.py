@@ -30,9 +30,9 @@ def given_tenant_has_min_order(ctx: dict) -> None:
 
     cl = env.get_currency_limit("USD")
     assert cl is not None, f"No CurrencyLimit(USD) for tenant {env._tenant_id} — TenantFactory should auto-create one"
-    assert cl.min_package_budget is not None and cl.min_package_budget > 0, (
-        f"CurrencyLimit.min_package_budget is {cl.min_package_budget} — expected a positive minimum order size"
-    )
+    assert (
+        cl.min_package_budget is not None and cl.min_package_budget > 0
+    ), f"CurrencyLimit.min_package_budget is {cl.min_package_budget} — expected a positive minimum order size"
     ctx["min_package_budget"] = cl.min_package_budget
 
 
@@ -47,9 +47,9 @@ def given_budget_below_minimum(ctx: dict) -> None:
     from decimal import Decimal
 
     min_budget = ctx.get("min_package_budget")
-    assert min_budget is not None, (
-        "min_package_budget not in ctx — 'the tenant has minimum order size requirements' Given step must run first"
-    )
+    assert (
+        min_budget is not None
+    ), "min_package_budget not in ctx — 'the tenant has minimum order size requirements' Given step must run first"
     below_min = float(Decimal(str(min_budget)) - Decimal("0.01"))
     kwargs = ctx.get("request_kwargs", {})
     for pkg in kwargs.get("packages", []):
@@ -72,14 +72,14 @@ def then_fail_with_auth_error(ctx: dict) -> None:
     from src.core.exceptions import AdCPAuthenticationError
 
     error = ctx.get("error")
-    assert error is not None, (
-        "Expected an authentication error but no error was recorded — the request succeeded despite invalid credentials"
-    )
+    assert (
+        error is not None
+    ), "Expected an authentication error but no error was recorded — the request succeeded despite invalid credentials"
     is_auth_error = isinstance(error, AdCPAuthenticationError)
     is_null_token_error = isinstance(error, TypeError) and "Header value" in str(error)
-    assert is_auth_error or is_null_token_error, (
-        f"Expected AdCPAuthenticationError (or null-token TypeError in E2E), got {type(error).__name__}: {error}"
-    )
+    assert (
+        is_auth_error or is_null_token_error
+    ), f"Expected AdCPAuthenticationError (or null-token TypeError in E2E), got {type(error).__name__}: {error}"
 
 
 @then("no adapter calls should have been made")
@@ -87,9 +87,9 @@ def then_no_adapter_calls(ctx: dict) -> None:
     """Assert the adapter was never called — proving auth blocked before business logic."""
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
-    assert not mock_adapter.create_media_buy.called, (
-        "Adapter.create_media_buy was called despite auth failure — business logic ran before authentication"
-    )
+    assert (
+        not mock_adapter.create_media_buy.called
+    ), "Adapter.create_media_buy was called despite auth failure — business logic ran before authentication"
 
 
 @then("the error should indicate minimum spend requirement")
@@ -108,9 +108,9 @@ def then_error_minimum_spend(ctx: dict) -> None:
         msg = _get_response_field(resp, "message") or _get_response_field(resp, "error") or ""
         error_str = str(msg).lower()
 
-    assert "minimum" in error_str or "min" in error_str or "spend" in error_str, (
-        f"Expected error to indicate minimum spend requirement, got: {error or resp}"
-    )
+    assert (
+        "minimum" in error_str or "min" in error_str or "spend" in error_str
+    ), f"Expected error to indicate minimum spend requirement, got: {error or resp}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -135,9 +135,9 @@ def then_auth_before_business_logic(ctx: dict) -> None:
     resp = ctx.get("response")
     error = ctx.get("error")
     if error is not None:
-        assert not isinstance(error, AdCPAuthenticationError), (
-            f"Authentication failed despite valid credentials: {error}"
-        )
+        assert not isinstance(
+            error, AdCPAuthenticationError
+        ), f"Authentication failed despite valid credentials: {error}"
     else:
         assert resp is not None, "Expected either a response or an error"
 
@@ -166,15 +166,15 @@ def then_auth_before_business_logic(ctx: dict) -> None:
     except AdCPAuthenticationError as exc:
         auth_error = exc
 
-    assert auth_error is not None, (
-        "Expected AdCPAuthenticationError with no principal_id, but the request succeeded — auth is not the first gate"
-    )
+    assert (
+        auth_error is not None
+    ), "Expected AdCPAuthenticationError with no principal_id, but the request succeeded — auth is not the first gate"
     assert "Principal ID not found" in str(auth_error), f"Expected 'Principal ID not found' error, got: {auth_error}"
 
     # Verify no business logic side effects occurred
-    assert not mock_adapter.create_media_buy.called, (
-        "Adapter.create_media_buy was called despite auth failure — business logic ran before authentication"
-    )
+    assert (
+        not mock_adapter.create_media_buy.called
+    ), "Adapter.create_media_buy was called despite auth failure — business logic ran before authentication"
 
 
 @then("the system should enforce rate limiting on the endpoint")
@@ -376,16 +376,16 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
     from tests.bdd.steps._outcome_helpers import is_e2e
 
     min_budget = ctx.get("min_package_budget")
-    assert min_budget is not None, (
-        "min_package_budget not in ctx — 'the tenant has minimum order size requirements' Given step must run first"
-    )
+    assert (
+        min_budget is not None
+    ), "min_package_budget not in ctx — 'the tenant has minimum order size requirements' Given step must run first"
 
     # Step 1: Original request should have succeeded (budget >= min)
     resp = ctx.get("response")
     error = ctx.get("error")
-    assert resp is not None and error is None, (
-        f"Expected the original request to succeed (budget >= min_package_budget), but got error: {error}"
-    )
+    assert (
+        resp is not None and error is None
+    ), f"Expected the original request to succeed (budget >= min_package_budget), but got error: {error}"
 
     # Step 2: Make a second call with budget below minimum to test enforcement
     from src.core.schemas import CreateMediaBuyRequest
@@ -427,9 +427,9 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
             low_budget_error = exc
 
     # Step 3: Assert the specific minimum spend rejection
-    assert low_budget_error is not None, (
-        f"Expected rejection for budget {below_min} below min_package_budget {min_budget}, but the request succeeded"
-    )
+    assert (
+        low_budget_error is not None
+    ), f"Expected rejection for budget {below_min} below min_package_budget {min_budget}, but the request succeeded"
     error_str = str(low_budget_error)
     error_code = getattr(low_budget_error, "code", "")
     assert "minimum spend" in error_str.lower() or error_code == "BUDGET_EXCEEDED", (

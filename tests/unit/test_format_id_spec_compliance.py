@@ -91,9 +91,9 @@ async def test_build_creative_sends_format_id_as_object():
     params = call_args[0][1] if len(call_args[0]) > 1 else call_args[1].get("arguments", {})
     format_id_sent = params["format_id"]
 
-    assert isinstance(format_id_sent, dict), (
-        f"format_id should be a dict {{id, agent_url}}, got {type(format_id_sent).__name__}: {format_id_sent}"
-    )
+    assert isinstance(
+        format_id_sent, dict
+    ), f"format_id should be a dict {{id, agent_url}}, got {type(format_id_sent).__name__}: {format_id_sent}"
     assert format_id_sent["id"] == "display_300x250_generative"
     assert "agent_url" in format_id_sent
 
@@ -127,9 +127,9 @@ def test_product_format_ids_are_always_format_id_objects():
     )
 
     for fid in product.format_ids:
-        assert isinstance(fid, (FormatId, LibraryFormatId)), (
-            f"format_id should be a FormatId object after validation, got {type(fid).__name__}: {fid}"
-        )
+        assert isinstance(
+            fid, (FormatId, LibraryFormatId)
+        ), f"format_id should be a FormatId object after validation, got {type(fid).__name__}: {fid}"
 
 
 # ---------------------------------------------------------------------------
@@ -164,9 +164,9 @@ def test_media_buy_update_format_ids_are_typed():
 
     # After deserialization, format_ids should be typed objects, not raw dicts
     for fid in product.format_ids:
-        assert hasattr(fid, "id") and hasattr(fid, "agent_url"), (
-            f"format_id should have .id and .agent_url attributes, got {type(fid).__name__}"
-        )
+        assert hasattr(fid, "id") and hasattr(
+            fid, "agent_url"
+        ), f"format_id should have .id and .agent_url attributes, got {type(fid).__name__}"
         assert not isinstance(fid, dict), f"format_id should not be a raw dict after deserialization, got dict: {fid}"
 
 
@@ -229,6 +229,6 @@ def test_create_creative_request_accepts_format_id_object():
     )
 
     # format_id should be a FormatId object (or at least a dict), not rejected
-    assert hasattr(req.format_id, "id") or isinstance(req.format_id, dict), (
-        f"format_id should accept FormatId objects, got {type(req.format_id).__name__}"
-    )
+    assert hasattr(req.format_id, "id") or isinstance(
+        req.format_id, dict
+    ), f"format_id should accept FormatId objects, got {type(req.format_id).__name__}"

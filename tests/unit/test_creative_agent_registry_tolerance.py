@@ -51,7 +51,8 @@ def test_non_asset_type_malformed_format_must_not_nuke_batch():
     result = _validate_formats_tolerant([good_a, bad_missing_name, good_b], logger)
 
     returned_ids = {fmt.format_id.id for fmt in result}
-    assert returned_ids == {"good_a", "good_b"}, (
-        f"az8d invariant: only the two conforming formats must survive, got {returned_ids}"
-    )
+    assert returned_ids == {
+        "good_a",
+        "good_b",
+    }, f"az8d invariant: only the two conforming formats must survive, got {returned_ids}"
     assert len(result) == 2, f"expected exactly 2 conforming formats, got {len(result)}"

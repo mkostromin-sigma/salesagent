@@ -38,13 +38,11 @@ def test_db(integration_db):
 
     # Insert tenant (PostgreSQL ON CONFLICT)
     conn.execute(
-        text(
-            """
+        text("""
             INSERT INTO tenants (tenant_id, name, subdomain, is_active, ad_server, billing_plan, enable_axe_signals, human_review_required, approval_mode, created_at, updated_at)
             VALUES (:tenant_id, :name, :subdomain, :is_active, :ad_server, :billing_plan, :enable_axe_signals, :human_review_required, :approval_mode, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT (tenant_id) DO NOTHING
-        """
-        ),
+        """),
         {
             "tenant_id": "test_dashboard",
             "name": "Test Dashboard Tenant",
@@ -63,13 +61,11 @@ def test_db(integration_db):
 
     # Insert test principals (PostgreSQL ON CONFLICT)
     conn.execute(
-        text(
-            """
+        text("""
             INSERT INTO principals (tenant_id, principal_id, name, access_token, platform_mappings)
             VALUES (:tenant_id, :principal_id, :name, :access_token, :platform_mappings)
             ON CONFLICT (tenant_id, principal_id) DO NOTHING
-        """
-        ),
+        """),
         {
             "tenant_id": "test_dashboard",
             "principal_id": "principal_1",
@@ -80,13 +76,11 @@ def test_db(integration_db):
     )
 
     conn.execute(
-        text(
-            """
+        text("""
             INSERT INTO principals (tenant_id, principal_id, name, access_token, platform_mappings)
             VALUES (:tenant_id, :principal_id, :name, :access_token, :platform_mappings)
             ON CONFLICT (tenant_id, principal_id) DO NOTHING
-        """
-        ),
+        """),
         {
             "tenant_id": "test_dashboard",
             "principal_id": "principal_2",
@@ -101,15 +95,13 @@ def test_db(integration_db):
 
     # Active buy from 5 days ago
     conn.execute(
-        text(
-            """
+        text("""
         INSERT INTO media_buys (
             media_buy_id, tenant_id, principal_id, order_name, advertiser_name,
             budget, start_date, end_date, status, created_at, raw_request
         ) VALUES (:media_buy_id, :tenant_id, :principal_id, :order_name, :advertiser_name,
                   :budget, :start_date, :end_date, :status, :created_at, :raw_request)
-    """
-        ),
+    """),
         {
             "media_buy_id": "mb_test_001",
             "tenant_id": "test_dashboard",
@@ -127,15 +119,13 @@ def test_db(integration_db):
 
     # Pending buy from today
     conn.execute(
-        text(
-            """
+        text("""
         INSERT INTO media_buys (
             media_buy_id, tenant_id, principal_id, order_name, advertiser_name,
             budget, start_date, end_date, status, created_at, raw_request
         ) VALUES (:media_buy_id, :tenant_id, :principal_id, :order_name, :advertiser_name,
                   :budget, :start_date, :end_date, :status, :created_at, :raw_request)
-    """
-        ),
+    """),
         {
             "media_buy_id": "mb_test_002",
             "tenant_id": "test_dashboard",
@@ -153,15 +143,13 @@ def test_db(integration_db):
 
     # Completed buy from 45 days ago (for revenue change calculation)
     conn.execute(
-        text(
-            """
+        text("""
         INSERT INTO media_buys (
             media_buy_id, tenant_id, principal_id, order_name, advertiser_name,
             budget, start_date, end_date, status, created_at, raw_request
         ) VALUES (:media_buy_id, :tenant_id, :principal_id, :order_name, :advertiser_name,
                   :budget, :start_date, :end_date, :status, :created_at, :raw_request)
-    """
-        ),
+    """),
         {
             "media_buy_id": "mb_test_003",
             "tenant_id": "test_dashboard",
@@ -241,15 +229,13 @@ class TestDashboardMetricsIntegration:
 
         # Query for 30-day revenue (PostgreSQL INTERVAL syntax)
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COALESCE(SUM(budget), 0) as total_revenue
             FROM media_buys
             WHERE tenant_id = :tenant_id
             AND status IN ('active', 'completed')
             AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
 
@@ -265,31 +251,27 @@ class TestDashboardMetricsIntegration:
 
         # Current period (last 30 days)
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COALESCE(SUM(budget), 0)
             FROM media_buys
             WHERE tenant_id = :tenant_id
             AND status IN ('active', 'completed')
             AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
         current = cursor.fetchone()[0]
 
         # Previous period (30-60 days ago)
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COALESCE(SUM(budget), 0)
             FROM media_buys
             WHERE tenant_id = :tenant_id
             AND status IN ('active', 'completed')
             AND created_at >= CURRENT_TIMESTAMP - INTERVAL '60 days'
             AND created_at < CURRENT_TIMESTAMP - INTERVAL '30 days'
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
         previous = cursor.fetchone()[0]
@@ -309,12 +291,10 @@ class TestDashboardMetricsIntegration:
 
         # Active buys
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COUNT(*) FROM media_buys
             WHERE tenant_id = :tenant_id AND status = 'active'
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
         active = cursor.fetchone()[0]
@@ -322,12 +302,10 @@ class TestDashboardMetricsIntegration:
 
         # Pending buys
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COUNT(*) FROM media_buys
             WHERE tenant_id = :tenant_id AND status = 'pending'
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
         pending = cursor.fetchone()[0]
@@ -340,11 +318,9 @@ class TestDashboardMetricsIntegration:
 
         # Total advertisers
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COUNT(*) FROM principals WHERE tenant_id = :tenant_id
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
         total = cursor.fetchone()[0]
@@ -352,14 +328,12 @@ class TestDashboardMetricsIntegration:
 
         # Active advertisers (with activity in last 30 days)
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COUNT(DISTINCT principal_id)
             FROM media_buys
             WHERE tenant_id = :tenant_id
             AND created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
         active = cursor.fetchone()[0]
@@ -375,8 +349,7 @@ class TestDashboardDataRetrieval:
         from sqlalchemy import text
 
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT
                 mb.media_buy_id,
                 mb.principal_id,
@@ -388,8 +361,7 @@ class TestDashboardDataRetrieval:
             WHERE mb.tenant_id = :tenant_id
             ORDER BY mb.created_at DESC
             LIMIT 10
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
 
@@ -408,8 +380,7 @@ class TestDashboardDataRetrieval:
         from sqlalchemy import text
 
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT
                 mb.advertiser_name,
                 SUM(mb.budget) as revenue
@@ -420,8 +391,7 @@ class TestDashboardDataRetrieval:
             GROUP BY mb.advertiser_name
             ORDER BY revenue DESC
             LIMIT 10
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard"},
         )
 
@@ -443,13 +413,11 @@ class TestDashboardErrorCases:
 
         # Create empty tenant (PostgreSQL ON CONFLICT)
         test_db.execute(
-            text(
-                """
+            text("""
                 INSERT INTO tenants (tenant_id, name, subdomain, is_active, ad_server, billing_plan, enable_axe_signals, human_review_required, approval_mode, created_at, updated_at)
                 VALUES (:tenant_id, :name, :subdomain, :is_active, :ad_server, :billing_plan, :enable_axe_signals, :human_review_required, :approval_mode, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT (tenant_id) DO NOTHING
-            """
-            ),
+            """),
             {
                 "tenant_id": "empty_tenant",
                 "name": "Empty Tenant",
@@ -466,13 +434,11 @@ class TestDashboardErrorCases:
 
         # All metrics should return 0 or empty
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COALESCE(SUM(budget), 0)
             FROM media_buys
             WHERE tenant_id = :tenant_id
-        """
-            ),
+        """),
             {"tenant_id": "empty_tenant"},
         )
 
@@ -489,15 +455,13 @@ class TestDashboardErrorCases:
 
         # Insert media buy with NULL budget
         test_db.execute(
-            text(
-                """
+            text("""
             INSERT INTO media_buys (
                 media_buy_id, tenant_id, principal_id, order_name, advertiser_name,
                 budget, start_date, end_date, status, raw_request
             ) VALUES (:media_buy_id, :tenant_id, :principal_id, :order_name, :advertiser_name,
                       :budget, :start_date, :end_date, :status, :raw_request)
-            """
-            ),
+            """),
             {
                 "media_buy_id": "mb_null",
                 "tenant_id": "test_dashboard",
@@ -515,13 +479,11 @@ class TestDashboardErrorCases:
 
         # Query should handle NULL gracefully
         cursor = test_db.execute(
-            text(
-                """
+            text("""
             SELECT COALESCE(SUM(budget), 0)
             FROM media_buys
             WHERE tenant_id = :tenant_id AND media_buy_id = :media_buy_id
-        """
-            ),
+        """),
             {"tenant_id": "test_dashboard", "media_buy_id": "mb_null"},
         )
 

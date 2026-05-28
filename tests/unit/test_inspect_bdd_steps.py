@@ -128,20 +128,16 @@ class TestBddStepExtraction:
     def test_handles_multiple_files(self, tmp_path: Path) -> None:
         """Should find steps across multiple .py files in subdirectories."""
         (tmp_path / "sub").mkdir()
-        (tmp_path / "a.py").write_text(
-            textwrap.dedent("""
+        (tmp_path / "a.py").write_text(textwrap.dedent("""
             from pytest_bdd import then
             @then("step A")
             def step_a(ctx): pass
-        """)
-        )
-        (tmp_path / "sub" / "b.py").write_text(
-            textwrap.dedent("""
+        """))
+        (tmp_path / "sub" / "b.py").write_text(textwrap.dedent("""
             from pytest_bdd import given
             @given("step B")
             def step_b(ctx): pass
-        """)
-        )
+        """))
 
         from inspect_bdd_steps import extract_bdd_steps
 

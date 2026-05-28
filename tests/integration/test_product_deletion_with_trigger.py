@@ -83,9 +83,7 @@ def test_trigger_still_blocks_manual_deletion_of_last_pricing_option(integration
     # integration_db creates tables without migrations, so we need to create the trigger manually
     with get_db_session() as session:
         # Create the trigger function (from migration b61ff75713c0)
-        session.execute(
-            text(
-                """
+        session.execute(text("""
                 CREATE OR REPLACE FUNCTION prevent_empty_pricing_options()
                 RETURNS TRIGGER AS $$
                 DECLARE
@@ -120,22 +118,16 @@ def test_trigger_still_blocks_manual_deletion_of_last_pricing_option(integration
                     RETURN OLD;
                 END;
                 $$ LANGUAGE plpgsql;
-                """
-            )
-        )
+                """))
 
         # Create the trigger (from migration b61ff75713c0)
-        session.execute(
-            text(
-                """
+        session.execute(text("""
                 DROP TRIGGER IF EXISTS enforce_min_one_pricing_option ON pricing_options;
                 CREATE TRIGGER enforce_min_one_pricing_option
                 BEFORE DELETE ON pricing_options
                 FOR EACH ROW
                 EXECUTE FUNCTION prevent_empty_pricing_options();
-                """
-            )
-        )
+                """))
         session.commit()
 
     with get_db_session() as session:

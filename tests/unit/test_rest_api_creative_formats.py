@@ -46,7 +46,7 @@ class TestRESTCreativeFormatsFilterForwarding:
         )
 
         # Extract and verify the req argument passed to _impl
-        (_, call_kwargs) = mock_impl.call_args
+        _, call_kwargs = mock_impl.call_args
         req = call_kwargs.get("req") or mock_impl.call_args[0][0]
         assert req is not None, "req must not be None when filters are provided"
         actual = getattr(req, field)

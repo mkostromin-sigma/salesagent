@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import time
+from unittest.mock import patch
 
 from src.core.webhook_authenticator import WebhookAuthenticator
 from src.core.webhook_validator import WebhookURLValidator
@@ -14,13 +15,15 @@ class TestWebhookURLValidator:
 
     def test_valid_public_https_url(self):
         """Valid public HTTPS URLs should pass."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://example.com/webhook")
+        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+            is_valid, error = WebhookURLValidator.validate_webhook_url("https://example.com/webhook")
         assert is_valid
         assert error == ""
 
     def test_valid_public_http_url(self):
         """Valid public HTTP URLs should pass (for testing)."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://example.com/webhook")
+        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+            is_valid, error = WebhookURLValidator.validate_webhook_url("http://example.com/webhook")
         assert is_valid
         assert error == ""
 

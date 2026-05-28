@@ -200,9 +200,9 @@ def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
         cl = session.scalars(
             select(CurrencyLimit).filter_by(currency_code=currency, tenant_id=tenant.tenant_id)
         ).first()
-        assert cl is not None, (
-            f"No CurrencyLimit for {currency} in tenant {tenant.tenant_id} — cannot set max_daily_package_spend"
-        )
+        assert (
+            cl is not None
+        ), f"No CurrencyLimit for {currency} in tenant {tenant.tenant_id} — cannot set max_daily_package_spend"
         cl.max_daily_package_spend = Decimal(str(amount))
         session.commit()
 
@@ -257,9 +257,9 @@ def given_package_not_in_media_buy(ctx: dict, package_id: str) -> None:
                 media_buy_id=mb.media_buy_id,
             )
         ).first()
-        assert db_pkg is None, (
-            f"Package '{package_id}' found in DB for media buy '{mb.media_buy_id}' — step claims it does not exist"
-        )
+        assert (
+            db_pkg is None
+        ), f"Package '{package_id}' found in DB for media buy '{mb.media_buy_id}' — step claims it does not exist"
 
 
 @given("the package exists in the media buy")
@@ -434,9 +434,9 @@ def given_placement_invalid_for_product(ctx: dict, placement_id: str) -> None:
     # Verify the placement is genuinely not in the product's valid placements
     placements = getattr(product, "placement_configs", None) or []
     valid_ids = {p.get("placement_id") if isinstance(p, dict) else getattr(p, "placement_id", None) for p in placements}
-    assert placement_id not in valid_ids, (
-        f"Placement '{placement_id}' IS valid for product — step claims it should not be. Valid: {valid_ids}"
-    )
+    assert (
+        placement_id not in valid_ids
+    ), f"Placement '{placement_id}' IS valid for product — step claims it should not be. Valid: {valid_ids}"
 
 
 @given("the package product does not support placement-level targeting")
@@ -477,9 +477,9 @@ def given_buyer_no_admin(ctx: dict) -> None:
     # that's OK because the scenario's When step creates the identity.
     # But if a principal IS present, it must have the role attribute set.
     if principal is not None:
-        assert hasattr(principal, "role"), (
-            f"Principal {type(principal).__name__} has no 'role' attribute — cannot mark buyer as non-admin"
-        )
+        assert hasattr(
+            principal, "role"
+        ), f"Principal {type(principal).__name__} has no 'role' attribute — cannot mark buyer as non-admin"
         principal.role = "buyer"
         assert principal.role == "buyer", f"Failed to set principal.role to 'buyer', got {principal.role!r}"
 
@@ -687,9 +687,9 @@ def then_no_db_records_modified(ctx: dict) -> None:
             # Verify the specific package we know about hasn't changed
             original_pkg_id = existing_pkg.package_id
             db_pkg = next((p for p in db_pkgs if p.package_id == original_pkg_id), None)
-            assert db_pkg is not None, (
-                f"MediaPackage '{original_pkg_id}' disappeared from DB — POST-F1 violated: package deleted on failure"
-            )
+            assert (
+                db_pkg is not None
+            ), f"MediaPackage '{original_pkg_id}' disappeared from DB — POST-F1 violated: package deleted on failure"
             _PKG_MUTABLE_FIELDS = ("budget", "bid_price", "pacing", "package_config")
             for field in _PKG_MUTABLE_FIELDS:
                 original = getattr(existing_pkg, field, None)
@@ -710,6 +710,6 @@ def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     assert error is not None, "No error recorded in ctx"
     d = _get_error_dict(error)
     suggestion = (d.get("suggestion") or "").lower()
-    assert text1.lower() in suggestion or text2.lower() in suggestion, (
-        f"Expected suggestion to contain '{text1}' or '{text2}', got: {d.get('suggestion')}"
-    )
+    assert (
+        text1.lower() in suggestion or text2.lower() in suggestion
+    ), f"Expected suggestion to contain '{text1}' or '{text2}', got: {d.get('suggestion')}"

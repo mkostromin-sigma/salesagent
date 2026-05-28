@@ -179,8 +179,7 @@ def init_db(exit_on_error=False):
 
             # Print appropriate message based on mode
             if create_demo_tenant:
-                print(
-                    """
+                print("""
 ╔══════════════════════════════════════════════════════════════════╗
 ║              🎮 DEMO SALES AGENT INITIALIZED                     ║
 ╠══════════════════════════════════════════════════════════════════╣
@@ -201,11 +200,9 @@ def init_db(exit_on_error=False):
 ║  💡 Ready to test! No setup required.                            ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
-                """
-                )
+                """)
             else:
-                print(
-                    """
+                print("""
 ╔══════════════════════════════════════════════════════════════════╗
 ║              🚀 SALES AGENT INITIALIZED                          ║
 ╠══════════════════════════════════════════════════════════════════╣
@@ -225,8 +222,7 @@ def init_db(exit_on_error=False):
 ║  💡 For demo/testing, restart with CREATE_DEMO_TENANT=true       ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
-                    """
-                )
+                    """)
         else:
             # Count tenants for status message
             stmt_count = select(func.count()).select_from(Tenant)

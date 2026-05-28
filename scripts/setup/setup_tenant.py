@@ -166,8 +166,7 @@ def create_tenant(args):
    Note: For GAM, you'll need to configure the advertiser mapping in
    the Admin UI before this principal can create media buys."""
 
-    print(
-        f"""
+    print(f"""
 ✅ Tenant (Publisher) created successfully!
 
 Publisher: {args.name}
@@ -206,8 +205,7 @@ Next Steps:
 
 Remember: Principals represent advertisers, not the publisher.
 Each advertiser gets their own principal with unique API access.
-"""
-    )
+""")
 
 
 def main():

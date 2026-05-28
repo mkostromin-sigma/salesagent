@@ -177,8 +177,7 @@ print(json.dumps(mock_response, indent=2))
 print("\n" + "=" * 80)
 print("KEY FEATURES OF THE LINE ITEM VIEWER:")
 print("=" * 80)
-print(
-    """
+print("""
 1. BASIC INFORMATION:
    - Line Item ID: 7047822666
    - Name: Q1_2025_Sports_Premium_Video
@@ -208,14 +207,12 @@ print(
    - Converts all GAM data to internal format
    - Ready for round-trip validation
    - Shows exact mapping from GAM to internal structure
-"""
-)
+""")
 
 print("\n" + "=" * 80)
 print("UI FEATURES:")
 print("=" * 80)
-print(
-    """
+print("""
 The Line Item Viewer UI provides:
 
 1. **Overview Tab**: Basic info, order details, pricing, schedule
@@ -229,8 +226,7 @@ Access via:
 - Orders Browser: Click "Details" button on any line item
 - Tenant Detail Page: Click "View Line Item" and enter ID
 - Direct URL: /tenant/{tenant_id}/gam/line-item/{line_item_id}
-"""
-)
+""")
 
 # Save the response to a file for reference
 with open("line_item_7047822666_response.json", "w") as f:

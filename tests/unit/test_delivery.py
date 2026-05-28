@@ -1741,9 +1741,7 @@ class TestDeliveryWebhookHappyPath:
         """
         service = WebhookDeliveryService()
 
-        with (
-            patch.object(service, "_send_webhook_enhanced", return_value=True) as mock_send,
-        ):
+        with (patch.object(service, "_send_webhook_enhanced", return_value=True) as mock_send,):
             service.send_delivery_webhook(
                 media_buy_id="mb_wh06",
                 tenant_id="t1",

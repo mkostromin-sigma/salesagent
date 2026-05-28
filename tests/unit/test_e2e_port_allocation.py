@@ -114,9 +114,9 @@ class TestFindFreePortContract:
         try:
             for _ in range(8):
                 p = find_free_port(50000, 60000)
-                assert p not in ports, (
-                    f"find_free_port returned duplicate port {p} while a prior allocation is still held."
-                )
+                assert (
+                    p not in ports
+                ), f"find_free_port returned duplicate port {p} while a prior allocation is still held."
                 ports.append(p)
                 held.append(_bind_all_interfaces(p))
         finally:

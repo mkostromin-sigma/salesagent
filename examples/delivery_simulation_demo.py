@@ -111,8 +111,7 @@ async def create_media_buy_via_mcp():
     This would trigger the delivery simulation.
     """
     print("\n🚀 Creating Media Buy (example MCP code):")
-    print(
-        """
+    print("""
     from fastmcp.client import Client
     from fastmcp.client.transports import StreamableHttpTransport
 
@@ -133,8 +132,7 @@ async def create_media_buy_via_mcp():
 
         print(f"Media Buy Created: {result.media_buy_id}")
         # Delivery simulation starts automatically!
-    """
-    )
+    """)
 
 
 async def demo_simulation():

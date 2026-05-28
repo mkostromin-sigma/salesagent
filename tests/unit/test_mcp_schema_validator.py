@@ -27,8 +27,7 @@ class TestValidatorDetectsOptionalFieldMismatches:
 
         # Create main.py using correct request object pattern
         main_py = tmp_path / "main.py"
-        main_py.write_text(
-            '''
+        main_py.write_text('''
 from adcp import GetProductsRequest
 
 @mcp.tool
@@ -38,8 +37,7 @@ async def get_products(
 ) -> GetProductsResponse:
     """Get products using request object pattern."""
     return _get_products_impl(req, context)
-'''
-        )
+''')
 
         validator = ToolSchemaValidator()
 
@@ -60,8 +58,7 @@ async def get_products(
 
         # Create a fixed main.py (includes adcp_version and brand)
         main_py = tmp_path / "main.py"
-        main_py.write_text(
-            '''
+        main_py.write_text('''
 from adcp import GetProductsRequest
 
 @mcp.tool
@@ -80,8 +77,7 @@ async def get_products(
         filters=filters,
     )
     return req
-'''
-        )
+''')
 
         validator = ToolSchemaValidator()
 
@@ -106,8 +102,7 @@ async def get_products(
 
         # Create main.py with shared implementation pattern
         main_py = tmp_path / "main.py"
-        main_py.write_text(
-            '''
+        main_py.write_text('''
 from adcp import GetProductsRequest
 
 async def _get_products_impl(req: GetProductsRequest, context: Context) -> GetProductsResponse:
@@ -131,8 +126,7 @@ async def get_products(
         filters=filters,
     )
     return await _get_products_impl(req, context)
-'''
-        )
+''')
 
         validator = ToolSchemaValidator()
 
@@ -151,8 +145,7 @@ class TestValidatorExistingFunctionality:
 
         # Request object pattern prevents extra params - Pydantic only accepts defined fields
         main_py = tmp_path / "main.py"
-        main_py.write_text(
-            '''
+        main_py.write_text('''
 from adcp import GetProductsRequest
 
 @mcp.tool
@@ -162,8 +155,7 @@ async def get_products(
 ) -> GetProductsResponse:
     """Tool using request object - extra params not possible."""
     return _get_products_impl(req, context)
-'''
-        )
+''')
 
         validator = ToolSchemaValidator()
         tools = validator.parse_main_py_for_tools(main_py)
@@ -177,8 +169,7 @@ async def get_products(
 
         # Request object pattern - Pydantic enforces required fields
         main_py = tmp_path / "main.py"
-        main_py.write_text(
-            '''
+        main_py.write_text('''
 from adcp import GetProductsRequest
 
 @mcp.tool
@@ -188,8 +179,7 @@ async def get_products(
 ) -> GetProductsResponse:
     """Tool using request object - Pydantic enforces required fields."""
     return _get_products_impl(req, context)
-'''
-        )
+''')
 
         validator = ToolSchemaValidator()
         tools = validator.parse_main_py_for_tools(main_py)

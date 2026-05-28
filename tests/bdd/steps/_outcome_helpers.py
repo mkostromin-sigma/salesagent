@@ -54,9 +54,9 @@ def assert_adapter_executed(ctx: dict) -> object:
     """
     mb = assert_media_buy_created(ctx)
     executed_statuses = ("active", "completed", "pending_approval", "pending_start", "submitted")
-    assert mb.status in executed_statuses, (
-        f"Media buy status '{mb.status}' does not confirm adapter execution. Expected one of {executed_statuses}."
-    )
+    assert (
+        mb.status in executed_statuses
+    ), f"Media buy status '{mb.status}' does not confirm adapter execution. Expected one of {executed_statuses}."
     return mb
 
 
@@ -78,17 +78,17 @@ def _assert_audit_logged_mock(ctx: dict, operation_substring: str) -> None:
     """Assert audit logger mock was called with the operation (in-process mode)."""
     env = ctx["env"]
     mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        f"Expected audit_logger.log_operation to be called with '{operation_substring}', but it was never called"
-    )
+    assert (
+        mock_audit.log_operation.called
+    ), f"Expected audit_logger.log_operation to be called with '{operation_substring}', but it was never called"
     operations = [
         call.kwargs.get("operation") or (call.args[0] if call.args else None)
         for call in mock_audit.log_operation.call_args_list
     ]
     matching = [op for op in operations if op and operation_substring in op]
-    assert matching, (
-        f"Expected at least one log_operation call containing '{operation_substring}', got operations: {operations}"
-    )
+    assert (
+        matching
+    ), f"Expected at least one log_operation call containing '{operation_substring}', got operations: {operations}"
 
 
 def assert_audit_approval_logged(ctx: dict) -> None:
@@ -99,9 +99,9 @@ def assert_audit_approval_logged(ctx: dict) -> None:
         found = any("pending_approval" in (log.operation or "") for log in logs) or any(
             "create_media_buy" in (log.operation or "") and log.success is True for log in logs
         )
-        assert found, (
-            f"Expected audit entry for approval decision, found: {[(log.operation, log.success) for log in logs]}"
-        )
+        assert (
+            found
+        ), f"Expected audit entry for approval decision, found: {[(log.operation, log.success) for log in logs]}"
     else:
         _assert_audit_approval_mock(ctx)
 
@@ -110,9 +110,9 @@ def _assert_audit_approval_mock(ctx: dict) -> None:
     """Assert approval-specific audit log call exists (in-process mode)."""
     env = ctx["env"]
     mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for approval decision logging"
-    )
+    assert (
+        mock_audit.log_operation.called
+    ), "Expected audit_logger.log_operation to be called for approval decision logging"
     for call in mock_audit.log_operation.call_args_list:
         op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
         if op == "create_media_buy_pending_approval":
@@ -155,9 +155,9 @@ def _assert_audit_adapter_mock(ctx: dict) -> None:
     """Assert adapter execution audit log call exists (in-process mode)."""
     env = ctx["env"]
     mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for adapter execution logging"
-    )
+    assert (
+        mock_audit.log_operation.called
+    ), "Expected audit_logger.log_operation to be called for adapter execution logging"
     for call in mock_audit.log_operation.call_args_list:
         op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
         success = call.kwargs.get("success")

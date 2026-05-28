@@ -471,9 +471,7 @@ def _partition_output_format_ids(ctx: dict, partition: str) -> None:
         try:
             _call(
                 ctx,
-                req=ListCreativeFormatsRequest(
-                    output_format_ids=[FormatId(id="some-id")]  # type: ignore[call-arg]
-                ),
+                req=ListCreativeFormatsRequest(output_format_ids=[FormatId(id="some-id")]),  # type: ignore[call-arg]
             )
         except Exception as exc:
             ctx["error"] = exc
@@ -521,9 +519,7 @@ def _partition_input_format_ids(ctx: dict, partition: str) -> None:
         try:
             _call(
                 ctx,
-                req=ListCreativeFormatsRequest(
-                    input_format_ids=[FormatId(id="some-id")]  # type: ignore[call-arg]
-                ),
+                req=ListCreativeFormatsRequest(input_format_ids=[FormatId(id="some-id")]),  # type: ignore[call-arg]
             )
         except Exception as exc:
             ctx["error"] = exc
