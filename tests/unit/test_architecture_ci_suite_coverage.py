@@ -20,7 +20,7 @@ class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
 
     def test_bdd_job_exists(self):
-        """A dedicated BDD job must exist in the CI workflow.
+        """A dedicated BDD aggregate + shard jobs must exist in CI.
 
         Before this guard, ``tests/bdd/`` was never executed in CI, so any
         PR could break every BDD scenario and still show green.
@@ -30,39 +30,36 @@ class TestCISuiteCoverage:
         assert "bdd-tests" in jobs, (
             "No 'bdd-tests' job in .github/workflows/ci.yml. The BDD suite "
             "(tests/bdd/) is run by ./run_all_tests.sh but has zero CI "
-            "coverage — a broken BDD suite can silently land on main. Add a "
-            "'bdd-tests' job mirroring 'integration-tests' (Postgres service "
-            "+ migrations + pytest tests/bdd/)."
+            "coverage — a broken BDD suite can silently land on main."
         )
+        for shard in ("bdd-tests-shard-a", "bdd-tests-shard-b"):
+            assert shard in jobs, (
+                f"No '{shard}' job in .github/workflows/ci.yml. The BDD gate is sharded and requires both shard jobs."
+            )
 
-    def test_bdd_job_runs_the_bdd_suite(self):
-        """The BDD job must actually invoke ``pytest tests/bdd/``.
+    def test_bdd_shards_run_the_bdd_suite(self):
+        """Each BDD shard must invoke pytest against ``tests/bdd/``.
 
-        A job that exists but doesn't run the suite is worse than no job —
+        A shard that exists but doesn't run the suite is worse than no shard —
         it gives false confidence.
         """
-        bdd_job = load_ci_workflow()["jobs"]["bdd-tests"]
-        run_steps = " ".join(str(step.get("run", "")) for step in bdd_job.get("steps", []))
+        jobs = load_ci_workflow()["jobs"]
+        for shard in ("bdd-tests-shard-a", "bdd-tests-shard-b"):
+            run_steps = " ".join(str(step.get("run", "")) for step in jobs[shard].get("steps", []))
+            assert "pytest" in run_steps and "tests/bdd/" in run_steps, (
+                f"The '{shard}' job does not run pytest against tests/bdd/. "
+                "Each shard must execute part of the BDD suite."
+            )
 
-        assert "pytest tests/bdd/" in run_steps, (
-            "The 'bdd-tests' job does not run 'pytest tests/bdd/'. The job "
-            "must execute the BDD suite, not merely exist."
-        )
-
-    def test_bdd_job_has_postgres_service(self):
-        """BDD harnesses use the integration_db fixture (real PostgreSQL).
-
-        Without a Postgres service the BDD job cannot run, so the gate would
-        be hollow.
-        """
-        bdd_job = load_ci_workflow()["jobs"]["bdd-tests"]
-        services = bdd_job.get("services", {})
-
-        assert "postgres" in services, (
-            "The 'bdd-tests' job has no 'postgres' service. BDD scenarios use "
-            "the integration_db fixture and require a real PostgreSQL "
-            "instance (mirror the integration-tests job)."
-        )
+    def test_bdd_shards_have_postgres_service(self):
+        """BDD harnesses use integration_db fixture (real PostgreSQL)."""
+        jobs = load_ci_workflow()["jobs"]
+        for shard in ("bdd-tests-shard-a", "bdd-tests-shard-b"):
+            services = jobs[shard].get("services", {})
+            assert "postgres" in services, (
+                f"The '{shard}' job has no 'postgres' service. BDD scenarios use "
+                "the integration_db fixture and require a real PostgreSQL instance."
+            )
 
     def test_summary_gates_bdd_and_e2e(self):
         """summary must depend on AND fail for bdd + e2e.

@@ -14,8 +14,8 @@ env:
   UV_VERSION: "0.11.15"
 
 jobs:
-  quality-gate:
-    name: Quality Gate
+  quality-gate-shard-1:
+    name: Quality Gate (Shard 1/2)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -27,8 +27,43 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           uv-version: ${{ env.UV_VERSION }}
-      - name: Run pre-commit
-        run: make quality
+      - name: Run formatting/lint/type checks
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy src/ --config-file=mypy.ini
+          uv run python .pre-commit-hooks/check_code_duplication.py
+
+  quality-gate-shard-2:
+    name: Quality Gate (Shard 2/2)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - name: Run quality unit test gate
+        run: uv run pytest tests/unit/ -x
+
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [quality-gate-shard-1, quality-gate-shard-2]
+    if: always()
+    steps:
+      - name: Aggregate quality gate shards
+        run: |
+          if [ "${{ needs.quality-gate-shard-1.result }}" != "success" ] || \
+             [ "${{ needs.quality-gate-shard-2.result }}" != "success" ]; then
+            echo "One or more Quality Gate shards failed."
+            exit 1
+          fi
+          echo "Quality Gate shards passed."
 
   type-check:
     name: Type Check
@@ -139,14 +174,12 @@ jobs:
           ADCP_TESTING: true
         run: uv run pytest tests/unit/ tests/harness/ -p no:randomly -q --tb=line --cov=src --cov-report=xml --cov-report=term
 
-  integration-tests:
-    name: Integration Tests
+  integration-tests-shard-a:
+    name: Integration Tests (Shard 1/3)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Single job runs full integration/ suite (~25–30 min). On main, test.yml shards
-    # this across 5 matrix jobs (15 min each); 20 min here caused cancel at ~95%.
-    timeout-minutes: 40
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:15
@@ -186,10 +219,126 @@ jobs:
         run: |
           ENCRYPTION_KEY="$(python -c "import base64; print(base64.urlsafe_b64encode(b'0'*32).decode())")"
           export ENCRYPTION_KEY
-          uv run pytest tests/integration/ -p no:randomly -m "not requires_server and not skip_ci" -q --tb=line
+          uv run pytest tests/integration/test_[a-h]*.py -p no:randomly -m "not requires_server and not skip_ci" -q --tb=line
       - name: Cleanup pinned creative agent
         if: always()
         run: ./scripts/creative-agent-stack.sh down
+
+  integration-tests-shard-b:
+    name: Integration Tests (Shard 2/3)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - uses: ./.github/actions/_postgres
+        with:
+          database-url: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
+      - name: Start pinned creative agent
+        run: ./scripts/creative-agent-stack.sh up
+      - name: Run integration tests
+        env:
+          DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
+          GEMINI_API_KEY: test_key_for_mocking
+          GOOGLE_CLIENT_ID: test_client_id
+          GOOGLE_CLIENT_SECRET: test_client_secret
+          SUPER_ADMIN_EMAILS: test@example.com
+          ADCP_TESTING: true
+          CREATIVE_AGENT_URL: http://localhost:9999/api/creative-agent
+        run: |
+          ENCRYPTION_KEY="$(python -c "import base64; print(base64.urlsafe_b64encode(b'0'*32).decode())")"
+          export ENCRYPTION_KEY
+          uv run pytest tests/integration/test_[i-p]*.py -p no:randomly -m "not requires_server and not skip_ci" -q --tb=line
+      - name: Cleanup pinned creative agent
+        if: always()
+        run: ./scripts/creative-agent-stack.sh down
+
+  integration-tests-shard-c:
+    name: Integration Tests (Shard 3/3)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - uses: ./.github/actions/_postgres
+        with:
+          database-url: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
+      - name: Start pinned creative agent
+        run: ./scripts/creative-agent-stack.sh up
+      - name: Run integration tests
+        env:
+          DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
+          GEMINI_API_KEY: test_key_for_mocking
+          GOOGLE_CLIENT_ID: test_client_id
+          GOOGLE_CLIENT_SECRET: test_client_secret
+          SUPER_ADMIN_EMAILS: test@example.com
+          ADCP_TESTING: true
+          CREATIVE_AGENT_URL: http://localhost:9999/api/creative-agent
+        run: |
+          ENCRYPTION_KEY="$(python -c "import base64; print(base64.urlsafe_b64encode(b'0'*32).decode())")"
+          export ENCRYPTION_KEY
+          uv run pytest tests/integration/test_[q-z]*.py -p no:randomly -m "not requires_server and not skip_ci" -q --tb=line
+      - name: Cleanup pinned creative agent
+        if: always()
+        run: ./scripts/creative-agent-stack.sh down
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [integration-tests-shard-a, integration-tests-shard-b, integration-tests-shard-c]
+    if: always()
+    steps:
+      - name: Aggregate integration shards
+        run: |
+          if [ "${{ needs.integration-tests-shard-a.result }}" != "success" ] || \
+             [ "${{ needs.integration-tests-shard-b.result }}" != "success" ] || \
+             [ "${{ needs.integration-tests-shard-c.result }}" != "success" ]; then
+            echo "One or more Integration shards failed."
+            exit 1
+          fi
+          echo "Integration shards passed."
 
   e2e-tests:
     name: E2E Tests
@@ -246,8 +395,8 @@ jobs:
           ADCP_TESTING: true
         run: uv run pytest tests/admin/ -m "not requires_server and not slow" -q --tb=line --cov=src --cov-report=xml --cov-report=term
 
-  bdd-tests:
-    name: BDD Tests
+  bdd-tests-shard-a:
+    name: BDD Tests (Shard 1/2)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -288,7 +437,81 @@ jobs:
         run: |
           ENCRYPTION_KEY="$(python -c "import base64; print(base64.urlsafe_b64encode(b'0'*32).decode())")"
           export ENCRYPTION_KEY
-          uv run pytest tests/bdd/ -n auto --dist=loadfile -q --tb=line --cov=src --cov-report=xml --cov-report=term --timeout=60
+          uv run pytest \
+            tests/bdd/test_uc002_create_media_buy.py \
+            tests/bdd/test_uc002_manual_overrides.py \
+            tests/bdd/test_uc002_nfr_enforcement.py \
+            tests/bdd/test_uc003_update_media_buy.py \
+            tests/bdd/test_uc004_deliver_media_buy_metrics.py \
+            tests/bdd/test_uc019_query_media_buys.py \
+            -n auto --dist=loadfile -q --tb=line --cov=src --cov-report=xml --cov-report=term --timeout=60
+
+  bdd-tests-shard-b:
+    name: BDD Tests (Shard 2/2)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: adcp_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: adcp_test
+        options: >-
+          --health-cmd "pg_isready -U adcp_user"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
+      - uses: ./.github/actions/_postgres
+        with:
+          database-url: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
+      - name: Run BDD tests
+        env:
+          DATABASE_URL: postgresql://adcp_user:test_password@127.0.0.1:5432/adcp_test
+          GEMINI_API_KEY: test_key_for_mocking
+          GOOGLE_CLIENT_ID: test_client_id
+          GOOGLE_CLIENT_SECRET: test_client_secret
+          SUPER_ADMIN_EMAILS: test@example.com
+          ADCP_TESTING: true
+        run: |
+          ENCRYPTION_KEY="$(python -c "import base64; print(base64.urlsafe_b64encode(b'0'*32).decode())")"
+          export ENCRYPTION_KEY
+          uv run pytest \
+            tests/bdd/test_uc005_discover_creative_formats.py \
+            tests/bdd/test_uc006_sync_creatives.py \
+            tests/bdd/test_uc011_manage_accounts.py \
+            tests/bdd/test_uc026_package_media_buy.py \
+            tests/bdd/test_admin_accounts.py \
+            tests/bdd/test_get_products_inventory_profile.py \
+            tests/bdd/test_compat001_deprecated_field_normalization.py \
+            -n auto --dist=loadfile -q --tb=line --cov=src --cov-report=xml --cov-report=term --timeout=60
+
+  bdd-tests:
+    name: BDD Tests
+    runs-on: ubuntu-latest
+    needs: [bdd-tests-shard-a, bdd-tests-shard-b]
+    if: always()
+    steps:
+      - name: Aggregate BDD shards
+        run: |
+          if [ "${{ needs.bdd-tests-shard-a.result }}" != "success" ] || \
+             [ "${{ needs.bdd-tests-shard-b.result }}" != "success" ]; then
+            echo "One or more BDD shards failed."
+            exit 1
+          fi
+          echo "BDD shards passed."
 
   migration-roundtrip:
     name: Migration Roundtrip

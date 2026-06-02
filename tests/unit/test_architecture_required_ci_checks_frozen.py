@@ -9,6 +9,8 @@ from __future__ import annotations
 from tests.unit.workflow_helpers import load_ci_workflow
 
 REQUIRED_RENDERED_CHECKS = {
+    "CI / Quality Gate (Shard 1/2)",
+    "CI / Quality Gate (Shard 2/2)",
     "CI / Quality Gate",
     "CI / Type Check",
     "CI / Schema Contract",
@@ -16,9 +18,14 @@ REQUIRED_RENDERED_CHECKS = {
     "CI / Quickstart",
     "CI / Smoke Tests",
     "CI / Unit Tests",
+    "CI / Integration Tests (Shard 1/3)",
+    "CI / Integration Tests (Shard 2/3)",
+    "CI / Integration Tests (Shard 3/3)",
     "CI / Integration Tests",
     "CI / E2E Tests",
     "CI / Admin UI Tests",
+    "CI / BDD Tests (Shard 1/2)",
+    "CI / BDD Tests (Shard 2/2)",
     "CI / BDD Tests",
     "CI / Migration Roundtrip",
     "CI / Coverage",
