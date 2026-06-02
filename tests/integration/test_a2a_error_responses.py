@@ -248,9 +248,9 @@ class TestA2AErrorPropagation:
 
         # CRITICAL ASSERTIONS: Success response
         assert artifact_data["success"] is True, "success must be True for successful operation"
-        assert (
-            artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0
-        ), "errors field must be None or empty array for success"
+        assert artifact_data.get("errors") is None or len(artifact_data.get("errors", [])) == 0, (
+            "errors field must be None or empty array for success"
+        )
         assert "media_buy_id" in artifact_data, "Success response must include media_buy_id"
         assert artifact_data["media_buy_id"] is not None, "media_buy_id must not be None for success"
 
@@ -806,8 +806,3 @@ class TestA2AContextEcho:
             f"workflow_step must round-trip unchanged, got: {echoed}"
         )
         assert echoed.get("request_id") == "req_abc_42", f"request_id must round-trip unchanged, got: {echoed}"
-=======
-            assert (
-                error.data["recovery"] == "transient"
-            ), "Custom recovery='transient' override must be preserved, not default 'terminal'"
->>>>>>> b2fc600b (fix: stabilize CI quality guards and formatting consistency)

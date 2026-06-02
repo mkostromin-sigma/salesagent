@@ -76,9 +76,9 @@ class TestCISuiteCoverage:
         needs = summary["needs"]
 
         for required in ("bdd-tests", "e2e-tests"):
-            assert (
-                required in needs
-            ), f"summary.needs is missing '{required}'. CI will report green even when the {required} suite fails."
+            assert required in needs, (
+                f"summary.needs is missing '{required}'. CI will report green even when the {required} suite fails."
+            )
 
         # The aggregation step must actually check the result of each suite.
         check_text = " ".join(str(step.get("run", "")) for step in summary.get("steps", []))
@@ -100,6 +100,6 @@ class TestCISuiteCoverage:
         # PyYAML parses the bare ``on:`` key as the boolean True.
         triggers = workflow.get("on", workflow.get(True))
 
-        assert (
-            "pull_request" in triggers
-        ), "The CI workflow does not trigger on pull_request, so BDD/E2E gating would never run before merge."
+        assert "pull_request" in triggers, (
+            "The CI workflow does not trigger on pull_request, so BDD/E2E gating would never run before merge."
+        )

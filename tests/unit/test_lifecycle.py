@@ -84,9 +84,9 @@ async def test_callback_exception_is_logged(caplog):
     with caplog.at_level(logging.ERROR, logger="src.core.lifecycle"):
         await lifecycle.run_all_shutdown_callbacks()
 
-    assert any(
-        "kaboom" in r.message or (r.exc_info and "kaboom" in str(r.exc_info[1])) for r in caplog.records
-    ), "shutdown callback failure must be logged via logger.exception"
+    assert any("kaboom" in r.message or (r.exc_info and "kaboom" in str(r.exc_info[1])) for r in caplog.records), (
+        "shutdown callback failure must be logged via logger.exception"
+    )
 
 
 @pytest.mark.asyncio

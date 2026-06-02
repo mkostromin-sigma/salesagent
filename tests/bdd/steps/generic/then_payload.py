@@ -79,9 +79,9 @@ def then_all_formats(ctx: dict) -> None:
     # Verify format identity — not just count but the same formats by name
     returned_names = {_fmt_name(f) for f in formats}
     registered_names = {_fmt_name(r) if hasattr(r, "name") else str(r) for r in registered}
-    assert (
-        returned_names == registered_names
-    ), f"Format identity mismatch: returned={returned_names}, registered={registered_names}"
+    assert returned_names == registered_names, (
+        f"Format identity mismatch: returned={returned_names}, registered={registered_names}"
+    )
 
 
 @then("the response should include an empty formats array")
@@ -96,9 +96,9 @@ def then_only_display(ctx: dict) -> None:
     # Derive expected display count from the registry (real catalog subset)
     registered = ctx.get("registry_formats", [])
     expected_display = [r for r in registered if _fmt_type_str(r) == "display"]
-    assert len(formats) == len(
-        expected_display
-    ), f"Expected {len(expected_display)} display formats, got {len(formats)}"
+    assert len(formats) == len(expected_display), (
+        f"Expected {len(expected_display)} display formats, got {len(formats)}"
+    )
     for f in formats:
         assert _fmt_type_str(f) == "display", f"Expected type 'display', got '{_fmt_type_str(f)}'"
 
@@ -110,9 +110,9 @@ def then_no_video(ctx: dict) -> None:
     Step text claims "no video formats" — assert exactly that.
     """
     video_formats = [f for f in _get_formats(ctx) if _fmt_type_str(f) == "video"]
-    assert (
-        not video_formats
-    ), f"Expected no video formats but found {len(video_formats)}: {[_fmt_name(f) for f in video_formats]}"
+    assert not video_formats, (
+        f"Expected no video formats but found {len(video_formats)}: {[_fmt_name(f) for f in video_formats]}"
+    )
 
 
 @then("the response should include creative_agents referrals")
@@ -169,9 +169,9 @@ def then_referral_fields(ctx: dict) -> None:
         assert url_str.startswith("http"), f"agent_url should be a URL (http/https), got: {url!r}"
         caps = getattr(ref, "capabilities", None)
         assert caps is not None, f"Missing capabilities in referral: {ref}"
-        assert (
-            isinstance(caps, (list, tuple)) and len(caps) > 0
-        ), f"capabilities should be a non-empty list, got: {caps!r}"
+        assert isinstance(caps, (list, tuple)) and len(caps) > 0, (
+            f"capabilities should be a non-empty list, got: {caps!r}"
+        )
         # Verify capabilities are known enum values (not arbitrary strings)
         cap_strs = {str(c.value) if hasattr(c, "value") else str(c) for c in caps}
         known = {"validation", "assembly", "preview", "delivery"}
@@ -201,9 +201,9 @@ def then_format_name_type(ctx: dict) -> None:
         assert isinstance(name, str), f"Format name is not a string: {type(name)}"
         type_str = _fmt_type_str(f)
         assert type_str, f"Format missing type: {f}"
-        assert (
-            type_str in valid_types
-        ), f"Format '{name}' has invalid type category '{type_str}', expected one of {valid_types}"
+        assert type_str in valid_types, (
+            f"Format '{name}' has invalid type category '{type_str}', expected one of {valid_types}"
+        )
 
 
 @then("each format should include asset requirements with type and dimensions")
@@ -254,9 +254,9 @@ def then_format_assets(ctx: dict) -> None:
                 # asset_type value must be a concrete string (enum value), not None/empty.
                 asset_type = getattr(a, "asset_type", None)
                 asset_type_str = asset_type.value if hasattr(asset_type, "value") else asset_type
-                assert (
-                    asset_type_str
-                ), f"Asset in format '{_fmt_name(f)}' has empty asset_type — buyers cannot know what media to upload"
+                assert asset_type_str, (
+                    f"Asset in format '{_fmt_name(f)}' has empty asset_type — buyers cannot know what media to upload"
+                )
 
         if has_renders:
             for r in f.renders:
@@ -389,9 +389,9 @@ def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
     catch Gherkin typos at test-collection time rather than letting a wrong
     filter name pass silently.
     """
-    assert (
-        field in _KNOWN_FILTER_FIELDS
-    ), f"Unknown filter field '{field}' in partition/boundary test. Known fields: {sorted(_KNOWN_FILTER_FIELDS)}"
+    assert field in _KNOWN_FILTER_FIELDS, (
+        f"Unknown filter field '{field}' in partition/boundary test. Known fields: {sorted(_KNOWN_FILTER_FIELDS)}"
+    )
     if expected == "valid":
         assert "error" not in ctx, f"Expected valid filter result for '{field}' but got error: {ctx.get('error')}"
         resp = ctx.get("response")
@@ -404,9 +404,9 @@ def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
             f"Response for '{field}' filter missing 'formats' attribute — "
             f"got {type(resp).__name__} which is not a ListCreativeFormatsResponse shape"
         )
-        assert isinstance(
-            resp.formats, list
-        ), f"Expected 'formats' to be a list for '{field}' filter, got {type(resp.formats).__name__}"
+        assert isinstance(resp.formats, list), (
+            f"Expected 'formats' to be a list for '{field}' filter, got {type(resp.formats).__name__}"
+        )
     elif expected == "invalid":
         assert "error" in ctx, (
             f"Expected '{field}' filter to be rejected as invalid, but operation succeeded "

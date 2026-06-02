@@ -11,17 +11,13 @@ had already been applied to the production database. This merge migration
 brings both branches back together into a single head.
 """
 
-from typing import Sequence, Union
-
-from alembic import op
-import sqlalchemy as sa
-
+from collections.abc import Sequence
 
 # revision identifiers, used by Alembic.
 revision: str = "g1h2i3j4k5l6"
-down_revision: Union[str, Sequence[str], None] = ("f3bac4654620", "30acc1daf358")
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = ("f3bac4654620", "30acc1daf358")
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

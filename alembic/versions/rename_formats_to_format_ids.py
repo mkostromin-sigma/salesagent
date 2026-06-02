@@ -29,8 +29,9 @@ Create Date: {DATE}
 
 from collections.abc import Sequence
 
-from alembic import op
 from sqlalchemy import text
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "rename_formats_to_format_ids"

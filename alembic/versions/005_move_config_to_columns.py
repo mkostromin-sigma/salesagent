@@ -140,7 +140,7 @@ def upgrade():
             if ad_server == "mock":
                 insert_data["mock_dry_run"] = adapter_config.get("dry_run", False)
 
-            elif ad_server == "google_ad_manager" or ad_server == "gam":
+            elif ad_server in {"google_ad_manager", "gam"}:
                 insert_data["adapter_type"] = "google_ad_manager"  # Normalize
                 insert_data["gam_network_code"] = adapter_config.get("network_code") or adapter_config.get("network_id")
                 insert_data["gam_refresh_token"] = adapter_config.get("refresh_token")

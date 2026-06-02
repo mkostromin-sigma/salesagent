@@ -61,13 +61,13 @@ def then_response_status(ctx: dict, status: str) -> None:
     )
     for attr in present:
         value = getattr(resp, attr)
-        assert (
-            value is not None
-        ), f"Status 'completed' claimed but response.{attr} is None — the schema-required success payload is missing"
+        assert value is not None, (
+            f"Status 'completed' claimed but response.{attr} is None — the schema-required success payload is missing"
+        )
         if attr in ("formats", "media_buy_deliveries"):
-            assert isinstance(
-                value, list
-            ), f"Status 'completed' claimed but response.{attr} is {type(value).__name__}, expected a list"
+            assert isinstance(value, list), (
+                f"Status 'completed' claimed but response.{attr} is {type(value).__name__}, expected a list"
+            )
 
 
 # ── Response contains field ──────────────────────────────────────────
@@ -105,9 +105,9 @@ def then_no_sandbox_field(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"
     dumped = resp.model_dump()
-    assert (
-        "sandbox" not in dumped
-    ), f"Expected no sandbox field in serialized response, got sandbox={dumped.get('sandbox')}"
+    assert "sandbox" not in dumped, (
+        f"Expected no sandbox field in serialized response, got sandbox={dumped.get('sandbox')}"
+    )
 
 
 # ── No real API calls assertion ──────────────────────────────────────
@@ -129,6 +129,6 @@ def then_no_real_api_calls(ctx: dict) -> None:
     if "response" in ctx:
         mock_registry = registry_mock.return_value
         formats_called = mock_registry.list_all_formats.called or mock_registry.list_all_formats_with_errors.called
-        assert (
-            formats_called
-        ), "Production code returned a response but did not call the mock registry — real API calls may have been made"
+        assert formats_called, (
+            "Production code returned a response but did not call the mock registry — real API calls may have been made"
+        )

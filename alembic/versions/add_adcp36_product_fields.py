@@ -15,22 +15,24 @@ Revises: 3a16c5fc27ce
 Create Date: 2026-02-26
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from src.core.database.json_type import JSONType
 
 # revision identifiers, used by Alembic.
 revision: str = "a7d4e2f1b3c5"
-down_revision: Union[str, None] = "3a16c5fc27ce"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "3a16c5fc27ce"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("products", sa.Column("signal_targeting_allowed", sa.Boolean(), nullable=True, server_default="false"))
+    op.add_column(
+        "products", sa.Column("signal_targeting_allowed", sa.Boolean(), nullable=True, server_default="false")
+    )
     op.add_column("products", sa.Column("catalog_match", JSONType(), nullable=True))
     op.add_column("products", sa.Column("catalog_types", JSONType(), nullable=True))
     op.add_column("products", sa.Column("conversion_tracking", JSONType(), nullable=True))

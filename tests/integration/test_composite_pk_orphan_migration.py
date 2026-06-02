@@ -99,7 +99,8 @@ def _insert_orphan_data(engine):
     with engine.connect() as conn:
         # Find and drop FK constraints from creative_reviews and creative_assignments
         # that reference creatives
-        fk_rows = conn.execute(text("""
+        fk_rows = conn.execute(
+            text("""
                 SELECT tc.constraint_name, tc.table_name
                 FROM information_schema.table_constraints tc
                 JOIN information_schema.constraint_column_usage ccu
@@ -109,7 +110,8 @@ def _insert_orphan_data(engine):
                     AND ccu.table_name = 'creatives'
                     AND ccu.column_name = 'creative_id'
                     AND tc.table_name IN ('creative_reviews', 'creative_assignments')
-            """)).fetchall()
+            """)
+        ).fetchall()
         for constraint_name, table_name in fk_rows:
             conn.execute(text(f'ALTER TABLE {table_name} DROP CONSTRAINT "{constraint_name}"'))
         # Delete the creative to create orphans

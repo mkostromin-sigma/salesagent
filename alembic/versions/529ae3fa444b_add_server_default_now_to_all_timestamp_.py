@@ -11,16 +11,17 @@ Create Date: 2026-04-03 18:09:30.791908
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
+
+from sqlalchemy import text
 
 from alembic import op
-from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
 revision: str = "529ae3fa444b"
-down_revision: Union[str, Sequence[str], None] = "018bd7bdeed8"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "018bd7bdeed8"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 # Tables with created_at and/or updated_at that need server_default=now()
 _TIMESTAMP_COLUMNS = {
@@ -63,8 +64,7 @@ def upgrade() -> None:
             # Check if column exists and lacks a default
             result = conn.execute(
                 text(
-                    "SELECT column_default FROM information_schema.columns "
-                    "WHERE table_name = :t AND column_name = :c"
+                    "SELECT column_default FROM information_schema.columns WHERE table_name = :t AND column_name = :c"
                 ),
                 {"t": table, "c": col},
             )

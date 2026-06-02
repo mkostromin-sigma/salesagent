@@ -35,19 +35,18 @@ AdCP v2.4 format (assets object in data JSON):
 }
 """
 
-from typing import Sequence, Union
 import json
+from collections.abc import Sequence
 
-from alembic import op
-import sqlalchemy as sa
 from sqlalchemy import text
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "4b8c3ffb6ae7"
-down_revision: Union[str, Sequence[str], None] = "ed248e24dfc0"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "ed248e24dfc0"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

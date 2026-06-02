@@ -655,9 +655,9 @@ def given_adapter_no_reporting(ctx: dict) -> None:
 def given_adapter_exists(ctx: dict) -> None:
     """Confirm adapter exists (default state in harness)."""
     env = ctx["env"]
-    assert (
-        "adapter" in env.mock
-    ), "Step claims 'the ad platform adapter exists' but no adapter mock is configured in the test environment"
+    assert "adapter" in env.mock, (
+        "Step claims 'the ad platform adapter exists' but no adapter mock is configured in the test environment"
+    )
 
 
 @given(parsers.parse("the adapter supports realtime reporting and data is available"))
@@ -827,9 +827,9 @@ def given_principal_with_n_buys(ctx: dict, principal_id: str, count: int) -> Non
         )
         _register_media_buy(ctx, label, mb)
     env._commit_factory_data()
-    assert (
-        len(ctx["seeded_media_buys"]) >= count
-    ), f"Expected at least {count} seeded media buys, got {len(ctx['seeded_media_buys'])}"
+    assert len(ctx["seeded_media_buys"]) >= count, (
+        f"Expected at least {count} seeded media buys, got {len(ctx['seeded_media_buys'])}"
+    )
 
 
 @given(parsers.parse('an authenticated principal "{principal_id}" who owns no media buys'))
@@ -1291,21 +1291,21 @@ def then_package_details(ctx: dict) -> None:
         )
         for pkg in packages:
             total_packages_checked += 1
-            assert (
-                isinstance(pkg.package_id, str) and pkg.package_id
-            ), f"Package missing or empty package_id, got {pkg.package_id!r}"
+            assert isinstance(pkg.package_id, str) and pkg.package_id, (
+                f"Package missing or empty package_id, got {pkg.package_id!r}"
+            )
             # Step text claims: budget, bid_price, product_id, flight dates, paused
             assert pkg.product_id is not None, f"Package {pkg.package_id} missing product_id"
             assert pkg.budget is not None, f"Package {pkg.package_id} missing budget"
             # Verify budget is numeric
-            assert isinstance(
-                pkg.budget, int | float
-            ), f"Expected budget to be numeric, got {type(pkg.budget).__name__}: {pkg.budget!r}"
+            assert isinstance(pkg.budget, int | float), (
+                f"Expected budget to be numeric, got {type(pkg.budget).__name__}: {pkg.budget!r}"
+            )
             # bid_price may be None for fixed-price options — verify the field value type when present
             if pkg.bid_price is not None:
-                assert isinstance(
-                    pkg.bid_price, int | float
-                ), f"Expected bid_price to be numeric, got {type(pkg.bid_price).__name__}: {pkg.bid_price!r}"
+                assert isinstance(pkg.bid_price, int | float), (
+                    f"Expected bid_price to be numeric, got {type(pkg.bid_price).__name__}: {pkg.bid_price!r}"
+                )
             # Flight dates: step text explicitly claims these are present
             _assert_flight_dates_present(pkg)
             # paused must be a boolean, not absent — collect gaps across ALL packages
@@ -1346,12 +1346,12 @@ def then_creative_approval_state(ctx: dict) -> None:
             if approvals:
                 packages_with_approvals += 1
                 for approval in approvals:
-                    assert (
-                        isinstance(approval.creative_id, str) and approval.creative_id
-                    ), "CreativeApproval entry missing creative_id"
-                    assert (
-                        approval.approval_status is not None
-                    ), f"CreativeApproval for '{approval.creative_id}' has no approval_status"
+                    assert isinstance(approval.creative_id, str) and approval.creative_id, (
+                        "CreativeApproval entry missing creative_id"
+                    )
+                    assert approval.approval_status is not None, (
+                        f"CreativeApproval for '{approval.creative_id}' has no approval_status"
+                    )
                     status_str = (
                         approval.approval_status.value
                         if hasattr(approval.approval_status, "value")
@@ -1436,9 +1436,9 @@ def then_snapshot_fields(ctx: dict) -> None:
                     val = getattr(snapshot, field, None)
                     if val is None and isinstance(snapshot, dict):
                         val = snapshot.get(field)
-                    assert (
-                        val is not None
-                    ), f"Snapshot on package '{getattr(pkg, 'package_id', '?')}' missing required field '{field}'"
+                    assert val is not None, (
+                        f"Snapshot on package '{getattr(pkg, 'package_id', '?')}' missing required field '{field}'"
+                    )
     assert checked_any, "No snapshots found — this step requires at least one snapshot to verify"
 
 
@@ -1478,9 +1478,9 @@ def then_error_identity_required(ctx: dict) -> None:
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     msg = str(error).lower()
-    assert any(
-        kw in msg for kw in ("identity", "auth", "principal", "credential")
-    ), f"Expected identity-related error message, got: {error}"
+    assert any(kw in msg for kw in ("identity", "auth", "principal", "credential")), (
+        f"Expected identity-related error message, got: {error}"
+    )
 
 
 @then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
@@ -1504,9 +1504,9 @@ def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     assert isinstance(error, AdCPError), f"Expected AdCPError with details, got {type(error).__name__}: {error}"
     assert error.details is not None, "Expected error.details to contain a suggestion, got None"
     suggestion = str(error.details.get("suggestion", "")).lower()
-    assert (
-        text1.lower() in suggestion or text2.lower() in suggestion
-    ), f"Expected '{text1}' or '{text2}' in suggestion: {error.details.get('suggestion')}"
+    assert text1.lower() in suggestion or text2.lower() in suggestion, (
+        f"Expected '{text1}' or '{text2}' in suggestion: {error.details.get('suggestion')}"
+    )
 
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}" or "{text3}"'))
@@ -1519,9 +1519,9 @@ def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, tex
     assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
     assert error.details is not None, "Expected error.details with suggestion"
     suggestion = str(error.details.get("suggestion", "")).lower()
-    assert any(
-        t.lower() in suggestion for t in [text1, text2, text3]
-    ), f"Expected one of '{text1}', '{text2}', '{text3}' in suggestion: {error.details.get('suggestion')}"
+    assert any(t.lower() in suggestion for t in [text1, text2, text3]), (
+        f"Expected one of '{text1}', '{text2}', '{text3}' in suggestion: {error.details.get('suggestion')}"
+    )
 
 
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
@@ -1608,17 +1608,17 @@ def then_error_has_suggestion(ctx: dict) -> None:
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
-    assert isinstance(
-        error, AdCPError
-    ), f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    assert (
-        error.details is not None
-    ), f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain 'suggestion' field"
+    assert isinstance(error, AdCPError), (
+        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
+    )
+    assert error.details is not None, (
+        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain 'suggestion' field"
+    )
     assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
     suggestion = error.details["suggestion"]
-    assert (
-        isinstance(suggestion, str) and suggestion.strip()
-    ), f"Expected non-empty suggestion string, got {suggestion!r}"
+    assert isinstance(suggestion, str) and suggestion.strip(), (
+        f"Expected non-empty suggestion string, got {suggestion!r}"
+    )
 
 
 @then(parsers.parse('the error message should contain "{fragment}"'))
@@ -1648,9 +1648,9 @@ def then_error_invalid_status(ctx: dict, text: str) -> None:
     msg = str(error).lower()
     # Step text requires BOTH: mention of the invalid value AND that it's about status
     assert text.lower() in msg, f"Expected invalid value '{text}' to appear in error message, got: {error}"
-    assert (
-        "status" in msg
-    ), f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
+    assert "status" in msg, (
+        f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
+    )
 
 
 @then(parsers.parse('the creative approval for "{creative_id}" should have approval_status "{status}"'))
@@ -1670,9 +1670,9 @@ def then_creative_approval_status(ctx: dict, creative_id: str, status: str) -> N
                 if aid == creative_id:
                     actual = getattr(approval, "approval_status", None)
                     actual_str = actual.value if hasattr(actual, "value") else str(actual)
-                    assert (
-                        actual_str == status
-                    ), f"Expected approval_status '{status}' for creative '{creative_id}', got '{actual_str}'"
+                    assert actual_str == status, (
+                        f"Expected approval_status '{status}' for creative '{creative_id}', got '{actual_str}'"
+                    )
                     return
     raise AssertionError(f"No approval entry found for creative '{creative_id}' across {len(buys)} media buy(s)")
 
@@ -1772,9 +1772,9 @@ def then_no_approval_for_creative(ctx: dict, pkg_id: str, creative_id: str) -> N
             if getattr(pkg, "package_id", None) == pkg_id:
                 approvals = getattr(pkg, "creative_approvals", None) or []
                 approval_ids = [getattr(a, "creative_id", None) for a in approvals]
-                assert (
-                    creative_id not in approval_ids
-                ), f"Expected creative '{creative_id}' to NOT appear in approvals for package '{pkg_id}', but found it"
+                assert creative_id not in approval_ids, (
+                    f"Expected creative '{creative_id}' to NOT appear in approvals for package '{pkg_id}', but found it"
+                )
                 return
     raise AssertionError(f"Package '{pkg_id}' not found in response — cannot verify creative '{creative_id}' omission")
 
@@ -1817,9 +1817,9 @@ def then_package_no_unavailable_reason(ctx: dict, pkg_id: str) -> None:
             if getattr(pkg, "package_id", None) == pkg_id:
                 reason = getattr(pkg, "snapshot_unavailable_reason", None)
                 # Violation path: reason IS present when it should NOT be
-                assert (
-                    reason is None
-                ), f"Package '{pkg_id}' has snapshot_unavailable_reason='{reason}' — should be absent"
+                assert reason is None, (
+                    f"Package '{pkg_id}' has snapshot_unavailable_reason='{reason}' — should be absent"
+                )
                 return
     raise AssertionError(f"Package '{pkg_id}' not found in response")
 
@@ -1833,9 +1833,9 @@ def then_package_unavailable_reason(ctx: dict, pkg_id: str, reason: str) -> None
         for pkg in getattr(buy, "packages", []) or []:
             if getattr(pkg, "package_id", None) == pkg_id:
                 actual = getattr(pkg, "snapshot_unavailable_reason", None)
-                assert (
-                    actual is not None
-                ), f"Package '{pkg_id}' missing snapshot_unavailable_reason, expected '{reason}'"
+                assert actual is not None, (
+                    f"Package '{pkg_id}' missing snapshot_unavailable_reason, expected '{reason}'"
+                )
                 actual_str = actual.value if hasattr(actual, "value") else str(actual)
                 assert actual_str == reason, f"Expected snapshot_unavailable_reason '{reason}', got '{actual_str}'"
                 return
@@ -1914,9 +1914,9 @@ def then_snapshot_field_count(ctx: dict, field: str) -> None:
                 if val is None and isinstance(snapshot, dict):
                     val = snapshot.get(field)
                 assert val is not None, f"Snapshot field '{field}' count not present on package"
-                assert isinstance(
-                    val, (int, float)
-                ), f"Expected '{field}' to be a numeric count, got {type(val).__name__}: {val!r}"
+                assert isinstance(val, (int, float)), (
+                    f"Expected '{field}' to be a numeric count, got {type(val).__name__}: {val!r}"
+                )
                 assert val > 0, (
                     f"Expected '{field}' count to be positive (> 0) — a zero value suggests "
                     f"snapshot data was not propagated from adapter. Got {val}"
@@ -1948,9 +1948,9 @@ def then_snapshot_field_amount(ctx: dict, field: str) -> None:
                 if val is None and isinstance(snapshot, dict):
                     val = snapshot.get(field)
                 assert val is not None, f"Snapshot field '{field}' amount not present on package"
-                assert isinstance(
-                    val, int | float
-                ), f"Expected '{field}' to be a numeric amount, got {type(val).__name__}: {val!r}"
+                assert isinstance(val, int | float), (
+                    f"Expected '{field}' to be a numeric amount, got {type(val).__name__}: {val!r}"
+                )
                 assert val >= 0, f"Expected '{field}' amount to be non-negative, got {val}"
                 return
     raise AssertionError(f"No snapshots found — cannot verify '{field}' amount")
@@ -2032,9 +2032,9 @@ def then_no_sandbox_field(ctx: dict) -> None:
     assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
     sandbox = getattr(resp, "sandbox", None)
     # Violation path: sandbox IS present when it should NOT be
-    assert (
-        sandbox is None
-    ), f"Production response includes sandbox={sandbox!r} for production account — should be absent"
+    assert sandbox is None, (
+        f"Production response includes sandbox={sandbox!r} for production account — should be absent"
+    )
 
 
 @then("no real ad platform API calls should have been made")
@@ -2089,9 +2089,9 @@ def then_validation_error(ctx: dict) -> None:
     if error:
         # Verify it's actually a validation error, not just any error
         msg = str(error).lower()
-        assert any(
-            kw in msg for kw in ("validation", "invalid", "required", "type", "field")
-        ), f"Expected a validation error, but error doesn't indicate validation: {error}"
+        assert any(kw in msg for kw in ("validation", "invalid", "required", "type", "field")), (
+            f"Expected a validation error, but error doesn't indicate validation: {error}"
+        )
         return
     resp = ctx.get("response")
     if resp:
@@ -2118,9 +2118,9 @@ def then_real_validation_error(ctx: dict) -> None:
     from src.core.exceptions import AdCPError
 
     # A "real" validation error is an actual exception (not a response-embedded simulated one)
-    assert isinstance(
-        error, (AdCPError, ValueError, TypeError)
-    ), f"Expected a real validation error (AdCPError/ValueError/TypeError), got {type(error).__name__}: {error}"
+    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
+        f"Expected a real validation error (AdCPError/ValueError/TypeError), got {type(error).__name__}: {error}"
+    )
 
 
 @then("the error should include a suggestion for how to fix the issue")
@@ -2135,12 +2135,12 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
     assert error is not None, "Expected an error to check suggestion on"
     from src.core.exceptions import AdCPError
 
-    assert isinstance(
-        error, AdCPError
-    ), f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    assert (
-        error.details is not None
-    ), f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain suggestion"
+    assert isinstance(error, AdCPError), (
+        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
+    )
+    assert error.details is not None, (
+        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain suggestion"
+    )
     suggestion = error.details.get("suggestion")
     assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
         f"Expected actionable suggestion string (>= 5 chars) in error details, "
@@ -2201,9 +2201,9 @@ def then_empty_with_error(ctx: dict, code: str) -> None:
     buys = _get_media_buys(ctx)
     assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
     resp = ctx.get("response")
-    assert (
-        resp is not None
-    ), f"Expected response with empty media_buys and error '{code}', but response is None. Error: {ctx.get('error')}"
+    assert resp is not None, (
+        f"Expected response with empty media_buys and error '{code}', but response is None. Error: {ctx.get('error')}"
+    )
     errors = getattr(resp, "errors", None) or []
     codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
     assert code in codes, f"Expected error '{code}' in errors, got {codes}"
@@ -2215,9 +2215,9 @@ def then_empty_buys_with_error(ctx: dict, code: str) -> None:
     buys = _get_media_buys(ctx)
     assert len(buys) == 0, f"Expected empty, got {len(buys)}"
     resp = ctx.get("response")
-    assert (
-        resp is not None
-    ), f"Expected response with empty media_buys and error '{code}', but response is None. Error: {ctx.get('error')}"
+    assert resp is not None, (
+        f"Expected response with empty media_buys and error '{code}', but response is None. Error: {ctx.get('error')}"
+    )
     errors = getattr(resp, "errors", None) or []
     codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
     assert code in codes, f"Expected '{code}' in response errors, got {codes}"
@@ -2240,9 +2240,9 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
     assert error.details is not None, f"AdCPError(error_code={code!r}) has no details dict — cannot contain suggestion"
     assert "suggestion" in error.details, f"Expected 'suggestion' in error details for '{code}', got: {error.details}"
     suggestion = error.details["suggestion"]
-    assert (
-        isinstance(suggestion, str) and suggestion.strip()
-    ), f"Expected non-empty suggestion string for error code '{code}', got {suggestion!r}"
+    assert isinstance(suggestion, str) and suggestion.strip(), (
+        f"Expected non-empty suggestion string for error code '{code}', got {suggestion!r}"
+    )
 
 
 @then(parsers.parse("no snapshot or snapshot_unavailable_reason on any package"))
@@ -2284,9 +2284,9 @@ def then_package_snapshot_with_fields(ctx: dict, pkg_id: str) -> None:
         for pkg in getattr(buy, "packages", []) or []:
             if getattr(pkg, "package_id", None) == pkg_id:
                 snapshot = getattr(pkg, "snapshot", None)
-                assert (
-                    snapshot is not None
-                ), f"Package '{pkg_id}' has no snapshot — cannot verify as_of/impressions fields"
+                assert snapshot is not None, (
+                    f"Package '{pkg_id}' has no snapshot — cannot verify as_of/impressions fields"
+                )
                 # Verify as_of
                 as_of = getattr(snapshot, "as_of", None)
                 if as_of is None and isinstance(snapshot, dict):
@@ -2297,9 +2297,9 @@ def then_package_snapshot_with_fields(ctx: dict, pkg_id: str) -> None:
                 if impressions is None and isinstance(snapshot, dict):
                     impressions = snapshot.get("impressions")
                 assert impressions is not None, f"Snapshot on '{pkg_id}' missing 'impressions' field"
-                assert isinstance(
-                    impressions, int | float
-                ), f"Expected 'impressions' to be numeric, got {type(impressions).__name__}"
+                assert isinstance(impressions, int | float), (
+                    f"Expected 'impressions' to be numeric, got {type(impressions).__name__}"
+                )
                 return
     raise AssertionError(f"Package '{pkg_id}' not found in response")
 
@@ -2339,9 +2339,9 @@ def then_all_packages_have_snapshots(ctx: dict) -> None:
             if snapshot is None:
                 missing_snapshot.append(pkg_id)
     assert packages_checked > 0, "No packages found to check snapshots on"
-    assert (
-        not missing_snapshot
-    ), f"{len(missing_snapshot)} of {packages_checked} package(s) missing snapshots: {missing_snapshot}"
+    assert not missing_snapshot, (
+        f"{len(missing_snapshot)} of {packages_checked} package(s) missing snapshots: {missing_snapshot}"
+    )
 
 
 @then(parsers.parse("{pkg1} has snapshot, {pkg2} has SNAPSHOT_TEMPORARILY_UNAVAILABLE"))
@@ -2370,9 +2370,9 @@ def then_mixed_snapshot(ctx: dict, pkg1: str, pkg2: str) -> None:
                     f"but snapshot_unavailable_reason is None"
                 )
                 reason_str = reason.value if hasattr(reason, "value") else str(reason)
-                assert (
-                    reason_str == "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
-                ), f"Expected SNAPSHOT_TEMPORARILY_UNAVAILABLE for '{pkg2}', got '{reason_str}'"
+                assert reason_str == "SNAPSHOT_TEMPORARILY_UNAVAILABLE", (
+                    f"Expected SNAPSHOT_TEMPORARILY_UNAVAILABLE for '{pkg2}', got '{reason_str}'"
+                )
     if not pkg1_found or not pkg2_found:
         missing = []
         if not pkg1_found:

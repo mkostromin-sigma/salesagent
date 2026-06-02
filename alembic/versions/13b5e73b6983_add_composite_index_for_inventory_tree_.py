@@ -5,17 +5,16 @@ Revises: 2e04733a751f
 Create Date: 2026-03-30 11:36:21.572929
 
 """
-from typing import Sequence, Union
+
+from collections.abc import Sequence
 
 from alembic import op
-import sqlalchemy as sa
-
 
 # revision identifiers, used by Alembic.
-revision: str = '13b5e73b6983'
-down_revision: Union[str, Sequence[str], None] = '2e04733a751f'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "13b5e73b6983"
+down_revision: str | Sequence[str] | None = "2e04733a751f"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

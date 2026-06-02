@@ -6,7 +6,7 @@ setup:
 	uv run python scripts/setup-dev.py
 
 quality:
-	uv run black --check .
+	uv run ruff format --check .
 	uv run ruff check .
 	uv run mypy src/ --config-file=mypy.ini
 	uv run python .pre-commit-hooks/check_code_duplication.py

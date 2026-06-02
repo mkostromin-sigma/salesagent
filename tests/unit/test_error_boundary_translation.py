@@ -932,9 +932,9 @@ class TestToDictRecoveryField:
         for exc, expected_recovery in cases:
             d = exc.to_dict()
             assert "recovery" in d, f"{type(exc).__name__}.to_dict() missing 'recovery' key"
-            assert (
-                d["recovery"] == expected_recovery
-            ), f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
+            assert d["recovery"] == expected_recovery, (
+                f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
+            )
 
     def test_to_dict_custom_recovery_override(self):
         """Custom recovery= kwarg overrides class default in to_dict() output."""
