@@ -275,7 +275,7 @@ class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse
     # Required (no default): pinned 3.1 get-products-response marks 'products'
     # required. The SDK base declares it optional (list | None); redeclare it
     # required so the model cannot construct an under-specified shape (#1399 Plan-B).
-    products: list[LibraryProduct]  # type: ignore[assignment]
+    products: list[LibraryProduct]
 
     def __str__(self) -> str:
         """Return human-readable message for protocol layer.

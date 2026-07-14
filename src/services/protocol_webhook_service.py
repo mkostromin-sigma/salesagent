@@ -400,8 +400,14 @@ class ProtocolWebhookService:
         # re-derived here. Legacy callers that never reserved (other task_types)
         # keep the old create-a-fresh-log-id-and-merge behavior.
         reserved_log_id = metadata.get("log_id")
-        has_reservation = isinstance(reserved_log_id, str) and bool(reserved_log_id)
-        log_id = reserved_log_id if has_reservation else str(uuid4())
+        # Narrow for mypy via explicit branches (a boolean guard alone does not
+        # narrow the `metadata.get` Any|None union when reassigned).
+        if isinstance(reserved_log_id, str) and reserved_log_id:
+            has_reservation = True
+            log_id = reserved_log_id
+        else:
+            has_reservation = False
+            log_id = str(uuid4())
         start_time = time.time()
 
         # Log to audit system (start)
