@@ -426,7 +426,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                     media_buy.approved_at = datetime.now(UTC)
                     media_buy.approved_by = user_email
+                    became_completed = media_buy.status == "completed"
                     db_session.commit()
+
+                    if became_completed:
+                        # Approval landed the buy directly in "completed" (flight
+                        # window already ended by approval time) — enqueue the
+                        # one-shot final delivery webhook now rather than rely on
+                        # the hourly batch to catch this narrow window (#1606 point 9).
+                        from src.services.delivery_webhook_scheduler import get_delivery_webhook_scheduler
+
+                        asyncio.run(get_delivery_webhook_scheduler().enqueue_final_if_configured(media_buy, db_session))
 
                     # Execute adapter creation for approved media buy
                     # This creates the order/line items in GAM (or other adapter)
@@ -443,6 +453,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             error_buy = error_repo.update_status(media_buy_id, "failed")
                             if error_buy:
                                 error_session.commit()
+
+                                # Transition into a NO_MORE_DATA status — enqueue
+                                # the one-shot final delivery webhook (#1606 point 9).
+                                from src.services.delivery_webhook_scheduler import get_delivery_webhook_scheduler
+
+                                asyncio.run(
+                                    get_delivery_webhook_scheduler().enqueue_final_if_configured(
+                                        error_buy, error_session
+                                    )
+                                )
 
                         flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
                         return redirect(
@@ -539,11 +559,20 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 )
                 attributes.flag_modified(step, "comments")
 
+                became_rejected = False
                 if media_buy and media_buy.status == "pending_approval":
                     media_buy.status = "rejected"
                     attributes.flag_modified(media_buy, "status")
+                    became_rejected = True
 
                 db_session.commit()
+
+                if became_rejected and media_buy:
+                    # Transition into a NO_MORE_DATA status — enqueue the
+                    # one-shot final delivery webhook (#1606 point 9).
+                    from src.services.delivery_webhook_scheduler import get_delivery_webhook_scheduler
+
+                    asyncio.run(get_delivery_webhook_scheduler().enqueue_final_if_configured(media_buy, db_session))
 
                 # Send webhook notification to buyer
                 webhook_config = None

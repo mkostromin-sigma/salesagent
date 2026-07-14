@@ -10,9 +10,11 @@ import logging
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types import MediaBuyStatus
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
@@ -101,9 +103,18 @@ class DeliveryWebhookScheduler:
                 # Wait before next batch
                 await asyncio.sleep(SLEEP_INTERVAL_SECONDS)
 
-    async def _send_reports(self) -> None:
-        """Send reports for all active media buys with configured webhooks."""
+    async def _send_reports(self) -> tuple[int, int]:
+        """Send reports for all active media buys with configured webhooks.
+
+        Returns:
+            ``(reports_sent, errors)`` tally for this batch run — callers
+            (tests, callers wanting the outcome instead of just the log line)
+            read this instead of re-deriving it from log output.
+        """
         logger.info("Starting scheduled delivery report webhook batch")
+
+        reports_sent = 0
+        errors = 0
 
         try:
             with get_db_session() as session:
@@ -112,9 +123,6 @@ class DeliveryWebhookScheduler:
                 # "scheduled") are included — a hardcoded partial list stranded
                 # them without webhooks (#1556).
                 media_buys = MediaBuyRepository.get_all_by_statuses(session, sorted(SERVING_PERSISTED_STATUSES))
-
-                reports_sent = 0
-                errors = 0
 
                 for media_buy in media_buys:
                     try:
@@ -148,6 +156,8 @@ class DeliveryWebhookScheduler:
 
         except Exception as e:
             logger.error(f"Error in daily delivery report batch: {e}", exc_info=True)
+
+        return reports_sent, errors
 
     async def trigger_report_for_media_buy_by_id(self, media_buy_id: str, tenant_id: str) -> bool:
         """Manually trigger a delivery report for a single media buy by ID.
@@ -184,7 +194,12 @@ class DeliveryWebhookScheduler:
             return False
 
     async def _send_report_for_media_buy(
-        self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
+        self,
+        media_buy: Any,
+        reporting_webhook: dict,
+        session: Any,
+        force: bool = False,
+        notification_type_override: str | None = None,
     ) -> bool:
         """Send a delivery report for a single media buy.
 
@@ -193,18 +208,53 @@ class DeliveryWebhookScheduler:
             reporting_webhook: Webhook configuration dict
             session: Database session
             force: If True, bypass frequency checks and duplicate checks
+            notification_type_override: When ``"final"``, forces the outgoing
+                notification_type to "final" regardless of what the delivery
+                impl's reported statuses would derive, and widens the delivery
+                request's status filter so a buy already transitioned to
+                completed/rejected/canceled/failed is still found (#1606
+                point 9). Used by ``enqueue_final_if_configured`` — the
+                proactive final send fired at the moment a media buy
+                transitions into a NO_MORE_DATA status, instead of relying on
+                the hourly batch to catch the (often momentary) window where
+                the persisted status still qualifies for the SERVING query.
 
         Returns:
             True when a webhook was actually delivered; False when the buy was
-            legitimately skipped (unsupported frequency, dedup, no data, no
-            URL). A failed delivery RAISES so the caller counts it as an
-            error instead of a send.
+            legitimately skipped (unsupported frequency, dedup, one-shot final
+            already sent/in-flight, no data, no URL). A failed delivery RAISES
+            so the caller counts it as an error instead of a send.
         """
+        is_final_send = notification_type_override == "final"
         try:
-            # Determine reporting frequency from AdCP config (hourly, daily, monthly)
-            raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
+            repo = DeliveryRepository(session, media_buy.tenant_id)
 
-            if not force and raw_freq != "daily":
+            # One-shot final guard (#1606 points 8/12): a final already
+            # delivered ("success") or in-flight ("reserved"/"retrying")
+            # permanently blocks ANY further send for this stream — a stray
+            # "scheduled" attempt after the terminal notification went out,
+            # a repeat final from a second transition-enqueue call, AND a
+            # force=True manual trigger. Checked before frequency/dedup so a
+            # forced call can never race past it.
+            if repo.has_final_notification(media_buy.media_buy_id, task_type="media_buy_delivery"):
+                logger.info(
+                    "Skipping delivery webhook for media buy %s – a final notification was already "
+                    "delivered or is in flight",
+                    media_buy.media_buy_id,
+                )
+                return False
+
+            # Determine reporting frequency from AdCP config. The spec field
+            # is "reporting_frequency" (ReportingWebhook.reporting_frequency);
+            # "frequency" is kept as a fallback for rows persisted before this
+            # fix landed (#1606 point 11).
+            raw_freq = str(
+                reporting_webhook.get("reporting_frequency") or reporting_webhook.get("frequency") or "daily"
+            ).lower()
+
+            # A final notification is a one-time terminal event, not a
+            # recurring cadence — it is not subject to the frequency gate.
+            if not force and not is_final_send and raw_freq != "daily":
                 logger.warning(
                     "Skipping reporting webhook with frequency '%s' for media buy %s – "
                     "only 'daily' frequency is supported for delivery webhooks at this time",
@@ -217,19 +267,16 @@ class DeliveryWebhookScheduler:
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
             end_date_obj = datetime.now(UTC)
 
-            # Check if we've already sent a delivery report webhook for this
-            # media buy within the last 24 hours (rolling window on created_at,
-            # success rows only). Any notification_type counts (#1570): a sent
-            # "final" must also dedup within the window — the durable stopper
-            # is the status scheduler flipping the buy out of the serving
-            # selection, not this check.
-            if not force:
-                # Look back 24 hours to find recent successful webhooks (any
-                # notification_type — the broadened #1570 dedup). Tenant-scoped
-                # via the repository.
+            # 24h rolling-window dedup applies to "scheduled" sends only
+            # (#1606 point 8) — "final" is governed exclusively by the
+            # one-shot has_final_notification guard above, not a time window.
+            if not force and not is_final_send:
                 one_day_ago = datetime.now(UTC) - timedelta(hours=24)
-                existing_log = DeliveryRepository(session, media_buy.tenant_id).get_recent_successful_log(
-                    media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
+                existing_log = repo.get_recent_successful_log(
+                    media_buy.media_buy_id,
+                    task_type="media_buy_delivery",
+                    since=one_day_ago,
+                    notification_type="scheduled",
                 )
                 if existing_log:
                     logger.info(
@@ -257,11 +304,17 @@ class DeliveryWebhookScheduler:
             # resolve outside the reportable set, so ended campaigns (dynamic
             # status=completed) are included rather than filtered out and
             # reported as "not found" errors.
-            from adcp.types import MediaBuyStatus
-
+            #
+            # A final send instead passes status_filter=None: with explicit
+            # media_buy_ids and no status_filter, the impl uses fetch-by-ID
+            # semantics (returns the buy regardless of status), which is
+            # required here because the buy may already be persisted as
+            # rejected/canceled/failed — none of which are valid
+            # MediaBuyStatus enum members for a status_filter (only
+            # completed is, of the terminal statuses).
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=[media_buy.media_buy_id],
-                status_filter=[MediaBuyStatus(s) for s in REPORTABLE_CANONICAL_STATUSES],
+                status_filter=None if is_final_send else [MediaBuyStatus(s) for s in REPORTABLE_CANONICAL_STATUSES],
                 start_date=start_date_obj.strftime("%Y-%m-%d"),
                 end_date=end_date_obj.strftime("%Y-%m-%d"),
                 context=None,
@@ -281,20 +334,11 @@ class DeliveryWebhookScheduler:
                 )
                 return False
 
-            # Sequence number for this webhook: max SUCCESSFULLY DELIVERED
-            # sequence + 1 (spec: "Sequential notification number ... starts at
-            # 1"). Failed/retrying sends also log the sequence they attempted;
-            # counting them — while the dedup above counts only successes —
-            # would burn numbers the buyer never received, so a buyer's
-            # first-ever webhook could start above 1. A query failure
-            # propagates and aborts this send loudly: a quiet fallback to 1
-            # would put an already-consumed sequence on the wire.
-            sequence_number = (
-                DeliveryRepository(session, media_buy.tenant_id).get_max_sequence_number(
-                    media_buy.media_buy_id, task_type="media_buy_delivery"
-                )
-                + 1
-            )
+            # Extract webhook URL and authentication
+            webhook_url = reporting_webhook.get("url")
+            if not webhook_url:
+                logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
+                return False
 
             # Set webhook-specific metadata directly on the response model (#1570).
             # These fields are webhook-only ("only present in webhook deliveries" —
@@ -302,11 +346,13 @@ class DeliveryWebhookScheduler:
             # impl never sets them; this webhook path is the single place they are
             # attached to the wire.
             #
-            # notification_type: derived from the reported statuses — "final" when
-            # every buy will never produce more data ("one final notification when
-            # the campaign completes", optimization-reporting.mdx §Publisher
-            # Commitment), "scheduled" otherwise.
-            derived = derive_notification_type(
+            # notification_type: an explicit override (the transition-triggered
+            # final send) wins outright; otherwise derived from the reported
+            # statuses — "final" when every buy will never produce more data
+            # ("one final notification when the campaign completes",
+            # optimization-reporting.mdx §Publisher Commitment), "scheduled"
+            # otherwise.
+            derived = notification_type_override or derive_notification_type(
                 enum_value(d.status) for d in delivery_response.media_buy_deliveries or []
             )
             delivery_response.notification_type = NotificationType(derived) if derived else None
@@ -324,15 +370,24 @@ class DeliveryWebhookScheduler:
             # derived is None (zero deliveries) -> leave next_expected_at unset;
             # notification_type is None too, so the pair stays consistent.
 
+            # Durably reserve the sequence number for this outbox stream
+            # BEFORE the HTTP call (#1606 point 3/6): allocated under an
+            # advisory transaction lock as MAX(sequence over ALL statuses) + 1
+            # — a "reserved" or "retrying" row already holds a number even
+            # without a successful delivery — and committed immediately so the
+            # reservation is durable and the lock releases promptly. Once
+            # reserved, the number is embedded on the payload and never
+            # re-derived, even if the HTTP send later succeeds.
+            log_id, sequence_number = self._reserve_sequence(
+                tenant_id=media_buy.tenant_id,
+                media_buy_id=media_buy.media_buy_id,
+                principal_id=media_buy.principal_id,
+                webhook_url=webhook_url,
+                notification_type=derived,
+            )
             delivery_response.sequence_number = sequence_number
             delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
             delivery_response.unavailable_count = 0  # TODO: Count reporting_delayed/failed deliveries
-
-            # Extract webhook URL and authentication
-            webhook_url = reporting_webhook.get("url")
-            if not webhook_url:
-                logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
-                return False
 
             # Try to find existing push notification config or create a temporary one
             auth_config = reporting_webhook.get("authentication", {})
@@ -383,6 +438,11 @@ class DeliveryWebhookScheduler:
                 "tenant_id": media_buy.tenant_id,
                 "principal_id": media_buy.principal_id,
                 "media_buy_id": media_buy.media_buy_id,
+                # Pre-reserved outbox row id (#1606): protocol_webhook_service
+                # UPDATEs this row via mark_delivery_result instead of
+                # creating a fresh one, so the reserved sequence number is
+                # never re-derived after the HTTP call.
+                "log_id": log_id,
             }
 
             # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
@@ -420,6 +480,78 @@ class DeliveryWebhookScheduler:
             # traceback on the common send_notification -> False path.
             logger.debug(f"Error sending delivery report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
             raise
+
+    def _reserve_sequence(
+        self,
+        *,
+        tenant_id: str,
+        media_buy_id: str,
+        principal_id: str,
+        webhook_url: str,
+        notification_type: str | None,
+    ) -> tuple[str, int]:
+        """Reserve (or reclaim) the outbox sequence for a delivery-webhook stream.
+
+        Uses its own short-lived session distinct from the caller's
+        long-lived batch/status-transition session: ``reserve_next_sequence``
+        takes a Postgres advisory transaction lock that must be released by
+        an immediate commit here, independent of whatever the caller's outer
+        session is doing. Reclaims an existing reserved/retrying row for the
+        same notification_type instead of minting a new sequence.
+        """
+        log_id = str(uuid4())
+        with get_db_session() as reserve_session:
+            log_entry = DeliveryRepository(reserve_session, tenant_id).reserve_next_sequence(
+                media_buy_id=media_buy_id,
+                task_type="media_buy_delivery",
+                log_id=log_id,
+                principal_id=principal_id,
+                webhook_url=webhook_url,
+                notification_type=notification_type,
+            )
+            sequence_number = log_entry.sequence_number
+            log_id = log_entry.id
+            reserve_session.commit()
+        return log_id, sequence_number
+
+    async def enqueue_final_if_configured(self, media_buy: Any, session: Any) -> bool:
+        """Send exactly one final delivery webhook for a media buy that just
+        transitioned into a NO_MORE_DATA status (#1606 point 9).
+
+        The hourly batch alone is unreliable for this: once the persisted
+        status flips to completed/canceled/rejected/failed it drops out of
+        ``SERVING_PERSISTED_STATUSES`` and is never selected again, so unless
+        the batch happens to run in the brief window between the flight
+        ending and the status scheduler persisting the flip, the buyer's
+        required final notification is silently never sent. Call this
+        directly from every site that persists such a transition
+        (``media_buy_status_scheduler``, admin approve/reject/adapter-failure
+        paths) right after the status commit.
+
+        Idempotent and safe to call from multiple transition sites or
+        multiple times: ``_send_report_for_media_buy``'s one-shot
+        ``has_final_notification`` guard blocks a second final outright.
+        Best-effort — a failure here must not unwind the status transition
+        that already committed, so exceptions are caught and logged, not
+        propagated.
+
+        Returns:
+            True if a final webhook was sent by this call; False if none was
+            configured, one already existed, or the send failed/erred.
+        """
+        raw_request = media_buy.raw_request or {}
+        reporting_webhook = raw_request.get("reporting_webhook")
+        if not reporting_webhook:
+            return False
+        try:
+            return await self._send_report_for_media_buy(
+                media_buy, reporting_webhook, session, force=True, notification_type_override="final"
+            )
+        except Exception:
+            logger.error(
+                "Failed to enqueue final delivery webhook for media buy %s", media_buy.media_buy_id, exc_info=True
+            )
+            return False
 
 
 # Global scheduler instance

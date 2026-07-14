@@ -23,8 +23,9 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
-from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
+from src.core.tools._media_buy_status import NO_MORE_DATA_STATUSES, SERVING_PERSISTED_STATUSES
 from src.core.utils import utc_flight_end, utc_flight_start
+from src.services.delivery_webhook_scheduler import get_delivery_webhook_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,12 @@ class MediaBuyStatusScheduler:
         """Check and update media buy statuses based on flight dates."""
         now = datetime.now(UTC)
         updated_count = 0
+        # Buys that just transitioned into a NO_MORE_DATA status (completed,
+        # here — this scheduler never persists canceled/rejected/failed, but
+        # the check is written against the general set for correctness) get
+        # exactly one final delivery webhook enqueued once the status change
+        # is durably committed (#1606 point 9).
+        newly_terminal: list[MediaBuy] = []
 
         try:
             with get_db_session() as session:
@@ -111,10 +118,19 @@ class MediaBuyStatusScheduler:
                         media_buy.status = new_status
                         updated_count += 1
                         logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
+                        if new_status in NO_MORE_DATA_STATUSES:
+                            newly_terminal.append(media_buy)
 
                 if updated_count > 0:
                     session.commit()
                     logger.info(f"Updated {updated_count} media buy status(es)")
+
+                # Enqueue AFTER commit: the transition must be durable before
+                # a final webhook (which asserts "no more data") goes out.
+                if newly_terminal:
+                    scheduler = get_delivery_webhook_scheduler()
+                    for media_buy in newly_terminal:
+                        await scheduler.enqueue_final_if_configured(media_buy, session)
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)

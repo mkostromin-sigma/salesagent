@@ -37,7 +37,7 @@ from src.core.schemas import GetMediaBuyDeliveryResponse
 # the buyer's webhook would receive.
 # ---------------------------------------------------------------------------
 
-_DAILY_WEBHOOK = {"url": "https://example.com/webhook", "frequency": "daily"}
+_DAILY_WEBHOOK = {"url": "https://example.com/webhook", "reporting_frequency": "daily"}
 
 
 # ---------------------------------------------------------------------------
@@ -482,17 +482,13 @@ class TestDedupSuppressesPriorFinalWebhook:
 class TestBatchContinuesPastFailedSend:
     """A failed send does NOT abort the batch — the loop continues to the rest.
 
-    ``_send_reports`` catches a per-item failure and continues to the remaining
-    buys. Dropping the per-item try/except (delivery_webhook_scheduler.py:119-145)
-    lets the first failure propagate out of the loop, so the batch never reaches
-    the remaining buys. This drives the real batch loop (only the outbound send
-    is mocked), unlike the other tests that mock _send_report_for_media_buy or
-    check the delivery response directly.
-
-    Scope: this pins *continuation* only. The batch tally itself — that a failed
-    send increments ``errors`` rather than ``reports_sent`` — is log-only today
-    and asserted by the return-value change tracked in #1635 (make
-    ``_send_reports`` return ``(reports_sent, errors)``).
+    ``_send_reports`` catches a per-item failure, continues to the remaining
+    buys, and returns ``(reports_sent, errors)`` (#1635). Dropping the
+    per-item try/except (delivery_webhook_scheduler.py batch loop) lets the
+    first failure propagate out of the loop, so the batch never reaches the
+    remaining buys. This drives the real batch loop (only the outbound send
+    is mocked), unlike the other tests that mock _send_report_for_media_buy
+    or check the delivery response directly.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
@@ -537,7 +533,7 @@ class TestBatchContinuesPastFailedSend:
             with patch.object(
                 scheduler.webhook_service, "send_notification", new_callable=AsyncMock, side_effect=fake_send
             ) as mock_send:
-                await scheduler._send_reports()
+                reports_sent, errors = await scheduler._send_reports()
 
             # Both buys were attempted: the first send failed and was counted as
             # an error, but the loop continued to the second. Dropping the
@@ -545,6 +541,9 @@ class TestBatchContinuesPastFailedSend:
             assert mock_send.await_count == 2, (
                 f"batch must attempt the second buy after the first send fails; got {mock_send.await_count} send(s)"
             )
+            # Return-value authority for the batch tally (#1635) — avoid
+            # fragile caplog assertions under CI logging/logfire.
+            assert (reports_sent, errors) == (1, 1), f"expected (1 sent, 1 errors), got ({reports_sent}, {errors})"
 
 
 # ---------------------------------------------------------------------------

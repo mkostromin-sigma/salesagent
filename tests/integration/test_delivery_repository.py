@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -699,3 +700,450 @@ class TestGetMaxSequenceNumber:
             repo = DeliveryRepository(session, tenant_a)
             assert repo.get_max_sequence_number(media_buy_a, task_type="media_buy_delivery") == 5
             assert repo.get_max_sequence_number(media_buy_a, task_type="delivery_report") == 10
+
+    def test_counts_reserved_and_retrying_rows_not_just_success(self, tenant_a, principal_a, media_buy_a):
+        """#1606 point 5: a "reserved" or "retrying" row already holds its number.
+
+        The old behavior (success-only) would return 1 here even though
+        sequence 2 is already allocated to a "reserved" row — a caller
+        deriving "next" from the old semantics would collide with it.
+        """
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="media_buy_delivery",
+                status="success",
+                sequence_number=1,
+            )
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="media_buy_delivery",
+                status="reserved",
+                sequence_number=2,
+            )
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            assert repo.get_max_sequence_number(media_buy_a, task_type="media_buy_delivery") == 2
+
+
+class TestReserveNextSequence:
+    """reserve_next_sequence durably allocates the next outbox sequence number.
+
+    Covers: #1606 point 3 (L1)
+    """
+
+    def test_first_reservation_allocates_sequence_one(self, tenant_a, principal_a, media_buy_a):
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            log_entry = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+            )
+            session.commit()
+            assert log_entry.sequence_number == 1
+            assert log_entry.status == "reserved"
+            assert log_entry.attempt_count == 0
+
+    def test_reservation_skips_past_prior_allocations_of_any_status(self, tenant_a, principal_a, media_buy_a):
+        """The next reservation is MAX(all statuses) + 1, not MAX(success) + 1."""
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="media_buy_delivery",
+                status="failed",
+                sequence_number=1,
+            )
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            log_entry = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+            )
+            session.commit()
+            assert log_entry.sequence_number == 2
+
+    def test_reservation_persists_durably_across_sessions(self, tenant_a, principal_a, media_buy_a):
+        log_id = str(uuid4())
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=log_id,
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+            )
+            session.commit()
+
+        with get_db_session() as session:
+            persisted = session.scalars(select(WebhookDeliveryLog).where(WebhookDeliveryLog.id == log_id)).first()
+            assert persisted is not None
+            assert persisted.status == "reserved"
+            assert persisted.sequence_number == 1
+
+    def test_second_reservation_scoped_to_different_media_buy_starts_at_one(self, tenant_a, principal_a, media_buy_a):
+        """Reservation streams are scoped per (tenant, media_buy, task_type) — a
+        different media_buy's stream is unaffected by another's allocations."""
+        other_media_buy_id = "del_mb_a_other"
+        with get_db_session() as session:
+            mb = MediaBuy(
+                media_buy_id=other_media_buy_id,
+                tenant_id=tenant_a,
+                principal_id=principal_a,
+                order_name="Other Order",
+                advertiser_name="Test Advertiser",
+                start_date=datetime(2026, 1, 1).date(),
+                end_date=datetime(2026, 12, 31).date(),
+                status="active",
+                raw_request={"test": True},
+            )
+            session.add(mb)
+            repo = DeliveryRepository(session, tenant_a)
+            repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+                notification_type="scheduled",
+            )
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            log_entry = repo.reserve_next_sequence(
+                media_buy_id=other_media_buy_id,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+                notification_type="scheduled",
+            )
+            session.commit()
+            assert log_entry.sequence_number == 1
+
+    def test_second_reserve_reclaims_inflight_same_notification_type(self, tenant_a, principal_a, media_buy_a):
+        """Recovery must reuse the reserved sequence, not mint a new one."""
+        first_id = str(uuid4())
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            first = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=first_id,
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+                notification_type="scheduled",
+            )
+            session.commit()
+            assert first.sequence_number == 1
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            second = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook-retry",
+                notification_type="scheduled",
+            )
+            session.commit()
+            assert second.id == first_id
+            assert second.sequence_number == 1
+            assert second.webhook_url == "https://example.com/webhook-retry"
+
+    def test_final_reserve_can_coexist_with_scheduled_inflight(self, tenant_a, principal_a, media_buy_a):
+        """Different notification_type streams reclaim independently."""
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            scheduled = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+                notification_type="scheduled",
+            )
+            session.commit()
+            assert scheduled.sequence_number == 1
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            final = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+                notification_type="final",
+            )
+            session.commit()
+            assert final.sequence_number == 2
+            assert final.notification_type == "final"
+            assert final.id != scheduled.id
+
+
+class TestUniqueSequenceConstraint:
+    """uq_webhook_delivery_log_sequence backstops the reservation logic (#1606 point 2/L1)."""
+
+    def test_duplicate_sequence_for_same_stream_violates_unique_constraint(self, tenant_a, principal_a, media_buy_a):
+        """A second row allocated to a sequence number already held in this
+        (tenant, media_buy, task_type) stream is rejected at the DB level —
+        the backstop for a bug that bypasses reserve_next_sequence's advisory
+        lock and computes a colliding sequence number directly."""
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="media_buy_delivery",
+                status="success",
+                sequence_number=1,
+            )
+            session.commit()
+
+        with pytest.raises(IntegrityError):
+            with get_db_session() as session:
+                repo = DeliveryRepository(session, tenant_a)
+                repo.create_log(
+                    log_id=str(uuid4()),
+                    principal_id=principal_a,
+                    media_buy_id=media_buy_a,
+                    webhook_url="https://example.com",
+                    task_type="media_buy_delivery",
+                    status="success",
+                    sequence_number=1,
+                )
+                session.commit()
+
+    def test_same_sequence_allowed_across_different_task_types(self, tenant_a, principal_a, media_buy_a):
+        """The unique key includes task_type, so two independent streams for
+        the SAME media buy may each legitimately hold sequence 1."""
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="media_buy_delivery",
+                status="success",
+                sequence_number=1,
+            )
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="delivery_report",
+                status="success",
+                sequence_number=1,
+            )
+            session.commit()  # must not raise
+
+
+class TestMarkDeliveryResult:
+    """mark_delivery_result updates a reserved/retrying outbox row with an HTTP outcome.
+
+    Covers: #1606 point 4 (L1)
+    """
+
+    def test_updates_reserved_row_to_success(self, tenant_a, principal_a, media_buy_a):
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            log_entry = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+            )
+            log_id = log_entry.id
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            updated = repo.mark_delivery_result(
+                log_id,
+                status="success",
+                attempt_count=1,
+                notification_type="scheduled",
+                http_status_code=200,
+                completed_at=datetime.now(UTC),
+            )
+            session.commit()
+            assert updated.status == "success"
+            assert updated.attempt_count == 1
+            assert updated.notification_type == "scheduled"
+            assert updated.http_status_code == 200
+            # The sequence number allocated at reservation time is untouched.
+            assert updated.sequence_number == 1
+
+    def test_does_not_create_new_row_for_second_attempt(self, tenant_a, principal_a, media_buy_a):
+        """Marking "retrying" then "success" updates the SAME row — no new
+        sequence number is ever allocated after the initial reservation."""
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            log_entry = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+            )
+            log_id = log_entry.id
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.mark_delivery_result(log_id, status="retrying", attempt_count=1, error_message="HTTP 503")
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.mark_delivery_result(log_id, status="success", attempt_count=2, http_status_code=200)
+            session.commit()
+
+        with get_db_session() as session:
+            rows = session.scalars(
+                select(WebhookDeliveryLog).where(WebhookDeliveryLog.media_buy_id == media_buy_a)
+            ).all()
+            assert len(list(rows)) == 1
+            row = rows[0]
+            assert row.status == "success"
+            assert row.attempt_count == 2
+            assert row.sequence_number == 1
+
+    def test_raises_for_nonexistent_log_id(self, tenant_a):
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            with pytest.raises(ValueError):
+                repo.mark_delivery_result("does-not-exist", status="success", attempt_count=1)
+
+    def test_raises_for_other_tenant_log_id(self, tenant_a, tenant_b, principal_a, media_buy_a):
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            log_entry = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+            )
+            log_id = log_entry.id
+            session.commit()
+
+        with get_db_session() as session:
+            repo_b = DeliveryRepository(session, tenant_b)
+            with pytest.raises(ValueError):
+                repo_b.mark_delivery_result(log_id, status="success", attempt_count=1)
+
+
+class TestHasFinalNotification:
+    """has_final_notification is the one-shot guard for terminal delivery webhooks.
+
+    Covers: #1606 points 8/12 (L1)
+    """
+
+    def test_false_when_no_logs_exist(self, tenant_a, media_buy_a):
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            assert repo.has_final_notification(media_buy_a, task_type="media_buy_delivery") is False
+
+    def test_false_when_only_scheduled_logs_exist(self, tenant_a, principal_a, media_buy_a):
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="media_buy_delivery",
+                status="success",
+                notification_type="scheduled",
+            )
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            assert repo.has_final_notification(media_buy_a, task_type="media_buy_delivery") is False
+
+    def test_true_when_final_succeeded(self, tenant_a, principal_a, media_buy_a):
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="media_buy_delivery",
+                status="success",
+                notification_type="final",
+            )
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            assert repo.has_final_notification(media_buy_a, task_type="media_buy_delivery") is True
+
+    def test_true_when_final_reserved_but_not_yet_resolved(self, tenant_a, principal_a, media_buy_a):
+        """An in-flight (not yet succeeded/failed) final also blocks a second one."""
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            log_entry = repo.reserve_next_sequence(
+                media_buy_id=media_buy_a,
+                task_type="media_buy_delivery",
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                webhook_url="https://example.com/webhook",
+            )
+            repo.mark_delivery_result(log_entry.id, status="retrying", attempt_count=1, notification_type="final")
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            assert repo.has_final_notification(media_buy_a, task_type="media_buy_delivery") is True
+
+    def test_false_when_final_failed_permanently(self, tenant_a, principal_a, media_buy_a):
+        """A permanently-failed final does NOT block a retry attempt — only
+        success/reserved/retrying count as "already delivered or in flight"."""
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            repo.create_log(
+                log_id=str(uuid4()),
+                principal_id=principal_a,
+                media_buy_id=media_buy_a,
+                webhook_url="https://example.com",
+                task_type="media_buy_delivery",
+                status="failed",
+                notification_type="final",
+            )
+            session.commit()
+
+        with get_db_session() as session:
+            repo = DeliveryRepository(session, tenant_a)
+            assert repo.has_final_notification(media_buy_a, task_type="media_buy_delivery") is False

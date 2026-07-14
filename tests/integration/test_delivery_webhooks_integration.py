@@ -117,7 +117,7 @@ def _create_basic_media_buy_with_webhook(
                 "packages": [{"product_id": product.product_id, "pricing_option_id": pricing_option.id}],
                 "reporting_webhook": {
                     "url": "https://example.com/webhook",  # outbound HTTP will be mocked
-                    "frequency": "daily",
+                    "reporting_frequency": "daily",
                 },
             },
         )
@@ -482,7 +482,7 @@ async def test_serving_persisted_status_receives_delivery_webhook(integration_db
             start_date=datetime.now(UTC).date() - timedelta(days=7),
             end_date=datetime.now(UTC).date() + timedelta(days=7),
             raw_request={
-                "reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"},
+                "reporting_webhook": {"url": "https://example.com/webhook", "reporting_frequency": "daily"},
             },
         )
 

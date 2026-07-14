@@ -2215,6 +2215,15 @@ class WebhookDeliveryLog(Base):
     Records each delivery_report webhook notification with sequence tracking,
     retry history, and performance metrics. Used to demonstrate compliance
     with buyer webhook notification requirements.
+
+    Doubles as the durable outbox for the delivery-webhook scheduler (#1606):
+    ``DeliveryRepository.reserve_next_sequence()`` inserts a ``"reserved"`` row
+    (holding the allocated sequence number) BEFORE the HTTP send, and
+    ``mark_delivery_result()`` updates that same row to ``"success"`` /
+    ``"failed"`` / ``"retrying"`` afterward — the sequence number is never
+    re-derived once reserved, and the ``uq_webhook_delivery_log_sequence``
+    constraint below makes a double-allocation a DB-level integrity error
+    rather than a silent duplicate.
     """
 
     __tablename__ = "webhook_delivery_log"
@@ -2236,7 +2245,7 @@ class WebhookDeliveryLog(Base):
 
     # Retry tracking
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
-    status: Mapped[str] = mapped_column(String, nullable=False)  # "success", "failed", "retrying"
+    status: Mapped[str] = mapped_column(String, nullable=False)  # "reserved", "retrying", "success", "failed"
     http_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -2263,4 +2272,13 @@ class WebhookDeliveryLog(Base):
         Index("idx_webhook_log_tenant", "tenant_id"),
         Index("idx_webhook_log_status", "status"),
         Index("idx_webhook_log_created_at", "created_at"),
+        # Durable outbox invariant (#1606): exactly one row per allocated
+        # sequence number in a (tenant, media_buy, task_type) stream.
+        # DeliveryRepository.reserve_next_sequence() allocates under an
+        # advisory transaction lock BEFORE the HTTP send, so this constraint
+        # is the DB-level backstop against a concurrent scheduler run (or a
+        # retried batch) double-allocating the same number.
+        UniqueConstraint(
+            "tenant_id", "media_buy_id", "task_type", "sequence_number", name="uq_webhook_delivery_log_sequence"
+        ),
     )

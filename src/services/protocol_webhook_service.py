@@ -222,7 +222,14 @@ class ProtocolWebhookService:
         completed_at: datetime | None = None,
         next_retry_at: datetime | None = None,
     ) -> None:
-        """Write a webhook delivery log entry via the DeliveryRepository."""
+        """Write a webhook delivery log entry via the DeliveryRepository (legacy, non-reserved path).
+
+        Best-effort / swallows DB failures: used only when the caller never
+        reserved a sequence number up front (no ``metadata["log_id"]``), so
+        there is no outbox row whose fate matters to the caller's return
+        value. The durable-outbox path (pre-reserved ``log_id``) goes through
+        ``_mark_reserved_result`` instead, which does NOT swallow.
+        """
         try:
             with get_db_session() as session:
                 repo = DeliveryRepository(session, tenant_id)
@@ -246,6 +253,113 @@ class ProtocolWebhookService:
                 session.commit()
         except Exception as e:
             logger.error(f"Failed to write webhook delivery log: {e}")
+
+    @staticmethod
+    def _mark_reserved_result(
+        *,
+        log_id: str,
+        tenant_id: str,
+        status: str,
+        attempt_count: int,
+        notification_type: str | None = None,
+        http_status_code: int | None = None,
+        error_message: str | None = None,
+        payload_size_bytes: int | None = None,
+        response_time_ms: int | None = None,
+        completed_at: datetime | None = None,
+        next_retry_at: datetime | None = None,
+    ) -> bool:
+        """Update a pre-reserved outbox row (``DeliveryRepository.reserve_next_sequence``)
+        with the outcome of an HTTP attempt.
+
+        Does NOT swallow: a failure here means the durable ack was lost even
+        though the row was reserved before the HTTP call, so the caller must
+        know about it via the ``False`` return (#1606 point 7) rather than
+        have it silently absorbed like the legacy ``_write_delivery_log``
+        path. Returns True on a successful durable write.
+        """
+        try:
+            with get_db_session() as session:
+                repo = DeliveryRepository(session, tenant_id)
+                repo.mark_delivery_result(
+                    log_id,
+                    status=status,
+                    attempt_count=attempt_count,
+                    notification_type=notification_type,
+                    http_status_code=http_status_code,
+                    error_message=error_message,
+                    payload_size_bytes=payload_size_bytes,
+                    response_time_ms=response_time_ms,
+                    completed_at=completed_at,
+                    next_retry_at=next_retry_at,
+                )
+                session.commit()
+            return True
+        except Exception:
+            logger.error("Failed to durably record webhook delivery result for reserved log %s", log_id, exc_info=True)
+            return False
+
+    def _record_delivery_outcome(
+        self,
+        *,
+        log_id: str,
+        has_reservation: bool,
+        tenant_id: str,
+        principal_id: str,
+        media_buy_id: str,
+        webhook_url: str,
+        task_type: str,
+        status: str,
+        sequence_number: int,
+        notification_type: str | None,
+        attempt_count: int,
+        http_status_code: int | None = None,
+        error_message: str | None = None,
+        payload_size_bytes: int | None = None,
+        response_time_ms: int | None = None,
+        completed_at: datetime | None = None,
+        next_retry_at: datetime | None = None,
+    ) -> bool:
+        """Persist one delivery-attempt outcome, routing to the reserved or legacy path.
+
+        Returns True unless this is the durable-outbox path AND the write
+        failed (see ``_mark_reserved_result``); the legacy path always
+        returns True (it swallows its own failures, matching prior behavior
+        for callers that never reserved a sequence).
+        """
+        if has_reservation:
+            return self._mark_reserved_result(
+                log_id=log_id,
+                tenant_id=tenant_id,
+                status=status,
+                attempt_count=attempt_count,
+                notification_type=notification_type,
+                http_status_code=http_status_code,
+                error_message=error_message,
+                payload_size_bytes=payload_size_bytes,
+                response_time_ms=response_time_ms,
+                completed_at=completed_at,
+                next_retry_at=next_retry_at,
+            )
+        self._write_delivery_log(
+            log_id=log_id,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=media_buy_id,
+            webhook_url=webhook_url,
+            task_type=task_type,
+            status=status,
+            sequence_number=sequence_number,
+            notification_type=notification_type,
+            attempt_count=attempt_count,
+            http_status_code=http_status_code,
+            error_message=error_message,
+            payload_size_bytes=payload_size_bytes,
+            response_time_ms=response_time_ms,
+            completed_at=completed_at,
+            next_retry_at=next_retry_at,
+        )
+        return True
 
     async def _send_with_retry_and_logging(
         self,
@@ -278,8 +392,16 @@ class ProtocolWebhookService:
         notification_type = notification_type_from_result
         sequence_number = sequence_number_from_result if isinstance(sequence_number_from_result, int) else 1
 
-        # Create webhook delivery log entry
-        log_id = str(uuid4())
+        # Durable-outbox path (#1606): the deliverer (delivery_webhook_scheduler)
+        # pre-reserves a sequence number via DeliveryRepository.reserve_next_sequence()
+        # and passes its log_id through metadata; every write below then UPDATEs
+        # that same row instead of creating a new one, and the sequence number set
+        # on the outgoing payload (sequence_number_from_result, above) is never
+        # re-derived here. Legacy callers that never reserved (other task_types)
+        # keep the old create-a-fresh-log-id-and-merge behavior.
+        reserved_log_id = metadata.get("log_id")
+        has_reservation = isinstance(reserved_log_id, str) and bool(reserved_log_id)
+        log_id = reserved_log_id if has_reservation else str(uuid4())
         start_time = time.time()
 
         # Log to audit system (start)
@@ -304,14 +426,16 @@ class ProtocolWebhookService:
                 logger.info(f"Successfully sent webhook for task {task_id} (status: {response.status_code})")
 
                 # Write to webhook_delivery_log (success)
+                durable_ack_ok = True
                 if (
                     task_type in ("delivery_report", "media_buy_delivery")
                     and media_buy_id
                     and tenant_id
                     and principal_id
                 ):
-                    self._write_delivery_log(
+                    durable_ack_ok = self._record_delivery_outcome(
                         log_id=log_id,
+                        has_reservation=has_reservation,
                         tenant_id=tenant_id,
                         principal_id=principal_id,
                         media_buy_id=media_buy_id,
@@ -326,6 +450,18 @@ class ProtocolWebhookService:
                         response_time_ms=response_time_ms,
                         completed_at=datetime.now(UTC),
                     )
+
+                if not durable_ack_ok:
+                    # The HTTP call succeeded but the durable ack write failed
+                    # (#1606 point 7) — report the delivery as failed rather than
+                    # silently drop the write failure and claim success. The
+                    # buyer may have received a webhook whose outcome we cannot
+                    # account for in the outbox.
+                    logger.error(
+                        f"Webhook for task {task_id} was sent (status: {response.status_code}) but the durable "
+                        "delivery-log write failed; reporting as not-delivered"
+                    )
+                    return False
 
                 # Log to audit system (success)
                 if audit_logger:
@@ -352,8 +488,9 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        self._write_delivery_log(
+                        self._record_delivery_outcome(
                             log_id=log_id,
+                            has_reservation=has_reservation,
                             tenant_id=tenant_id,
                             principal_id=principal_id,
                             media_buy_id=media_buy_id,
@@ -393,8 +530,9 @@ class ProtocolWebhookService:
                     ):
                         next_retry = datetime.now(UTC).replace(microsecond=0)
                         next_retry = next_retry.replace(second=next_retry.second + int(wait_seconds))
-                        self._write_delivery_log(
+                        self._record_delivery_outcome(
                             log_id=log_id,
+                            has_reservation=has_reservation,
                             tenant_id=tenant_id,
                             principal_id=principal_id,
                             media_buy_id=media_buy_id,
@@ -422,8 +560,9 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        self._write_delivery_log(
+                        self._record_delivery_outcome(
                             log_id=log_id,
+                            has_reservation=has_reservation,
                             tenant_id=tenant_id,
                             principal_id=principal_id,
                             media_buy_id=media_buy_id,
@@ -470,8 +609,9 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        self._write_delivery_log(
+                        self._record_delivery_outcome(
                             log_id=log_id,
+                            has_reservation=has_reservation,
                             tenant_id=tenant_id,
                             principal_id=principal_id,
                             media_buy_id=media_buy_id,
@@ -503,8 +643,9 @@ class ProtocolWebhookService:
                     and tenant_id
                     and principal_id
                 ):
-                    self._write_delivery_log(
+                    self._record_delivery_outcome(
                         log_id=log_id,
+                        has_reservation=has_reservation,
                         tenant_id=tenant_id,
                         principal_id=principal_id,
                         media_buy_id=media_buy_id,

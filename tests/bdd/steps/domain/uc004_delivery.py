@@ -1696,7 +1696,7 @@ def given_media_buy_with_reporting_webhook(ctx: dict, mb_id: str, flight: str) -
         status="active",
         start_date=today + timedelta(days=start_days),
         end_date=today + timedelta(days=end_days),
-        raw_request={"reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"}},
+        raw_request={"reporting_webhook": {"url": "https://example.com/webhook", "reporting_frequency": "daily"}},
     )
     ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": owner, "status": "active"}
     ctx["scheduler_buy"] = buy
