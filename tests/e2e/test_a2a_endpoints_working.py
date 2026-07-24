@@ -11,7 +11,7 @@ This test validates the actual HTTP endpoints that our A2A server exposes.
 import json
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
