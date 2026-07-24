@@ -413,16 +413,80 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 db_session.commit()
 
                 if media_buy and media_buy.status == "pending_approval":
-                    approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
+                    # Shared Hold predicate (#1696): zero assignments or unapproved
+                    # creatives → pending_creatives; never finalize on hold.
+                    from src.admin.services.media_buy_creative_readiness import (
+                        evaluate_creative_finalize_readiness,
+                    )
 
-                    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES or not approval.ok:
+                    readiness = evaluate_creative_finalize_readiness(
+                        db_session, tenant_id=tenant_id, media_buy_id=media_buy_id
+                    )
+
+                    media_buy.approved_at = datetime.now(UTC)
+                    media_buy.approved_by = user_email
+
+                    if not readiness.ready:
+                        media_buy.status = "pending_creatives"
+                        db_session.commit()
+                        if readiness.hold_reason == "no_assignments":
+                            flash(
+                                "Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM.",
+                                "info",
+                            )
+                        else:
+                            n = len(readiness.unapproved_creative_ids)
+                            flash(
+                                f"Media buy approved! Waiting for {n} creative(s) to be approved before creating in GAM.",
+                                "info",
+                            )
+                        return redirect(
+                            url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                        )
+
+                    if media_buy.start_time and media_buy.end_time:
+                        start_time = (
+                            media_buy.start_time.astimezone(UTC)
+                            if media_buy.start_time.tzinfo
+                            else media_buy.start_time.replace(tzinfo=UTC)
+                        )
+                        end_time = (
+                            media_buy.end_time.astimezone(UTC)
+                            if media_buy.end_time.tzinfo
+                            else media_buy.end_time.replace(tzinfo=UTC)
+                        )
+                        now = datetime.now(UTC)
+                        if now < start_time:
+                            media_buy.status = "scheduled"
+                        elif now > end_time:
+                            media_buy.status = "completed"
+                        else:
+                            media_buy.status = "active"
+                    else:
+                        media_buy.status = "active"
+
+                    db_session.commit()
+
+                    # Ready arm only: create order/line items in adapter
+                    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
+                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+
+                    if not success:
+                        with get_db_session() as error_session:
+                            error_repo = MediaBuyRepository(error_session, tenant_id)
+                            error_buy = error_repo.update_status(media_buy_id, "failed")
+                            if error_buy:
+                                error_session.commit()
+
+                        flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
                         return redirect(
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
 
                     logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
 
-                    # Send webhook notification to buyer
                     webhook_config = None
                     if media_buy_data and media_buy_data["push_notification_url"]:
                         stmt_webhook = (
@@ -441,13 +505,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         approve_repo = MediaBuyRepository(db_session, tenant_id)
                         all_packages = approve_repo.get_packages(media_buy_id)
 
-                        # Echo the buyer's request context (shared helper, also used by
-                        # the creative approval webhook in blueprints/creatives.py).
                         approve_context = echo_context(request_data)
 
-                        # Both columns come off the ApprovalResult, not a re-read. The
-                        # writer reports what it wrote; a route that re-reads the row after
-                        # the call is the shape that made a detached read possible here.
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
@@ -455,10 +514,24 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             revision=approval.revision,
                             context=approve_context,
                         )
-                        webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
-                        # The dialect fork moved into notify(); this site passes the protocol it
-                        # already read from the workflow step (salesagent-pldmk.39).
+                        metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
+
                         protocol = step_data["request_data"].get("protocol", "mcp")
+
+                        if protocol == "a2a":
+                            create_media_buy_approved_payload = create_a2a_webhook_payload(
+                                task_id=step_data["step_id"],
+                                status=AdcpTaskStatus.completed,
+                                result=create_media_buy_approved_result,
+                                context_id=step_data["context_id"],
+                            )
+                        else:
+                            create_media_buy_approved_payload = create_mcp_webhook_payload(
+                                task_id=step_data["step_id"],
+                                task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
+                                result=create_media_buy_approved_result,
+                                status=AdcpTaskStatus.completed,
+                            )
 
                         try:
                             service = get_protocol_webhook_service()

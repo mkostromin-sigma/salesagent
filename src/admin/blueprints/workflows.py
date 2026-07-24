@@ -197,13 +197,53 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 )
 
                 if media_buy and media_buy.status == "pending_approval":
-                    approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
+                    # Shared Hold predicate (#1696): zero assignments or unapproved creatives
+                    # → park at pending_creatives; do not finalize.
+                    from src.admin.services.media_buy_creative_readiness import (
+                        evaluate_creative_finalize_readiness,
+                    )
 
-                    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
+                    readiness = evaluate_creative_finalize_readiness(db, tenant_id=tenant_id, media_buy_id=media_buy_id)
+                    if not readiness.ready:
+                        if readiness.hold_reason == "no_assignments":
+                            logger.warning(
+                                f"[APPROVAL] Cannot execute adapter creation yet - "
+                                f"no creative assignments for media buy {media_buy_id}"
+                            )
+                            flash(
+                                "Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM.",
+                                "info",
+                            )
+                        else:
+                            unapproved = readiness.unapproved_creative_ids
+                            logger.warning(
+                                f"[APPROVAL] Cannot execute adapter creation yet - "
+                                f"{len(unapproved)} creatives not approved: {unapproved}"
+                            )
+                            flash(
+                                f"Media buy approved! Waiting for {len(unapproved)} creative(s) to be approved before creating in GAM.",
+                                "info",
+                            )
+                        media_buy.status = "pending_creatives"
+                        db.commit()
                         return jsonify({"success": True}), 200
 
-                    if not approval.ok:
-                        return jsonify({"success": False, "error": approval.error_msg}), 500
+                    # Execute adapter creation
+                    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
+                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+
+                    if not success:
+                        logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
+                        flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
+                        return jsonify({"success": False, "error": error_msg}), 500
+
+                    # Update media buy status
+                    media_buy.status = "scheduled"
+                    media_buy.approved_at = datetime.now(UTC)
+                    media_buy.approved_by = user_email
+                    db.commit()
 
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")
