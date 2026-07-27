@@ -41,9 +41,9 @@ from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION_DEV, reject_unsaf
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
+from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
 
 _METADATA_URL = "http://169.254.169.254/latest/meta-data/"
-_AUTH_CREDS = "x" * 32
 
 
 def _config(url: str) -> PushNotificationConfig:
@@ -59,13 +59,7 @@ def _config(url: str) -> PushNotificationConfig:
 
 
 def _reporting_webhook(url: str) -> ReportingWebhook:
-    return ReportingWebhook.model_validate(
-        {
-            "url": url,
-            "authentication": {"schemes": ["Bearer"], "credentials": _AUTH_CREDS},
-            "reporting_frequency": "daily",
-        }
-    )
+    return ReportingWebhook.model_validate(valid_reporting_webhook(url))
 
 
 def _identity() -> ResolvedIdentity:
@@ -80,19 +74,14 @@ def _identity() -> ResolvedIdentity:
 
 
 def _minimal_create_request(**overrides):
-    from datetime import UTC, datetime, timedelta
-
-    start = datetime.now(UTC) + timedelta(days=1)
-    end = start + timedelta(days=7)
-    defaults = {
-        "brand": {"domain": "testbrand.com"},
-        "start_time": start.isoformat(),
-        "end_time": end.isoformat(),
-        "packages": [{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-        "idempotency_key": "unit-ssrf-create-key-0001",
-    }
-    defaults.update(overrides)
-    return CreateMediaBuyRequest(**defaults)
+    data = create_test_media_buy_request_dict(
+        product_ids=["prod_1"],
+        total_budget=5000.0,
+        pricing_option_id="cpm_usd_fixed",
+        idempotency_key="unit-ssrf-create-key-0001",
+        **overrides,
+    )
+    return CreateMediaBuyRequest(**data)
 
 
 @pytest.mark.asyncio

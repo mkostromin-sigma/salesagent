@@ -16,6 +16,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
 from src.core.thread_registry import ThreadRegistry
+from src.core.webhook_validator import reject_unsafe_outbound_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -395,11 +396,15 @@ def _send_approval_webhook(
             if config.validation_token:
                 headers["X-Webhook-Token"] = config.validation_token
 
+        rejected, _error_msg = reject_unsafe_outbound_webhook_url(webhook_url, log=logger, kind="OrderApproval")
+        if rejected:
+            return
+
         # Send webhook with retries
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                with httpx.Client(timeout=10.0) as client:
+                with httpx.Client(timeout=10.0, follow_redirects=False) as client:
                     response = client.post(webhook_url, json=payload, headers=headers)
 
                     if 200 <= response.status_code < 300:

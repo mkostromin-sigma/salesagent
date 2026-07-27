@@ -36,6 +36,8 @@ from tests.harness._realize import e2e_unsupported, realize_e2e
 
 # Patch target for send-time SSRF gate in CircuitBreakerEnv (unit + integration).
 OUTBOUND_SSRF_VALIDATE_TARGET = "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url"
+# Shared EXTERNAL_PATCHES fragment — both CircuitBreakerEnv variants merge this.
+SSRF_EXTERNAL_PATCH: dict[str, str] = {"ssrf": OUTBOUND_SSRF_VALIDATE_TARGET}
 
 
 def _persist_simulation_config(env: Any, resp: AdapterGetMediaBuyDeliveryResponse) -> Any:
@@ -409,6 +411,14 @@ class CircuitBreakerMixin:
     def set_url_valid(self) -> None:
         """Allow fixture hostnames through send-time SSRF (default harness path)."""
         self.mock["ssrf"].return_value = (True, "")  # type: ignore[attr-defined]
+
+    def _configure_ssrf_default(self) -> None:
+        """Default: allow fixture hostnames through send-time SSRF (DNS covered elsewhere).
+
+        Scenarios that grade the reject branch call set_url_invalid(). Both
+        CircuitBreakerEnv variants must call this from ``_configure_mocks``.
+        """
+        self.set_url_valid()
 
     def call_send(
         self,

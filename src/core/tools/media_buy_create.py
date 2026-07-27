@@ -2154,15 +2154,16 @@ async def _create_media_buy_impl(
 
             url = push_notification_config.get("url")
             authentication = push_notification_config.get("authentication", {})
-            # Log scheme+host+path only — never credentials / full auth blob.
-            logger.info(
-                "[MCP/A2A] Registering push notification config id=%s url=%s",
-                push_notification_config.get("id"),
-                webhook_url_for_log(str(url) if url else None),
-            )
 
             # Match the pre-gate: whitespace-only URL must not reach upsert.
+            # Log only inside the guard so blank URLs stay silent (same as sync).
             if url is not None and str(url).strip():
+                # Log scheme+host+path only — never credentials / full auth blob.
+                logger.info(
+                    "[MCP/A2A] Registering push notification config id=%s url=%s",
+                    push_notification_config.get("id"),
+                    webhook_url_for_log(str(url)),
+                )
                 schemes = authentication.get("schemes", []) if authentication else []
                 auth_type = schemes[0] if schemes else None
                 credentials = authentication.get("credentials") if authentication else None

@@ -224,6 +224,7 @@ def test_webhook_notification_sent_on_success():
 
         # Verify HTTP POST was made
         mock_client_instance.post.assert_called_once()
+        mock_httpx.assert_called_with(timeout=10.0, follow_redirects=False)
         call_args = mock_client_instance.post.call_args
 
         # Check webhook payload
@@ -238,6 +239,30 @@ def test_webhook_notification_sent_on_success():
         # Check authentication header
         headers = call_args[1]["headers"]
         assert headers["Authorization"] == "Bearer test_token"
+
+
+def test_approval_webhook_rejects_metadata_url_without_post():
+    """Order-approval sender must share the outbound SSRF gate (no open redirect)."""
+    from src.services.order_approval_service import _send_approval_webhook
+
+    with (
+        patch("src.services.order_approval_service.get_db_session") as mock_db,
+        patch("httpx.Client") as mock_httpx,
+    ):
+        mock_db_instance = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_db_instance
+        mock_db_instance.scalars.return_value.first.return_value = None
+
+        _send_approval_webhook(
+            webhook_url="http://169.254.169.254/latest/meta-data/",
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+            media_buy_id="mb_123",
+            status="approved",
+            message="Order approved successfully",
+        )
+
+        mock_httpx.assert_not_called()
 
 
 @patch("src.services.order_approval_service.time.sleep")
