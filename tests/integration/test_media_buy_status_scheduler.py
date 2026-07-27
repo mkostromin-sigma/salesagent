@@ -12,7 +12,6 @@ Uses real PostgreSQL database via integration_db fixture.
 import logging
 import re
 from datetime import UTC, datetime, timedelta
-from logging import ERROR, INFO
 from unittest.mock import patch
 
 import pytest
@@ -547,13 +546,17 @@ async def test_scheduler_updates_multiple_media_buys(integration_db):
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raiser_slot", [0, 1, 2])
-async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db, caplog, raiser_slot):
+async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db, raiser_slot):
     """A DB error on one buy must not discard sibling status flips.
 
     Uses a SAVEPOINT-backed per-buy body: injecting ``SELECT 1/0`` poisons the
     statement and would abort a single terminal commit without isolation.
     Delivery webhook isolation is analogous for non-ORM I/O; this loop also
     defers ORM state, so savepoints are required here.
+
+    Observability is asserted via the module logger (not ``caplog``): integration
+    CI loads logfire's pytest plugin, which intercepts stdlib logging so
+    ``caplog.records`` stays empty even at root INFO.
     """
     tenant_id = _create_test_tenant(f"tenant_isolation_1714_{raiser_slot}")
     principal_id = _create_test_principal(tenant_id)
@@ -596,9 +599,9 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
         return real_compute(media_buy, now_arg, session)
 
     with (
-        # Root level must drop too — logger-only at_level leaves root at WARNING and
-        # filters propagated ERROR/INFO before caplog's handler sees them.
-        caplog.at_level(INFO),
+        patch.object(status_scheduler_mod.logger, "error") as mock_error,
+        patch.object(status_scheduler_mod.logger, "info") as mock_info,
+        patch.object(status_scheduler_mod.logger, "warning") as mock_warning,
         patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_raiser),
     ):
         await scheduler._update_statuses()
@@ -608,19 +611,20 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
         assert _get_media_buy_status(tenant_id, mid) == "completed"
     assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
 
-    error_records = [
-        r for r in caplog.records if r.levelno >= ERROR and "Error updating media buy status" in r.getMessage()
-    ]
-    assert len(error_records) == 1
-    err_msg = error_records[0].getMessage()
+    assert mock_error.call_count == 1
+    err_msg = mock_error.call_args.args[0]
     assert f"tenant_id={tenant_id}" in err_msg
     assert f"principal_id={principal_id}" in err_msg
     assert f"media_buy_id={bad_buy_id}" in err_msg
-    assert error_records[0].exc_info is not None
+    assert mock_error.call_args.kwargs.get("exc_info") is True
 
-    summary_records = [r for r in caplog.records if "Media buy status update complete:" in r.getMessage()]
-    assert len(summary_records) == 1
-    assert "2 updated, 1 errors" in summary_records[0].getMessage()
+    summary_msgs = [
+        call.args[0]
+        for call in (*mock_info.call_args_list, *mock_warning.call_args_list)
+        if call.args and "Media buy status update complete:" in str(call.args[0])
+    ]
+    assert len(summary_msgs) == 1
+    assert "2 updated, 1 errors" in summary_msgs[0]
 
 
 # =============================================================================
