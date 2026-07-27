@@ -30,7 +30,6 @@ class CreativeFinalizeReadiness:
     ready: bool
     """True iff ≥1 assignment AND every linked creative is in the allowlist."""
 
-    assignment_count: int
     unapproved_creative_ids: list[str]
     hold_reason: HoldReason | None
     hold_message: str | None = None
@@ -55,12 +54,10 @@ def evaluate_creative_finalize_readiness(
     loads use the composite key via ``get_by_ids(..., principal_id)``.
     """
     assignments = assignments_repo.get_by_media_buy(media_buy_id)
-    assignment_count = len(assignments)
 
-    if assignment_count == 0:
+    if not assignments:
         return CreativeFinalizeReadiness(
             ready=False,
-            assignment_count=0,
             unapproved_creative_ids=[],
             hold_reason="no_assignments",
             hold_message=_hold_message_for("no_assignments", 0),
@@ -85,7 +82,6 @@ def evaluate_creative_finalize_readiness(
     if unapproved_creative_ids:
         return CreativeFinalizeReadiness(
             ready=False,
-            assignment_count=assignment_count,
             unapproved_creative_ids=unapproved_creative_ids,
             hold_reason="unapproved_creatives",
             hold_message=_hold_message_for("unapproved_creatives", len(unapproved_creative_ids)),
@@ -93,21 +89,10 @@ def evaluate_creative_finalize_readiness(
 
     return CreativeFinalizeReadiness(
         ready=True,
-        assignment_count=assignment_count,
         unapproved_creative_ids=[],
         hold_reason=None,
         hold_message=None,
     )
-
-
-def should_hold_media_buy_for_creatives(
-    assignments_repo: CreativeAssignmentRepository,
-    creatives_repo: CreativeRepository,
-    *,
-    media_buy_id: str,
-) -> bool:
-    """True when approve must park the buy (not call execute_approved_media_buy)."""
-    return not evaluate_creative_finalize_readiness(assignments_repo, creatives_repo, media_buy_id=media_buy_id).ready
 
 
 def compute_media_buy_status_from_flight_dates(media_buy) -> str:

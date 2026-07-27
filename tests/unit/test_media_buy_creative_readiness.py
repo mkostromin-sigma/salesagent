@@ -8,7 +8,6 @@ from src.admin.services.media_buy_creative_readiness import (
     CreativeFinalizeReadiness,
     compute_media_buy_status_from_flight_dates,
     evaluate_creative_finalize_readiness,
-    should_hold_media_buy_for_creatives,
 )
 from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES, CreativeStatusEnum
 
@@ -46,13 +45,11 @@ class TestEvaluateCreativeFinalizeReadiness:
         assignments_repo, creatives_repo = _repos([])
         result = evaluate_creative_finalize_readiness(assignments_repo, creatives_repo, media_buy_id="mb_1")
         assert result.ready is False
-        assert result.assignment_count == 0
         assert result.unapproved_creative_ids == []
         assert result.hold_reason == "no_assignments"
         assert result.hold_message is not None
         assert "assigned" in result.hold_message
         creatives_repo.get_by_ids.assert_not_called()
-        assert should_hold_media_buy_for_creatives(assignments_repo, creatives_repo, media_buy_id="mb_1") is True
 
     def test_all_approved_ready(self):
         assignments_repo, creatives_repo = _repos(
@@ -61,12 +58,10 @@ class TestEvaluateCreativeFinalizeReadiness:
         )
         result = evaluate_creative_finalize_readiness(assignments_repo, creatives_repo, media_buy_id="mb_1")
         assert result.ready is True
-        assert result.assignment_count == 2
         assert result.unapproved_creative_ids == []
         assert result.hold_reason is None
         assert result.hold_message is None
         creatives_repo.get_by_ids.assert_called_once_with(["c1", "c2"], "p1")
-        assert should_hold_media_buy_for_creatives(assignments_repo, creatives_repo, media_buy_id="mb_1") is False
 
     def test_active_status_counts_as_ready(self):
         """Legacy ``active`` remains in the shared allowlist; pin against enum + sole legacy."""
@@ -88,7 +83,6 @@ class TestEvaluateCreativeFinalizeReadiness:
         )
         result = evaluate_creative_finalize_readiness(assignments_repo, creatives_repo, media_buy_id="mb_1")
         assert result.ready is False
-        assert result.assignment_count == 2
         assert result.unapproved_creative_ids == ["c2"]
         assert result.hold_reason == "unapproved_creatives"
         assert "1 creative" in (result.hold_message or "")
@@ -159,14 +153,12 @@ def _unwrap(fn):
     [
         CreativeFinalizeReadiness(
             ready=False,
-            assignment_count=0,
             unapproved_creative_ids=[],
             hold_reason="no_assignments",
             hold_message="Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM.",
         ),
         CreativeFinalizeReadiness(
             ready=False,
-            assignment_count=1,
             unapproved_creative_ids=["c_pending"],
             hold_reason="unapproved_creatives",
             hold_message="Media buy approved! Waiting for 1 creative(s) to be approved before creating in GAM.",
@@ -237,7 +229,8 @@ class TestApproveRoutesHoldBehavior:
         assert media_buy.approved_by == "op@example.com"
         mock_eval.assert_called_once_with(mock_assignments, mock_creatives, media_buy_id="mb_hold")
         mock_execute.assert_not_called()
-        assert db.commit.call_count >= 1
+        # Step-status commit, then hold pending_creatives commit.
+        assert db.commit.call_count == 2
 
     def test_approve_media_buy_holds_without_execute(self, hold):
         from src.admin.app import create_app
@@ -302,6 +295,7 @@ class TestApproveRoutesHoldBehavior:
         assert media_buy.status == "pending_creatives"
         mock_eval.assert_called_once_with(mock_assignments, mock_creatives, media_buy_id="mb_hold")
         mock_execute.assert_not_called()
-        assert db.commit.call_count >= 1
+        # Hold path: single commit for pending_creatives + approval metadata.
+        db.commit.assert_called_once()
         mock_flash.assert_called_once_with(hold.hold_message, "info")
         mock_redirect.assert_called_once_with("/detail")
