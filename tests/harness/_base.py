@@ -806,10 +806,19 @@ class BaseTestEnv:
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
         else:
+            # Production ``_resolve_a2a_identity`` always returns ResolvedIdentity
+            # (principal_id may be None for unauthenticated discovery) — never
+            # None. Create+own co-location reads ``identity.tenant_id`` (#1702);
+            # mocking None made unauth A2A BDD paths AttributeError into
+            # SERVICE_UNAVAILABLE instead of AUTH_REQUIRED.
+            from src.core.resolved_identity import ResolvedIdentity
+
+            resolved = a2a_identity or ResolvedIdentity(protocol="a2a")
             # _get_auth_token must return a non-None value when identity exists,
             # otherwise the handler rejects the request before _resolve_a2a_identity
             # is called. Use auth_token from identity, falling back to a sentinel.
-            handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
+            # Unauthenticated (a2a_identity is None) stays token-less.
+            handler._resolve_a2a_identity = lambda *args, **kw: resolved  # type: ignore[assignment]
             handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
                 (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
             )
