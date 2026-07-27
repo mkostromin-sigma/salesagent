@@ -198,3 +198,38 @@ def test_resolve_identity_without_principal_id_raises_invalid_request():
     with patch("src.core.resolved_identity.resolve_identity", return_value=no_principal):
         with pytest.raises(InvalidRequestError, match="invalid or expired"):
             handler._resolve_a2a_identity("tok", require_valid_token=True, context=ctx)
+
+
+@pytest.mark.asyncio
+async def test_discovery_create_records_anonymous_owner_without_auth():
+    """Unauthenticated discovery records owner from ResolvedIdentity (never None).
+
+    Regression for Integration infra: mocking ``_resolve_a2a_identity`` to return
+    ``None`` passed before create+own co-location, then AttributeError on
+    ``identity.tenant_id``. Production always returns ResolvedIdentity.
+    """
+    from src.core.exceptions import AdCPValidationError
+    from tests.utils.a2a_helpers import create_a2a_message_with_skill
+
+    handler = AdCPRequestHandler()
+    anonymous = PrincipalFactory.make_identity(
+        principal_id=None,
+        tenant_id=_TENANT,
+        tenant=None,
+        protocol="a2a",
+    )
+
+    async def raise_validation(params, identity):
+        raise AdCPValidationError("synthetic discovery failure")
+
+    with patch.object(handler, "_handle_get_products_skill", raise_validation):
+        handler._get_auth_token = lambda context=None: None
+        handler._resolve_a2a_identity = lambda *args, **kwargs: anonymous
+        created = await handler.on_message_send(
+            SendMessageRequest(message=create_a2a_message_with_skill("get_products", {"brief": "test"})),
+            context=make_a2a_context(auth_token=None),
+        )
+
+    assert created.id in handler._task_owners
+    assert handler._task_owners[created.id] == _TaskOwner(tenant_id=_TENANT, principal_id=None)
+    assert created.id in handler.tasks
