@@ -12,6 +12,7 @@ Uses real PostgreSQL database via integration_db fixture.
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from logging import ERROR, INFO
 from unittest.mock import patch
 
 import pytest
@@ -595,7 +596,9 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
         return real_compute(media_buy, now_arg, session)
 
     with (
-        caplog.at_level("INFO", logger="src.services.media_buy_status_scheduler"),
+        # Root level must drop too — logger-only at_level leaves root at WARNING and
+        # filters propagated ERROR/INFO before caplog's handler sees them.
+        caplog.at_level(INFO),
         patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_raiser),
     ):
         await scheduler._update_statuses()
@@ -606,7 +609,7 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
 
     error_records = [
-        r for r in caplog.records if r.levelname == "ERROR" and "Error updating media buy status" in r.getMessage()
+        r for r in caplog.records if r.levelno >= ERROR and "Error updating media buy status" in r.getMessage()
     ]
     assert len(error_records) == 1
     err_msg = error_records[0].getMessage()
