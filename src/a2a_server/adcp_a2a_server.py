@@ -702,6 +702,8 @@ class AdCPRequestHandler(RequestHandler):
         # replace the real error with a confusing one.
         identity: ResolvedIdentity | None = None
 
+        # Bound after identity resolution; referenced by the outer error handler.
+        identity: ResolvedIdentity | None = None
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
