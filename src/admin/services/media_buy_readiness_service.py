@@ -297,7 +297,13 @@ class MediaBuyReadinessService:
         has_blockers = len(blocking_issues) > 0
 
         # Live: in flight, all creatives approved, no blockers
-        if now >= start_time and now <= end_time and not has_blockers and creatives_approved == creatives_total:
+        if (
+            now >= start_time
+            and now <= end_time
+            and not has_blockers
+            and creatives_approved == creatives_total
+            and creatives_total > 0
+        ):
             return "live"
 
         # Scheduled: ready but before start date

@@ -19,13 +19,7 @@ from unittest.mock import ANY, AsyncMock, patch
 import pytest
 
 from src.core.context_manager import ContextManager
-from src.core.webhooks.delivery import WebhookTaskContext
-from src.services.protocol_webhook_service import ProtocolWebhookService
-from tests.helpers.media_buy_write_seam import (
-    MediaBuyState,
-    assert_status_move_carried_bookkeeping,
-    read_media_buy_state,
-)
+from tests.factories.creative_asset import build_assets, image_spec
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -121,6 +115,7 @@ def make_pending_media_buy(integration_db):
             principal=principal,
             creative_id="cre_reject_wh_1",
             approved=True,
+            data={"assets": build_assets(image_spec("banner_image"))},
         )
         CreativeAssignmentFactory(
             creative=creative,
@@ -364,13 +359,7 @@ class TestAdminMediaBuyRejectWebhook:
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]
 
-        # Adapter upload is out of scope for this webhook-shape pin; stub success
-        # after the shared creative-ready gate (#1696) so the webhook arm runs.
-        with patch(
-            "src.core.tools.media_buy_create.execute_approved_media_buy",
-            return_value=(True, None),
-        ):
-            _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
+        _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
         body = _webhook_body(webhook_capture)
 
         assert body["status"] == "completed", f"outer status should be completed, got {body.get('status')!r}"
@@ -558,11 +547,7 @@ class TestAdminMediaBuyRejectWebhook:
         buyer_context = {"correlation_id": "corr-approve-echo-1", "buyer_ref": "buyer-ref-42"}
         ids = make_pending_media_buy(request_data_context=buyer_context)
 
-        with patch(
-            "src.core.tools.media_buy_create.execute_approved_media_buy",
-            return_value=(True, None),
-        ):
-            _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+        _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
         body = _webhook_body(webhook_capture)
 
         embedded = body.get("result") or {}

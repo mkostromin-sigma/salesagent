@@ -59,6 +59,7 @@ from src.core.exceptions import (
 )
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
+from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
 
 
 class PackageAssignmentDict(TypedDict):
@@ -1497,7 +1498,7 @@ def push_creative_to_existing_buy(
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
-            if creative.status not in {"approved", "active"}:
+            if creative.status not in FINALIZE_READY_CREATIVE_STATUSES:
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
             if (creative.data or {}).get("platform_creative_id"):

@@ -12,8 +12,12 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, echo_context, require_auth, require_tenant_access
-from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
+from src.admin.utils import echo_context, require_auth, require_tenant_access
+from src.core.database.models import PushNotificationConfig
+from src.core.database.repositories.creative import (
+    CreativeAssignmentRepository,
+    CreativeRepository,
+)
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
@@ -416,11 +420,14 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # Shared Hold predicate (#1696): zero assignments or unapproved
                     # creatives → pending_creatives; never finalize on hold.
                     from src.admin.services.media_buy_creative_readiness import (
+                        compute_media_buy_status_from_flight_dates,
                         evaluate_creative_finalize_readiness,
                     )
 
                     readiness = evaluate_creative_finalize_readiness(
-                        db_session, tenant_id=tenant_id, media_buy_id=media_buy_id
+                        CreativeAssignmentRepository(db_session, tenant_id),
+                        CreativeRepository(db_session, tenant_id),
+                        media_buy_id=media_buy_id,
                     )
 
                     media_buy.approved_at = datetime.now(UTC)
@@ -429,42 +436,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     if not readiness.ready:
                         media_buy.status = "pending_creatives"
                         db_session.commit()
-                        if readiness.hold_reason == "no_assignments":
-                            flash(
-                                "Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM.",
-                                "info",
-                            )
-                        else:
-                            n = len(readiness.unapproved_creative_ids)
-                            flash(
-                                f"Media buy approved! Waiting for {n} creative(s) to be approved before creating in GAM.",
-                                "info",
-                            )
+                        flash(readiness.hold_message or "Media buy approved; waiting on creatives.", "info")
                         return redirect(
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
 
-                    if media_buy.start_time and media_buy.end_time:
-                        start_time = (
-                            media_buy.start_time.astimezone(UTC)
-                            if media_buy.start_time.tzinfo
-                            else media_buy.start_time.replace(tzinfo=UTC)
-                        )
-                        end_time = (
-                            media_buy.end_time.astimezone(UTC)
-                            if media_buy.end_time.tzinfo
-                            else media_buy.end_time.replace(tzinfo=UTC)
-                        )
-                        now = datetime.now(UTC)
-                        if now < start_time:
-                            media_buy.status = "scheduled"
-                        elif now > end_time:
-                            media_buy.status = "completed"
-                        else:
-                            media_buy.status = "active"
-                    else:
-                        media_buy.status = "active"
-
+                    media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
                     db_session.commit()
 
                     # Ready arm only: create order/line items in adapter
@@ -505,7 +482,19 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         approve_repo = MediaBuyRepository(db_session, tenant_id)
                         all_packages = approve_repo.get_packages(media_buy_id)
 
+                        # Echo the buyer's request context (shared helper, also used by
+                        # the creative approval webhook in blueprints/creatives.py).
                         approve_context = echo_context(request_data)
+
+                        # The buy IS committed at this point, so a confirmed Success
+                        # (status/confirmed_at/revision from the subclass defaults) is
+                        # semantically correct here — route through the sync_success()
+                        # factory like every sibling construction site (PR #1567 round-2 cleanup).
+                        # Pass media_buy_status explicitly (canonical) so the webhook domain
+                        # field matches get_media_buys; body status stays "completed".
+                        from datetime import date as date_cls
+
+                        from src.core.tools._media_buy_status import resolve_canonical_status
 
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
@@ -513,6 +502,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             confirmed_at=approval.confirmed_at,
                             revision=approval.revision,
                             context=approve_context,
+                            media_buy_status=resolve_canonical_status(media_buy, date_cls.today()),
                         )
                         metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 
@@ -526,6 +516,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 context_id=step_data["context_id"],
                             )
                         else:
+                            # tool_name is untrusted (workflow_steps DB column).
+                            # Validate a COPY for the SDK payload; metadata keeps
+                            # the original label (salesagent-yi3s, salesagent-yk7o).
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
                                 task_id=step_data["step_id"],
                                 task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),

@@ -75,79 +75,13 @@ def _cleanup_completed_tasks():
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
 
 
-async def _deliver_sync_creatives_webhook(
-    *,
-    creative_id,
-    reviewed_count: int,
-    complete_result: SyncCreativesResponse,
-    push_notification_config,
-    step_tool_name: str | None,
-    step_step_id: str,
-    step_request_data: dict,
-    tenant_id: str,
-    principal_id: str | None,
-    # `Any`, not `str | None`: this is the ORM row's attribute, read before the
-    # UoW closed, and the repository hands it back untyped. Narrowing it here
-    # would invent a type the extraction did not have and trip the
-    # check-untyped-defs ratchet (#1611) on a pure code move.
-    step_context_id: Any,
-) -> bool:
-    """Build the protocol-shaped payload and push it to the buyer.
+def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
+    """Compute status from flight dates (active / scheduled / completed)."""
+    from src.admin.services.media_buy_creative_readiness import (
+        compute_media_buy_status_from_flight_dates,
+    )
 
-    This is the second half of :func:`_call_webhook_for_creative_status`, split out
-    so that function stays under the ADR-009 complexity ratchet (#1610). The split
-    is on the boundary the original code already documented: everything here runs
-    AFTER the UoW closes, which is why it takes the step's attributes as plain
-    values rather than the ORM row (a detached row would raise on attribute access).
-
-    Returns:
-        True if the buyer's endpoint took the notification, False if the send failed.
-    """
-    service = get_protocol_webhook_service()
-    try:
-        # Determine protocol type from workflow step request_data
-        protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
-
-        # Create appropriate webhook payload based on protocol
-        # Convert result to dict for webhook payload functions
-        result_dict = complete_result.model_dump(mode="json")
-
-        # The dialect fork used to live here, and the metadata was a hand-built
-        # dict carrying task_type alone. Both are now notify()'s job: it selects
-        # the builder from `protocol` once, and it takes a typed context whose
-        # fields have to be named.
-        #
-        # tenant_id and principal_id are the two that used to go missing. Both were
-        # in scope all along -- the caller raises without tenant_id, and the
-        # creative row carries principal_id -- but neither reached the dict, so
-        # records_delivery_log was False and every admin-originated delivery wrote
-        # no webhook_delivery_log row and said nothing about it (salesagent-pldmk.39).
-        await service.notify(
-            push_notification_config,
-            task=WebhookTaskContext(
-                task_id=step_step_id,
-                task_type=step_tool_name,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=None,
-                sequence_number=1,
-                notification_type=None,
-            ),
-            status=GeneratedTaskStatus.completed,
-            result=result_dict,
-            protocol=protocol,
-            context_id=step_context_id or "",
-        )
-
-        logger.info(
-            f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
-            f"with {reviewed_count} reviewed creatives"
-        )
-
-        return True
-    except Exception as send_e:
-        logger.error("Failed to send protocol webhook for creative %r: %s", creative_id, send_e)
-        return False
+    return compute_media_buy_status_from_flight_dates(media_buy)
 
 
 async def _call_webhook_for_creative_status(
@@ -626,21 +560,19 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                         evaluate_creative_finalize_readiness,
                     )
 
-                    session = uow._session
-                    assert session is not None
                     readiness = evaluate_creative_finalize_readiness(
-                        session, tenant_id=tenant_id, media_buy_id=media_buy_id
+                        uow.assignments, uow.creatives, media_buy_id=media_buy_id
                     )
 
                     logger.info(
-                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} readiness="
+                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} "
                         f"ready={readiness.ready} reason={readiness.hold_reason} "
                         f"unapproved={readiness.unapproved_creative_ids}"
                     )
 
                     if readiness.ready:
                         media_buy_actions.append({"media_buy_id": media_buy_id})
-                    elif readiness.unapproved_creative_ids:
+                    elif readiness.hold_reason == "unapproved_creatives":
                         logger.info(
                             f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for "
                             f"{len(readiness.unapproved_creative_ids)} creatives: "
