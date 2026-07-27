@@ -811,9 +811,15 @@ class BaseTestEnv:
             # None. Create+own co-location reads ``identity.tenant_id`` (#1702);
             # mocking None made unauth A2A BDD paths AttributeError into
             # SERVICE_UNAVAILABLE instead of AUTH_REQUIRED.
-            from src.core.resolved_identity import ResolvedIdentity
+            # Use PrincipalFactory (not inline ResolvedIdentity) for the arch guard.
+            from tests.factories.principal import PrincipalFactory
 
-            resolved = a2a_identity or ResolvedIdentity(protocol="a2a")
+            resolved = a2a_identity or PrincipalFactory.make_identity(
+                principal_id=None,
+                tenant_id=None,
+                tenant=None,
+                protocol="a2a",
+            )
             # _get_auth_token must return a non-None value when identity exists,
             # otherwise the handler rejects the request before _resolve_a2a_identity
             # is called. Use auth_token from identity, falling back to a sentinel.
