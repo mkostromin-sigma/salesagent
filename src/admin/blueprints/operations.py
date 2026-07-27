@@ -442,6 +442,14 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         )
 
                     media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
+                    # Capture canonical status while media_buy is still attached.
+                    # execute_approved_media_buy opens its own session and leaves this
+                    # instance expired/detached after commit — do not touch ORM attrs later.
+                    from datetime import date as date_cls
+
+                    from src.core.tools._media_buy_status import resolve_canonical_status
+
+                    webhook_media_buy_status = resolve_canonical_status(media_buy, date_cls.today())
                     db_session.commit()
 
                     # Ready arm only: create order/line items in adapter
@@ -492,17 +500,13 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # factory like every sibling construction site (PR #1567 round-2 cleanup).
                         # Pass media_buy_status explicitly (canonical) so the webhook domain
                         # field matches get_media_buys; body status stays "completed".
-                        from datetime import date as date_cls
-
-                        from src.core.tools._media_buy_status import resolve_canonical_status
-
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
                             confirmed_at=approval.confirmed_at,
                             revision=approval.revision,
                             context=approve_context,
-                            media_buy_status=resolve_canonical_status(media_buy, date_cls.today()),
+                            media_buy_status=webhook_media_buy_status,
                         )
                         metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 

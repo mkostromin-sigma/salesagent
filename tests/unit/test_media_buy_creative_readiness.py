@@ -303,6 +303,5 @@ class TestApproveRoutesHoldBehavior:
         mock_eval.assert_called_once_with(mock_assignments, mock_creatives, media_buy_id="mb_hold")
         mock_execute.assert_not_called()
         assert db.commit.call_count >= 1
-        mock_flash.assert_called_once()
-        assert mock_flash.call_args.args[0] == hold.hold_message
+        mock_flash.assert_called_once_with(hold.hold_message, "info")
         mock_redirect.assert_called_once_with("/detail")
