@@ -2,30 +2,41 @@
 
 A bare ``self.tasks.get(task_id)`` served (or canceled) any caller's request
 once they knew the id. These tests pin auth-first ownership against
-``_task_owners`` and prove wrong-principal / unauthenticated callers get the
-same ``TaskNotFoundError`` as an unknown id (no existence oracle).
+``_task_owners`` and prove wrong-principal callers get the same
+``TaskNotFoundError`` as an unknown id (no existence oracle). Auth failures
+propagate as ``InvalidRequestError`` and do not collapse to not-found.
 """
 
 from __future__ import annotations
 
+import uuid
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
 from a2a.types import (
     CancelTaskRequest,
     GetTaskRequest,
+    InvalidRequestError,
+    Message,
+    Part,
+    Role,
+    SendMessageRequest,
     Task,
     TaskNotFoundError,
     TaskState,
     TaskStatus,
 )
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _TaskOwner
+from src.core.schemas import GetProductsResponse
+from tests.a2a_helpers import make_a2a_context
 from tests.factories import PrincipalFactory
 
 _TENANT = "tenant_a"
 _OWNER = "principal_owner"
 _SIBLING = "principal_sibling"
+_OTHER_TENANT = "tenant_b"
 _TASK_ID = "task_owned_abc"
 
 
@@ -33,9 +44,88 @@ def _owned_handler() -> AdCPRequestHandler:
     handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
     done = Task(id=_TASK_ID, status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED))
     handler.tasks = {_TASK_ID: done}
-    handler._task_owners = {_TASK_ID: (_TENANT, _OWNER)}
-    handler._task_push_configs = {}
+    handler._task_owners = {_TASK_ID: _TaskOwner(tenant_id=_TENANT, principal_id=_OWNER)}
     return handler
+
+
+@contextmanager
+def a2a_auth_as(handler: AdCPRequestHandler, identity):
+    """Patch token extract + identity resolve for a single authenticated call."""
+    with (
+        patch.object(handler, "_get_auth_token", return_value="tok"),
+        patch.object(handler, "_resolve_a2a_identity", return_value=identity),
+    ):
+        yield
+
+
+def _make_nl_message(text: str) -> SendMessageRequest:
+    message = Message(
+        message_id=str(uuid.uuid4()),
+        role=Role.ROLE_USER,
+    )
+    message.parts.append(Part(text=text))
+    return SendMessageRequest(message=message)
+
+
+def _assert_not_found_matches(exc: TaskNotFoundError, task_id: str) -> None:
+    """Grades the exception object (not the JSON-RPC wire envelope)."""
+    expected = AdCPRequestHandler._task_not_found(task_id)
+    assert exc.message == expected.message
+    # Grades exception object ``data``, not the wire envelope (compat drops it).
+    assert exc.data == expected.data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_cls, method_name",
+    [(GetTaskRequest, "on_get_task"), (CancelTaskRequest, "on_cancel_task")],
+)
+async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
+    """Real constructor create→poll: owner allowed; sibling/other-tenant denied."""
+    handler = AdCPRequestHandler()
+    owner = PrincipalFactory.make_identity(principal_id=_OWNER, tenant_id=_TENANT, protocol="a2a")
+    sibling = PrincipalFactory.make_identity(principal_id=_SIBLING, tenant_id=_TENANT, protocol="a2a")
+    other_tenant = PrincipalFactory.make_identity(principal_id=_OWNER, tenant_id=_OTHER_TENANT, protocol="a2a")
+    ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
+    params = _make_nl_message("Show me available products in the catalog")
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=owner):
+        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
+            mock_products.return_value = GetProductsResponse(products=[])
+            created = await handler.on_message_send(params, context=ctx)
+
+    task_id = created.id
+    assert handler._task_owners[task_id] == _TaskOwner(tenant_id=_TENANT, principal_id=_OWNER)
+
+    with a2a_auth_as(handler, owner):
+        task = await getattr(handler, method_name)(request_cls(id=task_id), context=None)
+    assert task.id == task_id
+    if method_name == "on_cancel_task":
+        assert task.status.state == TaskState.TASK_STATE_CANCELED
+    else:
+        assert task.status.state == TaskState.TASK_STATE_COMPLETED
+
+    # Re-seed completed state so deny checks do not depend on cancel mutation.
+    handler.tasks[task_id].status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_COMPLETED))
+
+    with a2a_auth_as(handler, sibling):
+        with pytest.raises(TaskNotFoundError) as sibling_exc:
+            await getattr(handler, method_name)(request_cls(id=task_id), context=None)
+
+    with a2a_auth_as(handler, other_tenant):
+        with pytest.raises(TaskNotFoundError) as other_exc:
+            await getattr(handler, method_name)(request_cls(id=task_id), context=None)
+
+    with a2a_auth_as(handler, owner):
+        with pytest.raises(TaskNotFoundError) as unknown_exc:
+            await getattr(handler, method_name)(request_cls(id="task_does_not_exist"), context=None)
+
+    _assert_not_found_matches(sibling_exc.value, task_id)
+    _assert_not_found_matches(other_exc.value, task_id)
+    _assert_not_found_matches(unknown_exc.value, "task_does_not_exist")
+    # Deny shape for the owned id matches the canonical not-found from this handler.
+    assert sibling_exc.value.message == other_exc.value.message
+    assert sibling_exc.value.data == other_exc.value.data
 
 
 @pytest.mark.asyncio
@@ -48,13 +138,9 @@ async def test_owner_can_access_owned_in_memory_task(request_cls, method_name):
     handler = _owned_handler()
     identity = PrincipalFactory.make_identity(principal_id=_OWNER, tenant_id=_TENANT, protocol="a2a")
 
-    with (
-        patch.object(handler, "_get_auth_token", return_value="tok") as mock_auth,
-        patch.object(handler, "_resolve_a2a_identity", return_value=identity),
-    ):
+    with a2a_auth_as(handler, identity):
         task = await getattr(handler, method_name)(request_cls(id=_TASK_ID), context=None)
 
-    mock_auth.assert_called_once_with(None)
     assert task.id == _TASK_ID
     if method_name == "on_cancel_task":
         assert task.status.state == TaskState.TASK_STATE_CANCELED
@@ -71,15 +157,18 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
     """Same-tenant sibling must not read or cancel — identical to unknown id."""
     handler = _owned_handler()
     sibling = PrincipalFactory.make_identity(principal_id=_SIBLING, tenant_id=_TENANT, protocol="a2a")
+    owner = PrincipalFactory.make_identity(principal_id=_OWNER, tenant_id=_TENANT, protocol="a2a")
 
-    with (
-        patch.object(handler, "_get_auth_token", return_value="tok"),
-        patch.object(handler, "_resolve_a2a_identity", return_value=sibling),
-    ):
-        with pytest.raises(TaskNotFoundError) as exc:
+    with a2a_auth_as(handler, sibling):
+        with pytest.raises(TaskNotFoundError) as deny_exc:
             await getattr(handler, method_name)(request_cls(id=_TASK_ID), context=None)
 
-    assert exc.value.data == {"task_id": _TASK_ID}
+    with a2a_auth_as(handler, owner):
+        with pytest.raises(TaskNotFoundError) as unknown_exc:
+            await getattr(handler, method_name)(request_cls(id="task_does_not_exist"), context=None)
+
+    _assert_not_found_matches(deny_exc.value, _TASK_ID)
+    _assert_not_found_matches(unknown_exc.value, "task_does_not_exist")
     # Sibling denial must not mutate cancel state.
     assert handler.tasks[_TASK_ID].status.state == TaskState.TASK_STATE_COMPLETED
 
@@ -89,51 +178,23 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
     "request_cls, method_name",
     [(GetTaskRequest, "on_get_task"), (CancelTaskRequest, "on_cancel_task")],
 )
-async def test_unauthenticated_poller_denied_same_as_unknown(request_cls, method_name):
-    """Auth failure collapses to TaskNotFoundError — no anonymous content oracle."""
+async def test_unauthenticated_poller_raises_invalid_request(request_cls, method_name):
+    """Missing token raises InvalidRequestError — must not collapse to TaskNotFoundError."""
     handler = _owned_handler()
 
-    with (
-        patch.object(handler, "_get_auth_token", return_value=None),
-        patch.object(
-            handler,
-            "_resolve_a2a_identity",
-            side_effect=Exception("Missing authentication token"),
-        ),
-    ):
-        with pytest.raises(TaskNotFoundError) as exc:
+    with patch.object(handler, "_get_auth_token", return_value=None):
+        with pytest.raises(InvalidRequestError):
             await getattr(handler, method_name)(request_cls(id=_TASK_ID), context=None)
 
-    assert exc.value.data == {"task_id": _TASK_ID}
     assert handler.tasks[_TASK_ID].status.state == TaskState.TASK_STATE_COMPLETED
 
 
-@pytest.mark.asyncio
-async def test_ownership_gate_mutation_proof():
-    """If ownership equality is dropped, sibling get leaks; with it, denied.
+def test_resolve_identity_without_principal_id_raises_invalid_request():
+    """Authenticated resolve with no principal_id hits the :290-291 guard."""
+    handler = AdCPRequestHandler()
+    no_principal = PrincipalFactory.make_identity(principal_id=None, tenant_id=_TENANT, protocol="a2a")
+    ctx = make_a2a_context(auth_token="tok", headers={"host": "test.example.com"})
 
-    Plan mutation proof: temporarily serve bare ``self.tasks.get`` (pre-#1702),
-    confirm the sibling leak, then restore the owned helper and confirm deny.
-    """
-    handler = _owned_handler()
-    sibling = PrincipalFactory.make_identity(principal_id=_SIBLING, tenant_id=_TENANT, protocol="a2a")
-
-    def bare_tasks_get(task_id: str, context):  # noqa: ARG001 — mirrors pre-fix signature
-        task = handler.tasks.get(task_id)
-        assert task is not None
-        return task
-
-    with (
-        patch.object(handler, "_get_auth_token", return_value="tok"),
-        patch.object(handler, "_resolve_a2a_identity", return_value=sibling),
-        patch.object(handler, "_get_owned_in_memory_task_or_raise", side_effect=bare_tasks_get),
-    ):
-        leaked = await handler.on_get_task(GetTaskRequest(id=_TASK_ID), context=None)
-    assert leaked is handler.tasks[_TASK_ID]
-
-    with (
-        patch.object(handler, "_get_auth_token", return_value="tok"),
-        patch.object(handler, "_resolve_a2a_identity", return_value=sibling),
-    ):
-        with pytest.raises(TaskNotFoundError):
-            await handler.on_get_task(GetTaskRequest(id=_TASK_ID), context=None)
+    with patch("src.core.resolved_identity.resolve_identity", return_value=no_principal):
+        with pytest.raises(InvalidRequestError, match="invalid or expired"):
+            handler._resolve_a2a_identity("tok", require_valid_token=True, context=ctx)
