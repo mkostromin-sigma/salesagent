@@ -315,7 +315,7 @@ class TestA2ARequestHandler:
 
         Fast smoke check on the raise only. It does NOT prove the wire code: the
         exception carries no code, and the client actually sees -32603 — see
-        ``_get_owned_in_memory_task_or_raise`` (src/a2a_server/adcp_a2a_server.py)
+        ``_task_not_found`` (src/a2a_server/adcp_a2a_server.py)
         and #1670 for why, plus the xfail'd live-server test in
         TestA2AServerIntegration that grades the code on the wire. Assert on
         str(exc), not exc.code — there is none.
@@ -382,7 +382,7 @@ class TestA2AServerIntegration:
         strict=True,
     )
     @pytest.mark.parametrize("method", ["tasks/get", "tasks/cancel"])
-    def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server):
+    def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server, test_auth_token):
         """The deliverable of the TaskNotFoundError change is what an A2A client
         SEES: JSON-RPC error code -32001. That code is not carried by the
         exception — it is synthesized downstream — so the direct-call test in
@@ -395,13 +395,16 @@ class TestA2AServerIntegration:
         on the ad-hoc port — a skip under strict xfail is neither XFAIL nor XPASS,
         so the sole on-the-wire grade must never be allowed to no-op.
 
+        Sends a valid tenant Bearer token so the request reaches the
+        ownership/unknown-id branch rather than exiting at the auth gate (#1702).
+
         Parametrized over both methods this PR changed. `tasks/cancel` of an
         unknown id went from a silent None to an error in this PR, so it needs the
         same wire tripwire as `tasks/get` — otherwise only half the contract gets
         locked in when #1670 lands.
 
         STRICT xfail against #1670: the code is -32603 today, not the spec's
-        -32001 — see ``_get_owned_in_memory_task_or_raise``
+        -32001 — see ``_task_not_found``
         (src/a2a_server/adcp_a2a_server.py) and #1670 for the
         enable_v0_3_compat dispatch path that flattens it. Both
         `tasks/get` and `tasks/cancel` reach that path, so both are -32603 today
@@ -416,6 +419,7 @@ class TestA2AServerIntegration:
         response = requests.post(
             f"{live_server['a2a']}/a2a",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
+            headers={"Authorization": f"Bearer {test_auth_token}"},
             timeout=5,
         )
 
