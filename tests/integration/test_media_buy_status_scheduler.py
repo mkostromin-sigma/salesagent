@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import text
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -544,25 +545,31 @@ async def test_scheduler_updates_multiple_media_buys(integration_db):
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
-async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db):
-    """One raising media buy must not prevent sibling status flips from committing.
+@pytest.mark.parametrize("raiser_slot", [0, 1, 2])
+async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db, caplog, raiser_slot):
+    """A DB error on one buy must not discard sibling status flips.
 
-    Mirrors DeliveryWebhookScheduler._send_reports per-item isolation: a compute-path
-    exception on one buy is logged and skipped; remaining eligible flips still commit.
+    Uses a SAVEPOINT-backed per-buy body: injecting ``SELECT 1/0`` poisons the
+    statement and would abort a single terminal commit without isolation.
+    Delivery webhook isolation is analogous for non-ORM I/O; this loop also
+    defers ORM state, so savepoints are required here.
     """
-    tenant_id = _create_test_tenant("tenant_isolation_1714")
+    tenant_id = _create_test_tenant(f"tenant_isolation_1714_{raiser_slot}")
     principal_id = _create_test_principal(tenant_id)
 
     now = datetime.now(UTC)
     past_start = now - timedelta(days=7)
     past_end = now - timedelta(hours=1)
 
-    bad_buy_id = "mb_isolation_raiser"
-    good_before_id = "mb_isolation_good_before"
-    good_after_id = "mb_isolation_good_after"
+    buy_ids = [
+        f"mb_isolation_{raiser_slot}_a",
+        f"mb_isolation_{raiser_slot}_b",
+        f"mb_isolation_{raiser_slot}_c",
+    ]
+    bad_buy_id = buy_ids[raiser_slot]
+    good_ids = [mid for mid in buy_ids if mid != bad_buy_id]
 
-    # Three active buys past end_time → would all flip to completed
-    for mid in (good_before_id, bad_buy_id, good_after_id):
+    for mid in buy_ids:
         _create_media_buy(
             tenant_id=tenant_id,
             principal_id=principal_id,
@@ -572,25 +579,45 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db)
             end_time=past_end,
         )
 
-    assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
-    assert _get_media_buy_status(tenant_id, good_before_id) == "active"
-    assert _get_media_buy_status(tenant_id, good_after_id) == "active"
+    for mid in buy_ids:
+        assert _get_media_buy_status(tenant_id, mid) == "active"
 
     scheduler = MediaBuyStatusScheduler()
     real_compute = scheduler._compute_new_status
+    processed: list[str] = []
 
     def _compute_with_raiser(media_buy, now_arg, session):
+        processed.append(media_buy.media_buy_id)
         if media_buy.media_buy_id == bad_buy_id:
-            raise RuntimeError("injected compute failure for isolation test")
+            # Division by zero → InternalError/DataError; poisons the TX unless
+            # wrapped in begin_nested. Not OperationalError, so isolation applies.
+            session.execute(text("SELECT 1/0"))
         return real_compute(media_buy, now_arg, session)
 
-    with patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_raiser):
+    with (
+        caplog.at_level("INFO", logger="src.services.media_buy_status_scheduler"),
+        patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_raiser),
+    ):
         await scheduler._update_statuses()
 
-    # Sibling flips commit; raiser unchanged (self-heal next cycle)
-    assert _get_media_buy_status(tenant_id, good_before_id) == "completed"
-    assert _get_media_buy_status(tenant_id, good_after_id) == "completed"
+    assert set(processed) == set(buy_ids)
+    for mid in good_ids:
+        assert _get_media_buy_status(tenant_id, mid) == "completed"
     assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
+
+    error_records = [
+        r for r in caplog.records if r.levelname == "ERROR" and "Error updating media buy status" in r.getMessage()
+    ]
+    assert len(error_records) == 1
+    err_msg = error_records[0].getMessage()
+    assert f"tenant_id={tenant_id}" in err_msg
+    assert f"principal_id={principal_id}" in err_msg
+    assert f"media_buy_id={bad_buy_id}" in err_msg
+    assert error_records[0].exc_info is not None
+
+    summary_records = [r for r in caplog.records if "Media buy status update complete:" in r.getMessage()]
+    assert len(summary_records) == 1
+    assert "2 updated, 1 errors" in summary_records[0].getMessage()
 
 
 # =============================================================================

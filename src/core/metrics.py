@@ -141,6 +141,15 @@ webhook_queue_size = Gauge(
     ["tenant_id"],
 )
 
+# ---------------------------------------------------------------------------
+# Media-buy status scheduler metrics
+# ---------------------------------------------------------------------------
+media_buy_status_scheduler_errors = Counter(
+    "media_buy_status_scheduler_errors_total",
+    "Per-buy status scheduler isolation errors by bounded error type",
+    ["tenant_id", "error_type"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Recording helpers — single source of truth for label bounding
@@ -157,6 +166,14 @@ def record_ai_review(tenant_id: str, decision: str, policy_triggered: str | None
 def record_ai_review_error(tenant_id: str, error: BaseException) -> None:
     """Increment :data:`ai_review_errors` with a bounded ``error_type``."""
     ai_review_errors.labels(tenant_id=tenant_id, error_type=categorize_error(error)).inc()
+
+
+def record_media_buy_status_scheduler_error(tenant_id: str, error: BaseException) -> None:
+    """Increment :data:`media_buy_status_scheduler_errors` with a bounded ``error_type``."""
+    media_buy_status_scheduler_errors.labels(
+        tenant_id=tenant_id,
+        error_type=categorize_error(error),
+    ).inc()
 
 
 def get_metrics_text() -> str:

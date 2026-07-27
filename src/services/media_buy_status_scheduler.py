@@ -85,10 +85,16 @@ class MediaBuyStatusScheduler:
                 await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
 
     async def _update_statuses(self) -> None:
-        """Check and update media buy statuses based on flight dates."""
+        """Check and update media buy statuses based on flight dates.
+
+        Per-buy work runs inside a SAVEPOINT (``session.begin_nested``) so a
+        DB error on one buy rolls back only that buy; siblings still reach the
+        terminal ``session.commit``. Connection-class errors
+        (``OperationalError`` / ``DisconnectionError``) are *not* isolated —
+        they re-raise through :func:`run_isolated_batch` so ``get_db_session``
+        can trip the process-global breaker.
+        """
         now = datetime.now(UTC)
-        updated_count = 0
-        errors = 0
 
         try:
             with get_db_session() as session:
@@ -99,9 +105,10 @@ class MediaBuyStatusScheduler:
                     session, _ACTIVATABLE_STATUSES | {PersistedMediaBuyStatus.ACTIVE}
                 )
 
-                for media_buy in media_buys:
-                    try:
-                        new_status = self._compute_new_status(media_buy, now, session)
+                def _item_context(media_buy: MediaBuy) -> tuple[str, str, str]:
+                    # Capture before the savepoint body — a flush failure expires
+                    # ORM attrs and would PendingRollbackError inside on_error.
+                    return (media_buy.tenant_id, media_buy.principal_id, media_buy.media_buy_id)
 
                     if new_status and new_status != media_buy.status:
                         old_status = media_buy.status
@@ -140,9 +147,14 @@ class MediaBuyStatusScheduler:
 
                 if updated_count > 0:
                     session.commit()
-                    logger.info(f"Media buy status update complete: {updated_count} updated, {errors} errors")
-                elif errors > 0:
-                    logger.info(f"Media buy status update complete: 0 updated, {errors} errors")
+                # Suppress all-quiet ticks (60s cadence); WARNING when every
+                # attempted flip failed so the error tally stays visible.
+                if updated_count or errors:
+                    summary = f"Media buy status update complete: {updated_count} updated, {errors} errors"
+                    if errors and not updated_count:
+                        logger.warning(summary)
+                    else:
+                        logger.info(summary)
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)

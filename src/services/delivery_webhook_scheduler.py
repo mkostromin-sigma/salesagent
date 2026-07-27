@@ -99,25 +99,26 @@ class DeliveryWebhookScheduler:
                     session, {PersistedMediaBuyStatus.ACTIVE, PersistedMediaBuyStatus.APPROVED}
                 )
 
-                reports_sent = 0
-                errors = 0
+                def _item_context(media_buy: MediaBuy) -> str:
+                    return media_buy.media_buy_id
 
-                for media_buy in media_buys:
-                    try:
-                        # Check if this media buy has a reporting webhook configured
-                        raw_request = media_buy.raw_request or {}
-                        reporting_webhook = raw_request.get("reporting_webhook")
+                async def _handle_item(media_buy: MediaBuy) -> bool:
+                    raw_request = media_buy.raw_request or {}
+                    reporting_webhook = raw_request.get("reporting_webhook")
+                    if not reporting_webhook:
+                        return False
+                    await self._send_report_for_media_buy(media_buy, reporting_webhook, session)
+                    return True
 
-                        if not reporting_webhook:
-                            continue
+                def _on_error(media_buy_id: str, exc: BaseException) -> None:
+                    logger.error(f"Error sending report for media buy {media_buy_id}: {exc}", exc_info=True)
 
-                        # Send delivery report
-                        await self._send_report_for_media_buy(media_buy, reporting_webhook, session)
-                        reports_sent += 1
-
-                    except Exception as e:
-                        logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
-                        errors += 1
+                reports_sent, errors = await run_isolated_batch_async(
+                    media_buys,
+                    _handle_item,
+                    item_context=_item_context,
+                    on_error=_on_error,
+                )
 
                 logger.info(f"Daily delivery report batch complete: {reports_sent} sent, {errors} errors")
 
