@@ -414,12 +414,23 @@ class AdCPRequestHandler(RequestHandler):
             testing_context=identity.testing_context,
         )
 
+    # Snake_case op ids for record_boundary_error → buyer-facing wire phrases.
+    _AUTH_OPERATION_WIRE_PHRASES: dict[str, str] = {
+        "get_task": "get task",
+        "cancel_task": "cancel task",
+        "get_push_notification_config": "get push notification config",
+        "create_push_notification_config": "create push notification config",
+        "list_push_notification_configs": "list push notification configs",
+        "delete_push_notification_config": "delete push notification config",
+    }
+
     def _authenticate(self, context: ServerCallContext | None, *, operation: str) -> ResolvedIdentity:
         """Resolve a valid principal identity for authenticated A2A operations.
 
         Auth failures (``A2AError`` / ``InvalidRequestError``) propagate unchanged.
-        Unexpected failures become ``InternalError`` with a fixed message — never
-        interpolate ``str(exc)`` into the client-facing message.
+        Unexpected failures become ``InternalError`` with a fixed human-phrase
+        message — never interpolate ``str(exc)`` or raw snake_case op ids into
+        the client-facing message (e.g. ``get_task`` → ``"get task failed"``).
         """
         auth_token = self._get_auth_token(context)
         try:
@@ -428,7 +439,8 @@ class AdCPRequestHandler(RequestHandler):
             raise
         except Exception as e:
             record_boundary_error("a2a", operation, e)
-            raise InternalError(message=f"{operation} failed") from e
+            wire_op = self._AUTH_OPERATION_WIRE_PHRASES.get(operation, operation.replace("_", " "))
+            raise InternalError(message=f"{wire_op} failed") from e
 
     def _log_a2a_operation(
         self,
@@ -1233,10 +1245,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
-            identity = self._resolve_a2a_identity(auth_token, context=context)
+            identity = self._authenticate(context, operation="get_push_notification_config")
             tool_context = self._make_tool_context(identity, "get_push_notification_config")
 
             config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
@@ -1302,10 +1311,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
-            identity = self._resolve_a2a_identity(auth_token, context=context)
+            identity = self._authenticate(context, operation="create_push_notification_config")
             tool_context = self._make_tool_context(identity, "set_push_notification_config")
 
             # In a2a-sdk 1.0, TaskPushNotificationConfig is a flat protobuf message
@@ -1383,10 +1389,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
-            identity = self._resolve_a2a_identity(auth_token, context=context)
+            identity = self._authenticate(context, operation="list_push_notification_configs")
             tool_context = self._make_tool_context(identity, "list_push_notification_configs")
 
             with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
@@ -1441,10 +1444,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
-            identity = self._resolve_a2a_identity(auth_token, context=context)
+            identity = self._authenticate(context, operation="delete_push_notification_config")
             tool_context = self._make_tool_context(identity, "delete_push_notification_config")
 
             config_id = params.id

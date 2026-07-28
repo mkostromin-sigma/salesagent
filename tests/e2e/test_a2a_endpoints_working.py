@@ -11,7 +11,7 @@ This test validates the actual HTTP endpoints that our A2A server exposes.
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -21,6 +21,7 @@ from adcp import get_adcp_spec_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from tests.a2a_helpers import a2a_auth_as
 from tests.e2e.conftest import e2e_host
 from tests.factories import PrincipalFactory
 
@@ -331,14 +332,7 @@ class TestA2ARequestHandler:
         Auth is mocked so this grades the not-found shape after the identity
         gate (#1702), not an auth-failure collapse into the same error.
         """
-        with (
-            patch.object(self.handler, "_get_auth_token", return_value="tok"),
-            patch.object(
-                self.handler,
-                "_resolve_a2a_identity",
-                return_value=PrincipalFactory.make_identity(protocol="a2a"),
-            ),
-        ):
+        with a2a_auth_as(self.handler, PrincipalFactory.make_identity(protocol="a2a")):
             with pytest.raises(TaskNotFoundError) as exc:
                 await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
         assert "task_does_not_exist" in str(exc.value)  # the requested id is surfaced
@@ -397,6 +391,9 @@ class TestA2AServerIntegration:
 
         Sends a valid tenant Bearer token so the request reaches the
         ownership/unknown-id branch rather than exiting at the auth gate (#1702).
+        Cross-principal ownership compare on the wire is graded in-process by
+        ``tests/unit/test_a2a_task_identity_wire.py`` (live_server has no seeded
+        in-memory owner map); this live_server case still POSTs an unknown id.
 
         Parametrized over both methods this PR changed. `tasks/cancel` of an
         unknown id went from a silent None to an error in this PR, so it needs the

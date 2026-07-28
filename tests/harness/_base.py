@@ -814,11 +814,8 @@ class BaseTestEnv:
             # Use PrincipalFactory (not inline ResolvedIdentity) for the arch guard.
             from tests.factories.principal import PrincipalFactory
 
-            resolved = a2a_identity or PrincipalFactory.make_identity(
-                principal_id=None,
+            resolved = a2a_identity or PrincipalFactory.make_anonymous_a2a_identity(
                 tenant_id=None,
-                tenant=None,
-                protocol="a2a",
             )
             # _get_auth_token must return a non-None value when identity exists,
             # otherwise the handler rejects the request before _resolve_a2a_identity

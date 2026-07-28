@@ -32,7 +32,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     def make_identity(
         cls,
         principal_id: str | None = "test_principal",
-        tenant_id: str = "test_tenant",
+        tenant_id: str | None = "test_tenant",
         protocol: str = "mcp",
         dry_run: bool = False,
         auth_token: str | None = None,
@@ -70,4 +70,18 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
             auth_token=auth_token,
             protocol=protocol,
             testing_context=testing_context,
+        )
+
+    @classmethod
+    def make_anonymous_a2a_identity(cls, tenant_id: str | None = None, **kwargs) -> ResolvedIdentity:
+        """Anonymous A2A discovery identity — principal_id/tenant None, protocol a2a.
+
+        Production always returns ResolvedIdentity (never None) for discovery.
+        """
+        return cls.make_identity(
+            principal_id=None,
+            tenant_id=tenant_id,
+            tenant=None,
+            protocol="a2a",
+            **kwargs,
         )

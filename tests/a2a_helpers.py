@@ -5,9 +5,15 @@ AdCPCallContextBuilder.build() does in production, but without needing
 a Starlette request object.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from unittest.mock import patch
+
 from a2a.server.context import ServerCallContext
 
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+from src.core.resolved_identity import ResolvedIdentity
 
 
 def make_a2a_context(
@@ -28,3 +34,13 @@ def make_a2a_context(
     """
     auth_ctx = AuthContext(auth_token=auth_token, headers=headers or {})
     return ServerCallContext(state={AUTH_CONTEXT_STATE_KEY: auth_ctx})
+
+
+@contextmanager
+def a2a_auth_as(handler: AdCPRequestHandler, identity: ResolvedIdentity) -> Iterator[None]:
+    """Patch token extract + identity resolve for a single authenticated call."""
+    with (
+        patch.object(handler, "_get_auth_token", return_value="tok"),
+        patch.object(handler, "_resolve_a2a_identity", return_value=identity),
+    ):
+        yield

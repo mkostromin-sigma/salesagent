@@ -1067,11 +1067,8 @@ class TestA2AContextEcho:
             # Auth/identity layer mocked at the boundary (matches gold-standard pattern).
             # Discovery resolve always returns ResolvedIdentity (possibly with a
             # None principal_id) — never None; owner recording reads .tenant_id.
-            anonymous = PrincipalFactory.make_identity(
-                principal_id=None,
+            anonymous = PrincipalFactory.make_anonymous_a2a_identity(
                 tenant_id="test_tenant",
-                tenant=None,
-                protocol="a2a",
             )
             handler._get_auth_token = MagicMock(return_value=None)
             handler._resolve_a2a_identity = MagicMock(return_value=anonymous)
