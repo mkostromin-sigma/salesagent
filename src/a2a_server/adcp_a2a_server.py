@@ -478,6 +478,16 @@ class AdCPRequestHandler(RequestHandler):
             testing_context=identity.testing_context,
         )
 
+    # Snake_case op ids for record_boundary_error → buyer-facing wire phrases.
+    _AUTH_OPERATION_WIRE_PHRASES: dict[str, str] = {
+        "get_task": "get task",
+        "cancel_task": "cancel task",
+        "get_push_notification_config": "get push notification config",
+        "create_push_notification_config": "create push notification config",
+        "list_push_notification_configs": "list push notification configs",
+        "delete_push_notification_config": "delete push notification config",
+    }
+
     def _authenticate(self, context: ServerCallContext | None, *, operation: str) -> ResolvedIdentity:
         """Resolve a valid principal identity for authenticated A2A operations.
 

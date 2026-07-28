@@ -166,16 +166,6 @@ def test_internal_error_for_sql_normalized_exception_stays_out_of_message():
     assert "[SQL:" not in blob
 
 
-@contextmanager
-def a2a_auth_as(handler: AdCPRequestHandler, identity):
-    """Patch token extract + identity resolve for a single authenticated call."""
-    with (
-        patch.object(handler, "_get_auth_token", return_value="tok"),
-        patch.object(handler, "_resolve_a2a_identity", return_value=identity),
-    ):
-        yield
-
-
 def _make_nl_message(text: str) -> SendMessageRequest:
     message = Message(
         message_id=str(uuid.uuid4()),
@@ -418,6 +408,76 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(method_na
     assert raised.data is not None
     assert raised.data["adcp_error"]["recovery"] == "transient"
     assert raised.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_cls, method_name, wire_message",
+    [
+        (GetTaskRequest, "on_get_task", "get task failed"),
+        (CancelTaskRequest, "on_cancel_task", "cancel task failed"),
+    ],
+)
+async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_cls, method_name, wire_message):
+    """DB/infra failure during identity resolve must not collapse to TaskNotFoundError.
+
+    Mutating the ``_authenticate`` except branch back to ``_task_not_found`` must
+    redden this test: buyers see a fixed human-phrase InternalError, not not-found.
+    """
+    handler = _owned_handler()
+
+    with (
+        patch.object(handler, "_get_auth_token", return_value="tok"),
+        patch.object(
+            handler,
+            "_resolve_a2a_identity",
+            side_effect=OperationalError("db down", None, None),
+        ),
+    ):
+        with pytest.raises(InternalError) as exc_info:
+            await getattr(handler, method_name)(request_cls(id=_TASK_ID), context=None)
+
+    raised = exc_info.value
+    assert not isinstance(raised, TaskNotFoundError)
+    assert raised.message == wire_message
+    assert "_" not in raised.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_cls, method_name",
+    [(GetTaskRequest, "on_get_task"), (CancelTaskRequest, "on_cancel_task")],
+)
+async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name):
+    """Ownership compare with real ``_get_auth_token`` (only resolve_identity patched).
+
+    Unlike ``a2a_auth_as`` tests, the token is extracted from ServerCallContext so
+    mutating ``!= expected_owner`` out of the gate reddens this path — unknown-id
+    alone would stay green.
+    """
+    handler = _owned_handler()
+    owner = PrincipalFactory.make_identity(principal_id=_OWNER, tenant_id=_TENANT, protocol="a2a")
+    sibling = PrincipalFactory.make_identity(principal_id=_SIBLING, tenant_id=_TENANT, protocol="a2a")
+
+    def resolve(*, auth_token: str | None, **_kwargs):
+        if auth_token == "sibling-tok":
+            return sibling
+        if auth_token == "owner-tok":
+            return owner
+        raise AssertionError(f"unexpected token: {auth_token!r}")
+
+    with patch("src.core.resolved_identity.resolve_identity", side_effect=resolve):
+        sibling_ctx = make_a2a_context(auth_token="sibling-tok", headers={"host": "test.example.com"})
+        with pytest.raises(TaskNotFoundError) as deny_exc:
+            await getattr(handler, method_name)(request_cls(id=_TASK_ID), context=sibling_ctx)
+
+        owner_ctx = make_a2a_context(auth_token="owner-tok", headers={"host": "test.example.com"})
+        with pytest.raises(TaskNotFoundError) as unknown_exc:
+            await getattr(handler, method_name)(request_cls(id="task_does_not_exist"), context=owner_ctx)
+
+    _assert_not_found_matches(deny_exc.value, _TASK_ID)
+    _assert_not_found_matches(unknown_exc.value, "task_does_not_exist")
+    assert handler.tasks[_TASK_ID].status.state == TaskState.TASK_STATE_COMPLETED
 
 
 @pytest.mark.asyncio
