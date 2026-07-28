@@ -385,11 +385,12 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("status") == "completed", (
             f"approved webhook must embed a completed Success, got status={embedded.get('status')!r}"
         )
-        # Domain field (AdCP 3.1): flight starts in +7d → scheduled, not the protocol
-        # TaskStatus "completed" on the Success envelope body.
-        assert embedded.get("media_buy_status") == "scheduled", (
-            f"approved webhook must embed media_buy_status matching the buy's resolved "
-            f"flight status, got media_buy_status={embedded.get('media_buy_status')!r}"
+        # Domain field (AdCP 3.1): resolve_canonical_status date-refines a
+        # future-start buy to pending_start (ORM may still say "scheduled").
+        # Protocol TaskStatus on the Success envelope stays "completed".
+        assert embedded.get("media_buy_status") == "pending_start", (
+            f"approved webhook must embed media_buy_status matching get_media_buys "
+            f"(canonical), got media_buy_status={embedded.get('media_buy_status')!r}"
         )
         assert embedded.get("confirmed_at"), "approved (committed) buy must carry confirmed_at"
         assert _parse_instant(embedded["confirmed_at"]) == persisted.confirmed_at, (
@@ -572,8 +573,8 @@ class TestAdminMediaBuyRejectWebhook:
             f"approve webhook must echo the buyer's request context verbatim, "
             f"got {embedded.get('context')!r} (expected {buyer_context!r})"
         )
-        assert embedded.get("media_buy_status") == "scheduled", (
-            f"approve echo webhook must also embed media_buy_status, got {embedded.get('media_buy_status')!r}"
+        assert embedded.get("media_buy_status") == "pending_start", (
+            f"approve echo webhook must also embed canonical media_buy_status, got {embedded.get('media_buy_status')!r}"
         )
 
 
