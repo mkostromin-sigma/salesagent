@@ -9,7 +9,7 @@ import asyncio
 import logging
 import os
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
@@ -34,6 +34,13 @@ logger = logging.getLogger(__name__)
 # 1 hour because AdCP protocol has frequency options hourly, daily and monthly
 # Configurable via env var for testing
 SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
+
+
+class _DeliveryBuyContext(NamedTuple):
+    """Ids captured before the item body for safe error logging/metrics."""
+
+    tenant_id: str
+    media_buy_id: str
 
 
 class DeliveryWebhookScheduler:
@@ -99,8 +106,8 @@ class DeliveryWebhookScheduler:
                     session, {PersistedMediaBuyStatus.ACTIVE, PersistedMediaBuyStatus.APPROVED}
                 )
 
-                def _item_context(media_buy: MediaBuy) -> str:
-                    return media_buy.media_buy_id
+                def _item_context(media_buy: MediaBuy) -> _DeliveryBuyContext:
+                    return _DeliveryBuyContext(media_buy.tenant_id, media_buy.media_buy_id)
 
                 async def _handle_item(media_buy: MediaBuy) -> bool:
                     raw_request = media_buy.raw_request or {}
@@ -110,8 +117,12 @@ class DeliveryWebhookScheduler:
                     await self._send_report_for_media_buy(media_buy, reporting_webhook, session)
                     return True
 
-                def _on_error(media_buy_id: str, exc: BaseException) -> None:
-                    logger.error(f"Error sending report for media buy {media_buy_id}: {exc}", exc_info=True)
+                def _on_error(ctx: _DeliveryBuyContext, exc: BaseException) -> None:
+                    logger.error(
+                        f"Error sending report for media buy {ctx.media_buy_id}: {exc}",
+                        exc_info=True,
+                    )
+                    record_delivery_webhook_scheduler_error(ctx.tenant_id, exc)
 
                 reports_sent, errors = await run_isolated_batch_async(
                     media_buys,

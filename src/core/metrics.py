@@ -150,6 +150,15 @@ media_buy_status_scheduler_errors = Counter(
     ["tenant_id", "error_type"],
 )
 
+# ---------------------------------------------------------------------------
+# Delivery webhook scheduler metrics
+# ---------------------------------------------------------------------------
+delivery_webhook_scheduler_errors = Counter(
+    "delivery_webhook_scheduler_errors_total",
+    "Per-buy delivery webhook scheduler isolation errors by bounded error type",
+    ["tenant_id", "error_type"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Recording helpers — single source of truth for label bounding
@@ -171,6 +180,14 @@ def record_ai_review_error(tenant_id: str, error: BaseException) -> None:
 def record_media_buy_status_scheduler_error(tenant_id: str, error: BaseException) -> None:
     """Increment :data:`media_buy_status_scheduler_errors` with a bounded ``error_type``."""
     media_buy_status_scheduler_errors.labels(
+        tenant_id=tenant_id,
+        error_type=categorize_error(error),
+    ).inc()
+
+
+def record_delivery_webhook_scheduler_error(tenant_id: str, error: BaseException) -> None:
+    """Increment :data:`delivery_webhook_scheduler_errors` with a bounded ``error_type``."""
+    delivery_webhook_scheduler_errors.labels(
         tenant_id=tenant_id,
         error_type=categorize_error(error),
     ).inc()

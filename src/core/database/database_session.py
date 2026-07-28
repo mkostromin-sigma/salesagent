@@ -31,6 +31,13 @@ _last_health_check: float = 0.0
 _health_check_interval = 60  # Check health every 60 seconds
 _is_healthy = True
 
+#: Exception types that mean the DB connection is gone / unusable. Owned here
+#: because :func:`get_db_session` keys the process-global circuit breaker on
+#: exactly this set; callers that isolate per-item failures (schedulers) must
+#: re-raise these so the breaker still trips. Keep in sync via this constant —
+#: do not restate the tuple at call sites.
+CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (OperationalError, DisconnectionError)
+
 
 def _pydantic_json_serializer(obj: Any) -> str:
     """JSON serializer that handles Pydantic types (Enum, datetime, AnyUrl, etc.) natively.
@@ -226,7 +233,7 @@ def get_db_session() -> Generator[Session, None, None]:
     session = scoped()
     try:
         yield session
-    except (OperationalError, DisconnectionError) as e:
+    except CONNECTION_ERROR_TYPES as e:
         logger.error(f"Database connection error: {e}")
         session.rollback()
         # Remove session from registry to force reconnection
@@ -244,7 +251,7 @@ def get_db_session() -> Generator[Session, None, None]:
         scoped.remove()
 
 
-def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = (OperationalError, DisconnectionError)) -> Any:
+def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = CONNECTION_ERROR_TYPES) -> Any:
     """
     Execute a database operation with retry logic for connection issues.
 

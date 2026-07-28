@@ -9,6 +9,8 @@ def test_metrics_are_registered():
         ai_review_duration,
         ai_review_errors,
         ai_review_total,
+        delivery_webhook_scheduler_errors,
+        media_buy_status_scheduler_errors,
         webhook_delivery_attempts,
         webhook_delivery_duration,
         webhook_delivery_total,
@@ -26,6 +28,9 @@ def test_metrics_are_registered():
     assert webhook_delivery_duration._name == "webhook_delivery_duration_seconds"
     assert webhook_delivery_attempts._name == "webhook_delivery_attempts"
     assert webhook_queue_size._name == "webhook_queue_size"
+
+    assert media_buy_status_scheduler_errors._name == "media_buy_status_scheduler_errors"
+    assert delivery_webhook_scheduler_errors._name == "delivery_webhook_scheduler_errors"
 
 
 def test_ai_review_counter_increments():
@@ -86,6 +91,34 @@ def test_ai_review_errors_increments():
     record_ai_review_error(tenant_id="test_tenant", error=ValueError("bad input"))
 
     new_value = ai_review_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
+    assert new_value == initial_value + 1
+
+
+def test_media_buy_status_scheduler_errors_increments():
+    """Status scheduler isolation error counter increments via the recording helper."""
+    from src.core.metrics import media_buy_status_scheduler_errors, record_media_buy_status_scheduler_error
+
+    initial_value = media_buy_status_scheduler_errors.labels(
+        tenant_id="test_tenant", error_type="validation"
+    )._value.get()
+
+    record_media_buy_status_scheduler_error(tenant_id="test_tenant", error=ValueError("bad input"))
+
+    new_value = media_buy_status_scheduler_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
+    assert new_value == initial_value + 1
+
+
+def test_delivery_webhook_scheduler_errors_increments():
+    """Delivery webhook scheduler isolation error counter increments via the recording helper."""
+    from src.core.metrics import delivery_webhook_scheduler_errors, record_delivery_webhook_scheduler_error
+
+    initial_value = delivery_webhook_scheduler_errors.labels(
+        tenant_id="test_tenant", error_type="validation"
+    )._value.get()
+
+    record_delivery_webhook_scheduler_error(tenant_id="test_tenant", error=ValueError("bad input"))
+
+    new_value = delivery_webhook_scheduler_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
     assert new_value == initial_value + 1
 
 

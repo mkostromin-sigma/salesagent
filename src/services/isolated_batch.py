@@ -15,11 +15,11 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 
-from sqlalchemy.exc import DisconnectionError, OperationalError
+from src.core.database.database_session import CONNECTION_ERROR_TYPES
 
 #: Exceptions that must not be isolated — re-raise so ``get_db_session`` can
-#: trip ``_is_healthy`` (see ``database_session.py``).
-DEFAULT_NON_ISOLATABLE: tuple[type[BaseException], ...] = (OperationalError, DisconnectionError)
+#: trip ``_is_healthy``. SSOT: :data:`CONNECTION_ERROR_TYPES`.
+DEFAULT_NON_ISOLATABLE: tuple[type[BaseException], ...] = CONNECTION_ERROR_TYPES
 
 
 def run_isolated_batch[T, C](

@@ -61,6 +61,34 @@ def test_run_isolated_batch_reraises_disconnection_error():
 
 
 @pytest.mark.asyncio
+async def test_run_isolated_batch_async_reraises_operational_error():
+    async def handle(_item: int) -> bool:
+        raise OperationalError("SELECT 1", {}, Exception("db down"))
+
+    with pytest.raises(OperationalError):
+        await run_isolated_batch_async(
+            [1],
+            handle,
+            item_context=lambda x: x,
+            on_error=lambda _ctx, _exc: None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_isolated_batch_async_reraises_disconnection_error():
+    async def handle(_item: int) -> bool:
+        raise DisconnectionError("gone")
+
+    with pytest.raises(DisconnectionError):
+        await run_isolated_batch_async(
+            [1],
+            handle,
+            item_context=lambda x: x,
+            on_error=lambda _ctx, _exc: None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_isolated_batch_async_mirrors_sync():
     async def handle(item: int) -> bool:
         if item == 1:

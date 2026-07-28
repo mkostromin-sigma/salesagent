@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 from sqlalchemy import select
 
@@ -105,10 +106,14 @@ class MediaBuyStatusScheduler:
                     session, _ACTIVATABLE_STATUSES | {PersistedMediaBuyStatus.ACTIVE}
                 )
 
-                def _item_context(media_buy: MediaBuy) -> tuple[str, str, str]:
+                def _item_context(media_buy: MediaBuy) -> _BuyContext:
                     # Capture before the savepoint body — a flush failure expires
                     # ORM attrs and would PendingRollbackError inside on_error.
-                    return (media_buy.tenant_id, media_buy.principal_id, media_buy.media_buy_id)
+                    return _BuyContext(
+                        media_buy.tenant_id,
+                        media_buy.principal_id,
+                        media_buy.media_buy_id,
+                    )
 
                     if new_status and new_status != media_buy.status:
                         old_status = media_buy.status

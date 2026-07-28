@@ -598,6 +598,11 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
             session.execute(text("SELECT 1/0"))
         return real_compute(media_buy, now_arg, session)
 
+    from src.core.metrics import media_buy_status_scheduler_errors
+
+    # Division-by-zero maps through categorize_error → "other"
+    metric_before = media_buy_status_scheduler_errors.labels(tenant_id=tenant_id, error_type="other")._value.get()
+
     with (
         patch.object(status_scheduler_mod.logger, "error") as mock_error,
         patch.object(status_scheduler_mod.logger, "info") as mock_info,
@@ -625,6 +630,9 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     ]
     assert len(summary_msgs) == 1
     assert "2 updated, 1 errors" in summary_msgs[0]
+
+    metric_after = media_buy_status_scheduler_errors.labels(tenant_id=tenant_id, error_type="other")._value.get()
+    assert metric_after == metric_before + 1
 
 
 # =============================================================================

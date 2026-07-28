@@ -64,6 +64,32 @@ def test_record_ai_review_error_cardinality_bounded():
     assert len(samples) <= 10, f"Expected bounded error_type series, got {len(samples)}"
 
 
+def test_record_media_buy_status_scheduler_error_cardinality_bounded():
+    """Status scheduler error counter must bound error_type the same way."""
+    from src.core import metrics
+
+    metrics.media_buy_status_scheduler_errors.clear()
+    for i in range(1000):
+        exc_cls = type(f"FakeStatusSchedError{i}", (Exception,), {})
+        metrics.record_media_buy_status_scheduler_error(tenant_id="t1", error=exc_cls("boom"))
+
+    samples = list(metrics.media_buy_status_scheduler_errors.collect())[0].samples
+    assert len(samples) <= 10, f"Expected bounded error_type series, got {len(samples)}"
+
+
+def test_record_delivery_webhook_scheduler_error_cardinality_bounded():
+    """Delivery webhook scheduler error counter must bound error_type the same way."""
+    from src.core import metrics
+
+    metrics.delivery_webhook_scheduler_errors.clear()
+    for i in range(1000):
+        exc_cls = type(f"FakeDeliverySchedError{i}", (Exception,), {})
+        metrics.record_delivery_webhook_scheduler_error(tenant_id="t1", error=exc_cls("boom"))
+
+    samples = list(metrics.delivery_webhook_scheduler_errors.collect())[0].samples
+    assert len(samples) <= 10, f"Expected bounded error_type series, got {len(samples)}"
+
+
 def test_sanitize_policy_triggered_allowlist():
     """Unknown / AI-driven free-form policy_triggered values collapse to 'other'."""
     from src.core.metrics import POLICY_TRIGGERED_ALLOWLIST, sanitize_policy_triggered
