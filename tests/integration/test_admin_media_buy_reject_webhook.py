@@ -597,8 +597,7 @@ class TestAdminMediaBuyApproveHold:
         make_kwargs,
         expected_hold,
     ):
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from src.core.database.repositories.uow import MediaBuyUoW
 
         suffix = expected_hold.replace("_", "")[:8]
         ids = make_pending_media_buy(
@@ -616,8 +615,9 @@ class TestAdminMediaBuyApproveHold:
         mock_execute.assert_not_called()
         assert "payload" not in webhook_capture, f"hold arm ({expected_hold}) must not fire the approve webhook"
 
-        with get_db_session() as session:
-            buy = MediaBuyRepository(session, ids["tenant_id"]).get_by_id(ids["media_buy_id"])
+        with MediaBuyUoW(ids["tenant_id"]) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(ids["media_buy_id"])
             assert buy is not None
             assert buy.status == "pending_creatives", f"hold arm must persist pending_creatives, got {buy.status!r}"
             assert buy.approved_at is not None
