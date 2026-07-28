@@ -14,6 +14,12 @@ from adcp.types import (
 )
 from adcp.webhooks import GeneratedTaskStatus
 
+from src.core.database.models import (
+    MediaBuy,
+)
+from src.core.database.models import (
+    PushNotificationConfig as DBPushNotificationConfig,
+)
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
@@ -75,9 +81,9 @@ def _cleanup_completed_tasks():
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
 
 
-def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
+def _compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
     """Compute status from flight dates (active / scheduled / completed)."""
-    from src.admin.services.media_buy_creative_readiness import (
+    from src.services.media_buy_creative_readiness import (
         compute_media_buy_status_from_flight_dates,
     )
 
@@ -556,28 +562,19 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 if media_buy.status in {"pending_creatives", "draft"}:
                     # Shared Hold / finalize predicate (#1696): empty assignments
                     # are not ready (do not treat as "all approved").
-                    from src.admin.services.media_buy_creative_readiness import (
+                    from src.services.media_buy_creative_readiness import (
                         evaluate_creative_finalize_readiness,
+                        log_creative_finalize_hold,
                     )
 
                     readiness = evaluate_creative_finalize_readiness(
                         uow.assignments, uow.creatives, media_buy_id=media_buy_id
                     )
 
-                    logger.info(
-                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} "
-                        f"ready={readiness.ready} reason={readiness.hold_reason} "
-                        f"unapproved={readiness.unapproved_creative_ids}"
-                    )
-
                     if readiness.ready:
                         media_buy_actions.append({"media_buy_id": media_buy_id})
-                    elif readiness.hold_reason == "unapproved_creatives":
-                        logger.info(
-                            f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for "
-                            f"{len(readiness.unapproved_creative_ids)} creatives: "
-                            f"{readiness.unapproved_creative_ids}"
-                        )
+                    else:
+                        log_creative_finalize_hold(media_buy_id, readiness)
 
             # UoW auto-commits here
 

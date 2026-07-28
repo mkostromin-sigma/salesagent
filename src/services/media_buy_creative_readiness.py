@@ -1,0 +1,183 @@
+"""Domain creative finalize-readiness predicate for media-buy approve paths.
+
+Shared by admin workflows / operations / creatives so zero-assignment and
+unapproved-creative hold decisions share one policy (issue #1696). Neutral
+module (not Flask-aware) — admin flash/commit lives in the admin facade.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from typing import Literal
+
+from sqlalchemy.orm import Session
+
+from src.core.database.models import MediaBuy
+from src.core.database.repositories.creative import (
+    CreativeAssignmentRepository,
+    CreativeRepository,
+)
+from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
+from src.core.utils import utc_flight_end, utc_flight_start
+
+logger = logging.getLogger(__name__)
+
+HoldReason = Literal["no_assignments", "unapproved_creatives"]
+
+_HOLD_MSG_NO_ASSIGNMENTS = (
+    "Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM."
+)
+
+
+@dataclass(frozen=True)
+class CreativeFinalizeReadiness:
+    """Result of evaluating whether a media buy may proceed to adapter finalize."""
+
+    ready: bool
+    """True iff ≥1 assignment AND every linked creative is in the allowlist."""
+
+    unapproved_creative_ids: list[str]
+    hold_reason: HoldReason | None
+    hold_message: str | None = None
+
+
+def _hold_message_for(reason: HoldReason, unapproved_count: int) -> str:
+    if reason == "no_assignments":
+        return _HOLD_MSG_NO_ASSIGNMENTS
+    return f"Media buy approved! Waiting for {unapproved_count} creative(s) to be approved before creating in GAM."
+
+
+def evaluate_creative_finalize_readiness(
+    assignments_repo: CreativeAssignmentRepository,
+    creatives_repo: CreativeRepository,
+    *,
+    media_buy_id: str,
+) -> CreativeFinalizeReadiness:
+    """Evaluate whether creatives are ready for media-buy finalize / adapter create.
+
+    Locked Hold semantics (#1696): zero CreativeAssignment rows ⇒ not ready
+    (``hold_reason="no_assignments"``). Repositories are tenant-scoped; creative
+    loads use the composite key via ``get_by_ids(..., principal_id)``.
+    """
+    assignments = assignments_repo.get_by_media_buy(media_buy_id)
+
+    if not assignments:
+        return CreativeFinalizeReadiness(
+            ready=False,
+            unapproved_creative_ids=[],
+            hold_reason="no_assignments",
+            hold_message=_hold_message_for("no_assignments", 0),
+        )
+
+    # Group by principal so each get_by_ids call matches the composite PK.
+    by_principal: dict[str, list[str]] = {}
+    for assignment in assignments:
+        by_principal.setdefault(assignment.principal_id, []).append(assignment.creative_id)
+
+    creatives = []
+    for principal_id, creative_ids in by_principal.items():
+        creatives.extend(creatives_repo.get_by_ids(creative_ids, principal_id))
+
+    unapproved_creative_ids = [c.creative_id for c in creatives if c.status not in FINALIZE_READY_CREATIVE_STATUSES]
+    # Missing creative rows (assignment points at deleted/missing) count as not ready.
+    found_ids = {c.creative_id for c in creatives}
+    for cid in (a.creative_id for a in assignments):
+        if cid not in found_ids and cid not in unapproved_creative_ids:
+            unapproved_creative_ids.append(cid)
+
+    if unapproved_creative_ids:
+        return CreativeFinalizeReadiness(
+            ready=False,
+            unapproved_creative_ids=unapproved_creative_ids,
+            hold_reason="unapproved_creatives",
+            hold_message=_hold_message_for("unapproved_creatives", len(unapproved_creative_ids)),
+        )
+
+    return CreativeFinalizeReadiness(
+        ready=True,
+        unapproved_creative_ids=[],
+        hold_reason=None,
+        hold_message=None,
+    )
+
+
+def evaluate_creative_finalize_readiness_for_session(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+) -> CreativeFinalizeReadiness:
+    """Session-level entry: construct tenant-scoped repos and evaluate readiness."""
+    return evaluate_creative_finalize_readiness(
+        CreativeAssignmentRepository(session, tenant_id),
+        CreativeRepository(session, tenant_id),
+        media_buy_id=media_buy_id,
+    )
+
+
+def log_creative_finalize_hold(media_buy_id: str, readiness: CreativeFinalizeReadiness) -> None:
+    """Log a finalize hold at info with a stable ``hold_reason=`` key."""
+    logger.info(
+        "Creative finalize hold for media buy %s hold_reason=%s unapproved=%s",
+        media_buy_id,
+        readiness.hold_reason,
+        readiness.unapproved_creative_ids,
+    )
+
+
+def apply_creative_finalize_hold(
+    media_buy: MediaBuy,
+    readiness: CreativeFinalizeReadiness,
+    *,
+    approved_by: str,
+) -> None:
+    """Apply hold outcome: provenance + pending_creatives + single info log."""
+    media_buy.approved_at = datetime.now(UTC)
+    media_buy.approved_by = approved_by
+    media_buy.status = "pending_creatives"
+    log_creative_finalize_hold(media_buy.media_buy_id, readiness)
+
+
+def _coerce_flight_boundary(
+    dt: datetime | None,
+    date_value: date | None,
+    *,
+    end_of_day: bool,
+) -> datetime | None:
+    """Normalize a start/end boundary from aware/naive datetime or date column."""
+    if dt:
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+    if date_value:
+        return utc_flight_end(date_value) if end_of_day else utc_flight_start(date_value)
+    return None
+
+
+def compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
+    """Compute post-approve status from flight window: active / scheduled / completed."""
+    now = datetime.now(UTC)
+
+    start_time = _coerce_flight_boundary(
+        media_buy.start_time,
+        getattr(media_buy, "start_date", None),
+        end_of_day=False,
+    )
+    end_time = _coerce_flight_boundary(
+        media_buy.end_time,
+        getattr(media_buy, "end_date", None),
+        end_of_day=True,
+    )
+
+    if start_time and end_time:
+        if now > end_time:
+            return "completed"
+        if now >= start_time:
+            return "active"
+        return "scheduled"
+
+    if start_time and now < start_time:
+        return "scheduled"
+    if end_time and now > end_time:
+        return "completed"
+    return "active"

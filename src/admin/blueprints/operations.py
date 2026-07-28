@@ -14,10 +14,6 @@ from sqlalchemy import select
 
 from src.admin.utils import echo_context, require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
-from src.core.database.repositories.creative import (
-    CreativeAssignmentRepository,
-    CreativeRepository,
-)
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
@@ -420,27 +416,30 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # Shared Hold predicate (#1696): zero assignments or unapproved
                     # creatives → pending_creatives; never finalize on hold.
                     from src.admin.services.media_buy_creative_readiness import (
+                        apply_creative_finalize_hold_for_admin,
+                    )
+                    from src.services.media_buy_creative_readiness import (
                         compute_media_buy_status_from_flight_dates,
-                        evaluate_creative_finalize_readiness,
+                        evaluate_creative_finalize_readiness_for_session,
                     )
 
-                    readiness = evaluate_creative_finalize_readiness(
-                        CreativeAssignmentRepository(db_session, tenant_id),
-                        CreativeRepository(db_session, tenant_id),
-                        media_buy_id=media_buy_id,
+                    readiness = evaluate_creative_finalize_readiness_for_session(
+                        db_session, tenant_id, media_buy_id=media_buy_id
                     )
-
-                    media_buy.approved_at = datetime.now(UTC)
-                    media_buy.approved_by = user_email
 
                     if not readiness.ready:
-                        media_buy.status = "pending_creatives"
-                        db_session.commit()
-                        flash(readiness.hold_message or "Media buy approved; waiting on creatives.", "info")
+                        apply_creative_finalize_hold_for_admin(
+                            media_buy,
+                            readiness,
+                            approved_by=user_email,
+                            db_session=db_session,
+                        )
                         return redirect(
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
 
+                    media_buy.approved_at = datetime.now(UTC)
+                    media_buy.approved_by = user_email
                     media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
                     # Capture canonical status while media_buy is still attached.
                     # execute_approved_media_buy opens its own session and leaves this

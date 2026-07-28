@@ -31,17 +31,22 @@ def make_pending_media_buy(integration_db):
     """Factory for a pending-approval media buy wired for the admin approve/reject webhook path.
 
     Builds (via factories + ContextManager production APIs — no session.add in the
-    test body) a tenant + principal, a pending_approval media buy with an approved
-    CreativeAssignment (required for the approve finalize/webhook path after #1696),
-    an active PushNotificationConfig at WEBHOOK_URL, and a tenant-scoped approval
-    workflow step whose ObjectWorkflowMapping ties it to the media buy with action
-    "reject". All rows are committed (factories persist on commit; ContextManager
-    commits its own writes) so the Flask route's separate get_db_session() sees them.
+    test body) a tenant + principal, a pending_approval media buy, optionally with
+    a CreativeAssignment (approved by default — required for the approve
+    finalize/webhook path after #1696), an active PushNotificationConfig at
+    WEBHOOK_URL, and a tenant-scoped approval workflow step whose
+    ObjectWorkflowMapping ties it to the media buy with action "reject". All rows
+    are committed (factories persist on commit; ContextManager commits its own
+    writes) so the Flask route's separate get_db_session() sees them.
 
     ``request_data_context``: optional dict stored as ``request_data["context"]`` on
     the workflow step — drives the approve webhook's context-echo branch.
     ``protocol``: the workflow step's originating protocol ("mcp" default; "a2a"
     drives the create_a2a_webhook_payload branch).
+    ``include_assignment``: when False, omit CreativeAssignment (zero-assignment hold).
+    ``creative_approved``: when True (default) the assigned creative is approved;
+    when False the creative stays pending (unapproved_creatives hold).
+    ``tenant_id`` / ``media_buy_id``: override defaults for multi-scenario tests.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -65,24 +70,33 @@ def make_pending_media_buy(integration_db):
     engine = get_engine()
     session = SASession(bind=engine)
 
-    def _make(request_data_context: dict | None = None, protocol: str = "mcp"):
-        tenant = TenantFactory(tenant_id="reject_wh_tenant")
+    def _make(
+        request_data_context: dict | None = None,
+        protocol: str = "mcp",
+        *,
+        include_assignment: bool = True,
+        creative_approved: bool = True,
+        tenant_id: str = "reject_wh_tenant",
+        media_buy_id: str = "mb_reject_wh",
+        principal_id: str = "reject_wh_principal",
+    ):
+        tenant = TenantFactory(tenant_id=tenant_id)
         PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
         principal = PrincipalFactory(
             tenant=tenant,
-            principal_id="reject_wh_principal",
-            platform_mappings={"mock": {"id": "reject_wh_advertiser"}},
+            principal_id=principal_id,
+            platform_mappings={"mock": {"id": f"{principal_id}_advertiser"}},
         )
         # Real product + pricing so the APPROVE path's execute_approved_media_buy
         # can reconstruct and re-execute the stored raw_request (the approve
         # webhook test drives the full adapter-execution branch).
-        product = ProductFactory(tenant=tenant, product_id="prod_reject_wh")
+        product = ProductFactory(tenant=tenant, product_id=f"prod_{media_buy_id}")
         PricingOptionFactory(product=product)
         now = datetime.now(UTC)
         media_buy = MediaBuyFactory(
             tenant=tenant,
             principal=principal,
-            media_buy_id="mb_reject_wh",
+            media_buy_id=media_buy_id,
             status="pending_approval",
             start_time=now + timedelta(days=7),
             end_time=now + timedelta(days=37),
@@ -98,30 +112,36 @@ def make_pending_media_buy(integration_db):
         )
         # Persisted package row — the approve path's adapter execution reads the
         # buy's MediaPackage records ("No packages found" aborts before the webhook).
+        pkg_id = f"pkg_{media_buy_id}_1"
         MediaPackageFactory(
             media_buy=media_buy,
-            package_id="pkg_reject_wh_1",
+            package_id=pkg_id,
             package_config={
-                "package_id": "pkg_reject_wh_1",
+                "package_id": pkg_id,
                 "product_id": product.product_id,
                 "budget": 5000.0,
                 "pricing_option_id": "cpm_usd_fixed",
             },
         )
-        # Approved creative assignment required for finalize (#1696 Hold): zero
-        # assignments parks at pending_creatives and skips adapter + approve webhook.
-        creative = CreativeFactory(
-            tenant=tenant,
-            principal=principal,
-            creative_id="cre_reject_wh_1",
-            approved=True,
-            data={"assets": build_assets(image_spec("banner_image"))},
-        )
-        CreativeAssignmentFactory(
-            creative=creative,
-            media_buy=media_buy,
-            package_id="pkg_reject_wh_1",
-        )
+        # Creative assignment required for finalize (#1696 Hold): zero assignments
+        # parks at pending_creatives and skips adapter + approve webhook.
+        if include_assignment:
+            creative_kwargs = {
+                "tenant": tenant,
+                "principal": principal,
+                "creative_id": f"cre_{media_buy_id}_1",
+                "data": {"assets": build_assets(image_spec("banner_image"))},
+            }
+            if creative_approved:
+                creative_kwargs["approved"] = True
+            else:
+                creative_kwargs["status"] = "pending"
+            creative = CreativeFactory(**creative_kwargs)
+            CreativeAssignmentFactory(
+                creative=creative,
+                media_buy=media_buy,
+                package_id=pkg_id,
+            )
         PushNotificationConfigFactory(
             tenant=tenant,
             principal=principal,
@@ -160,10 +180,7 @@ def make_pending_media_buy(integration_db):
         return {
             "tenant_id": tenant.tenant_id,
             "media_buy_id": media_buy.media_buy_id,
-            # The webhook's task_id. Exposed so the expected WebhookTaskContext can
-            # NAME it rather than matching it with ANY -- an ANY there would let the
-            # route send a webhook keyed on some other step and still pass.
-            "step_id": step.step_id,
+            "principal_id": principal.principal_id,
         }
 
     try:
@@ -368,12 +385,12 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("status") == "completed", (
             f"approved webhook must embed a completed Success, got status={embedded.get('status')!r}"
         )
-        # Both are read off the PERSISTED row, not asserted as constants. They used to
-        # be pinned at the schema defaults (a truthy confirmed_at and revision == 1),
-        # which is precisely what made the response a second producer: the row here is
-        # several bumps past 1 by the time approval completes, and the old assertion
-        # passed only because the envelope was reporting a fabricated value.
-        persisted = read_media_buy_state(tenant_id, media_buy_id)
+        # Domain field (AdCP 3.1): flight starts in +7d → scheduled, not the protocol
+        # TaskStatus "completed" on the Success envelope body.
+        assert embedded.get("media_buy_status") == "scheduled", (
+            f"approved webhook must embed media_buy_status matching the buy's resolved "
+            f"flight status, got media_buy_status={embedded.get('media_buy_status')!r}"
+        )
         assert embedded.get("confirmed_at"), "approved (committed) buy must carry confirmed_at"
         assert _parse_instant(embedded["confirmed_at"]) == persisted.confirmed_at, (
             f"embedded confirmed_at {embedded['confirmed_at']!r} disagrees with the persisted "
@@ -555,3 +572,52 @@ class TestAdminMediaBuyRejectWebhook:
             f"approve webhook must echo the buyer's request context verbatim, "
             f"got {embedded.get('context')!r} (expected {buyer_context!r})"
         )
+        assert embedded.get("media_buy_status") == "scheduled", (
+            f"approve echo webhook must also embed media_buy_status, got {embedded.get('media_buy_status')!r}"
+        )
+
+
+class TestAdminMediaBuyApproveHold:
+    """Approve with Hold predicate (#1696): pending_creatives, no adapter, no webhook."""
+
+    @pytest.mark.parametrize(
+        "make_kwargs,expected_hold",
+        [
+            ({"include_assignment": False}, "no_assignments"),
+            ({"include_assignment": True, "creative_approved": False}, "unapproved_creatives"),
+        ],
+        ids=["no_assignments", "unapproved_creatives"],
+    )
+    def test_approve_holds_without_execute_or_webhook(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+        webhook_capture,
+        make_kwargs,
+        expected_hold,
+    ):
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        suffix = expected_hold.replace("_", "")[:8]
+        ids = make_pending_media_buy(
+            tenant_id=f"hold_{suffix}_tenant",
+            media_buy_id=f"mb_hold_{suffix}",
+            principal_id=f"hold_{suffix}_principal",
+            **make_kwargs,
+        )
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+        ) as mock_execute:
+            _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+
+        mock_execute.assert_not_called()
+        assert "payload" not in webhook_capture, f"hold arm ({expected_hold}) must not fire the approve webhook"
+
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, ids["tenant_id"]).get_by_id(ids["media_buy_id"])
+            assert buy is not None
+            assert buy.status == "pending_creatives", f"hold arm must persist pending_creatives, got {buy.status!r}"
+            assert buy.approved_at is not None
+            assert buy.approved_by

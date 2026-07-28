@@ -12,10 +12,6 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
-from src.core.database.repositories.creative import (
-    CreativeAssignmentRepository,
-    CreativeRepository,
-)
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.tools.media_buy_create import ApprovalOutcome
 
@@ -204,27 +200,27 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # Shared Hold predicate (#1696): zero assignments or unapproved creatives
                     # → park at pending_creatives; do not finalize.
                     from src.admin.services.media_buy_creative_readiness import (
+                        apply_creative_finalize_hold_for_admin,
+                    )
+                    from src.services.media_buy_creative_readiness import (
                         compute_media_buy_status_from_flight_dates,
-                        evaluate_creative_finalize_readiness,
+                        evaluate_creative_finalize_readiness_for_session,
                     )
 
-                    readiness = evaluate_creative_finalize_readiness(
-                        CreativeAssignmentRepository(db, tenant_id),
-                        CreativeRepository(db, tenant_id),
-                        media_buy_id=media_buy_id,
+                    readiness = evaluate_creative_finalize_readiness_for_session(
+                        db, tenant_id, media_buy_id=media_buy_id
                     )
+                    if not readiness.ready:
+                        apply_creative_finalize_hold_for_admin(
+                            media_buy,
+                            readiness,
+                            approved_by=user_email,
+                            db_session=db,
+                        )
+                        return jsonify({"success": True}), 200
+
                     media_buy.approved_at = datetime.now(UTC)
                     media_buy.approved_by = user_email
-                    if not readiness.ready:
-                        logger.warning(
-                            f"[APPROVAL] Cannot execute adapter creation yet - "
-                            f"hold_reason={readiness.hold_reason} "
-                            f"unapproved={readiness.unapproved_creative_ids}"
-                        )
-                        flash(readiness.hold_message or "Media buy approved; waiting on creatives.", "info")
-                        media_buy.status = "pending_creatives"
-                        db.commit()
-                        return jsonify({"success": True}), 200
 
                     # Execute adapter creation
                     from src.core.tools.media_buy_create import execute_approved_media_buy
