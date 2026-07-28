@@ -186,7 +186,14 @@ def test_webhook_notification_sent_on_success():
     """Test webhook notification is sent when approval succeeds."""
     from src.services.order_approval_service import _send_approval_webhook
 
-    with patch("src.services.order_approval_service.get_db_session") as mock_db, patch("httpx.Client") as mock_httpx:
+    with (
+        patch("src.services.order_approval_service.get_db_session") as mock_db,
+        patch("httpx.Client") as mock_httpx,
+        patch(
+            "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
+            return_value=(True, ""),
+        ),
+    ):
         # Mock push notification config
         mock_db_instance = MagicMock()
         mock_db.return_value.__enter__.return_value = mock_db_instance
@@ -270,7 +277,14 @@ def test_webhook_retries_on_failure(mock_sleep):
     """Test webhook retries on HTTP failure."""
     import src.services.order_approval_service as service_module
 
-    with patch.object(service_module, "get_db_session") as mock_db, patch("httpx.Client") as mock_httpx:
+    with (
+        patch.object(service_module, "get_db_session") as mock_db,
+        patch("httpx.Client") as mock_httpx,
+        patch(
+            "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
+            return_value=(True, ""),
+        ),
+    ):
         # Mock DB
         mock_db_instance = MagicMock()
         mock_db.return_value.__enter__.return_value = mock_db_instance
