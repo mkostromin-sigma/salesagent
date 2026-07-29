@@ -54,7 +54,9 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         that need deferred config resolution.
         """
         resolved_tenant = (
-            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
+            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides)
+            if tenant is _UNSET and tenant_id is not None
+            else (None if tenant is _UNSET else tenant)
         )
         if testing_context is None:
             testing_context = AdCPTestContext(
@@ -73,7 +75,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         )
 
     @classmethod
-    def make_anonymous_a2a_identity(cls, tenant_id: str | None = None, **kwargs) -> ResolvedIdentity:
+    def make_anonymous_a2a_identity(cls, tenant_id: str | None = None, **kwargs: object) -> ResolvedIdentity:
         """Anonymous A2A discovery identity — principal_id/tenant None, protocol a2a.
 
         Production always returns ResolvedIdentity (never None) for discovery.

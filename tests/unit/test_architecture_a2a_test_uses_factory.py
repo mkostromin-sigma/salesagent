@@ -1,7 +1,7 @@
 """Structural guard: A2A test files must use PrincipalFactory.make_identity, not inline ResolvedIdentity.
 
 Inline ``ResolvedIdentity(...)`` constructions in A2A test files (``tests/unit/test_a2a*.py``,
-``tests/integration/test_a2a*.py``) bypass the single source of truth at
+``tests/integration/test_a2a*.py``, ``tests/e2e/test_a2a*.py``) bypass the single source of truth at
 ``tests.factories.principal.PrincipalFactory.make_identity``. Each inline construction is
 a future drift point — the factory's signature can evolve (e.g., new spec-mandated fields)
 without inline callers tracking the change.
@@ -25,7 +25,11 @@ from tests.unit._architecture_helpers import iter_call_expressions
 def _a2a_test_files() -> list[Path]:
     repo_root = Path(__file__).resolve().parents[2]
     paths: list[Path] = []
-    for pattern in ("tests/unit/test_a2a*.py", "tests/integration/test_a2a*.py"):
+    for pattern in (
+        "tests/unit/test_a2a*.py",
+        "tests/integration/test_a2a*.py",
+        "tests/e2e/test_a2a*.py",
+    ):
         paths.extend(repo_root.glob(pattern))
     return paths
 
