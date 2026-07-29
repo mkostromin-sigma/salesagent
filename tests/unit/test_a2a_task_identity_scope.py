@@ -9,7 +9,7 @@ propagate as ``InvalidRequestError`` and do not collapse to not-found.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 from a2a.types import (
@@ -150,10 +150,13 @@ async def test_owner_can_access_owned_in_memory_task(request_cls, method_name):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "request_cls, method_name",
-    [(GetTaskRequest, "on_get_task"), (CancelTaskRequest, "on_cancel_task")],
+    "request_cls, method_name, operation",
+    [
+        (GetTaskRequest, "on_get_task", "get_task"),
+        (CancelTaskRequest, "on_cancel_task", "cancel_task"),
+    ],
 )
-async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name):
+async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name, operation):
     """Same-tenant sibling must not read or cancel — identical to unknown id."""
     handler = seeded_owned_a2a_handler()
     sibling = PrincipalFactory.make_identity(principal_id=_SIBLING, tenant_id=_TENANT, protocol="a2a")
@@ -164,15 +167,16 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
             with pytest.raises(TaskNotFoundError) as deny_exc:
                 await getattr(handler, method_name)(request_cls(id=_TASK_ID), context=None)
 
-    record_error.assert_called_once()
-    call_kwargs = record_error.call_args
-    assert call_kwargs.args[0] == "a2a"
-    assert call_kwargs.args[1] in {"get_task", "cancel_task"}
-    telem = call_kwargs.args[2]
-    assert isinstance(telem, AdCPTaskNotFoundError)
-    assert not isinstance(telem, TaskNotFoundError)
-    assert call_kwargs.kwargs["tenant_id"] == _TENANT
-    assert call_kwargs.kwargs["principal_id"] == _SIBLING
+    record_error.assert_called_once_with(
+        "a2a",
+        operation,
+        ANY,
+        tenant_id=_TENANT,
+        principal_id=_SIBLING,
+    )
+    telem = record_error.call_args.args[2]
+    assert type(telem) is AdCPTaskNotFoundError
+    assert telem.message == f"Task not found: {_TASK_ID}"
 
     with a2a_auth_as(handler, owner):
         with pytest.raises(TaskNotFoundError) as unknown_exc:
