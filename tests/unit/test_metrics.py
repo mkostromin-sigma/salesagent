@@ -1,5 +1,8 @@
 """Tests for Prometheus metrics module."""
 
+import pytest
+from sqlalchemy.exc import DataError, OperationalError
+
 
 def test_metrics_are_registered():
     """Test that all metrics are registered with Prometheus."""
@@ -9,8 +12,7 @@ def test_metrics_are_registered():
         ai_review_duration,
         ai_review_errors,
         ai_review_total,
-        delivery_webhook_scheduler_errors,
-        media_buy_status_scheduler_errors,
+        scheduler_isolation_errors,
         webhook_delivery_attempts,
         webhook_delivery_duration,
         webhook_delivery_total,
@@ -29,8 +31,7 @@ def test_metrics_are_registered():
     assert webhook_delivery_attempts._name == "webhook_delivery_attempts"
     assert webhook_queue_size._name == "webhook_queue_size"
 
-    assert media_buy_status_scheduler_errors._name == "media_buy_status_scheduler_errors"
-    assert delivery_webhook_scheduler_errors._name == "delivery_webhook_scheduler_errors"
+    assert scheduler_isolation_errors._name == "scheduler_isolation_errors"
 
 
 def test_ai_review_counter_increments():
@@ -94,32 +95,35 @@ def test_ai_review_errors_increments():
     assert new_value == initial_value + 1
 
 
-def test_media_buy_status_scheduler_errors_increments():
-    """Status scheduler isolation error counter increments via the recording helper."""
-    from src.core.metrics import media_buy_status_scheduler_errors, record_media_buy_status_scheduler_error
+@pytest.mark.parametrize(
+    ("scheduler", "error", "error_type"),
+    [
+        ("media_buy_status", OperationalError("SELECT 1", {}, Exception("timeout")), "db_error"),
+        ("delivery_webhook", DataError("SELECT 1/0", {}, Exception("div0")), "db_error"),
+    ],
+)
+def test_scheduler_isolation_errors_increments(scheduler, error, error_type):
+    """Unified scheduler isolation counter increments with a loop-reachable class."""
+    from src.core.metrics import record_scheduler_isolation_error, scheduler_isolation_errors
 
-    initial_value = media_buy_status_scheduler_errors.labels(
-        tenant_id="test_tenant", error_type="validation"
+    initial_value = scheduler_isolation_errors.labels(
+        scheduler=scheduler, tenant_id="test_tenant", error_type=error_type
     )._value.get()
 
-    record_media_buy_status_scheduler_error(tenant_id="test_tenant", error=ValueError("bad input"))
+    record_scheduler_isolation_error(scheduler=scheduler, tenant_id="test_tenant", error=error)
 
-    new_value = media_buy_status_scheduler_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
+    new_value = scheduler_isolation_errors.labels(
+        scheduler=scheduler, tenant_id="test_tenant", error_type=error_type
+    )._value.get()
     assert new_value == initial_value + 1
 
 
-def test_delivery_webhook_scheduler_errors_increments():
-    """Delivery webhook scheduler isolation error counter increments via the recording helper."""
-    from src.core.metrics import delivery_webhook_scheduler_errors, record_delivery_webhook_scheduler_error
+def test_categorize_error_maps_sqlalchemy_to_db_error():
+    from src.core.metrics import categorize_error
 
-    initial_value = delivery_webhook_scheduler_errors.labels(
-        tenant_id="test_tenant", error_type="validation"
-    )._value.get()
-
-    record_delivery_webhook_scheduler_error(tenant_id="test_tenant", error=ValueError("bad input"))
-
-    new_value = delivery_webhook_scheduler_errors.labels(tenant_id="test_tenant", error_type="validation")._value.get()
-    assert new_value == initial_value + 1
+    assert categorize_error(OperationalError("SELECT 1", {}, Exception("x"))) == "db_error"
+    assert categorize_error(DataError("SELECT 1/0", {}, Exception("x"))) == "db_error"
+    assert categorize_error(ValueError("bad")) == "validation"
 
 
 def test_active_ai_reviews_gauge():

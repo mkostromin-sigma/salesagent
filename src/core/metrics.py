@@ -30,7 +30,7 @@ from src.core.exceptions import (
 # ---------------------------------------------------------------------------
 
 #: Fixed enum for the ``error_type`` label. Keep <= 5 values.
-ERROR_TYPE_VALUES = ("validation", "timeout", "model_error", "other")
+ERROR_TYPE_VALUES = ("validation", "timeout", "model_error", "db_error", "other")
 
 #: Closed set of ``policy_triggered`` values emitted by the AI review flow.
 #: Anything outside this set (e.g. an AI-generated free-form reason) collapses
@@ -47,6 +47,16 @@ POLICY_TRIGGERED_ALLOWLIST = frozenset(
     }
 )
 
+#: Closed set of ``scheduler`` label values for isolation-error metering.
+#: Unknown values collapse to ``"other"`` the same way as ``policy_triggered``.
+SCHEDULER_ALLOWLIST = frozenset(
+    {
+        "media_buy_status",
+        "delivery_webhook",
+        "other",
+    }
+)
+
 
 def categorize_error(error: BaseException) -> str:
     """Collapse an arbitrary exception into a bounded ``error_type`` enum.
@@ -54,6 +64,10 @@ def categorize_error(error: BaseException) -> str:
     The mapping is intentionally coarse — its only job is to keep Prometheus
     series count constant regardless of how many exception classes exist.
     """
+    # Local import keeps the metrics module free of a hard SQLAlchemy load
+    # cycle for callers that only need AI-review helpers.
+    from sqlalchemy.exc import SQLAlchemyError
+
     # Timeouts first: a TimeoutError may also subclass OSError, and project
     # AdCP errors that mean "service unavailable" are timeout-ish operationally.
     if isinstance(error, TimeoutError | AdCPServiceUnavailableError | AdCPRateLimitError):
@@ -63,12 +77,22 @@ def categorize_error(error: BaseException) -> str:
     # AI/model layer surfaces failures as RuntimeError or connection errors.
     if isinstance(error, RuntimeError | ConnectionError):
         return "model_error"
+    # Scheduler / ORM failures — DataError, OperationalError, InterfaceError, …
+    if isinstance(error, SQLAlchemyError):
+        return "db_error"
     return "other"
 
 
 def sanitize_policy_triggered(value: str | None) -> str:
     """Return ``value`` if it is in the allowlist, else ``"other"``."""
     if value in POLICY_TRIGGERED_ALLOWLIST:
+        return value
+    return "other"
+
+
+def sanitize_scheduler(value: str | None) -> str:
+    """Return ``value`` if it is in the scheduler allowlist, else ``"other"``."""
+    if value in SCHEDULER_ALLOWLIST:
         return value
     return "other"
 
@@ -142,21 +166,12 @@ webhook_queue_size = Gauge(
 )
 
 # ---------------------------------------------------------------------------
-# Media-buy status scheduler metrics
+# Scheduler isolation-error metrics (status + delivery + future adopters)
 # ---------------------------------------------------------------------------
-media_buy_status_scheduler_errors = Counter(
-    "media_buy_status_scheduler_errors_total",
-    "Per-buy status scheduler isolation errors by bounded error type",
-    ["tenant_id", "error_type"],
-)
-
-# ---------------------------------------------------------------------------
-# Delivery webhook scheduler metrics
-# ---------------------------------------------------------------------------
-delivery_webhook_scheduler_errors = Counter(
-    "delivery_webhook_scheduler_errors_total",
-    "Per-buy delivery webhook scheduler isolation errors by bounded error type",
-    ["tenant_id", "error_type"],
+scheduler_isolation_errors = Counter(
+    "scheduler_isolation_errors_total",
+    "Per-item scheduler isolation errors by bounded scheduler and error type",
+    ["scheduler", "tenant_id", "error_type"],
 )
 
 
@@ -177,17 +192,10 @@ def record_ai_review_error(tenant_id: str, error: BaseException) -> None:
     ai_review_errors.labels(tenant_id=tenant_id, error_type=categorize_error(error)).inc()
 
 
-def record_media_buy_status_scheduler_error(tenant_id: str, error: BaseException) -> None:
-    """Increment :data:`media_buy_status_scheduler_errors` with a bounded ``error_type``."""
-    media_buy_status_scheduler_errors.labels(
-        tenant_id=tenant_id,
-        error_type=categorize_error(error),
-    ).inc()
-
-
-def record_delivery_webhook_scheduler_error(tenant_id: str, error: BaseException) -> None:
-    """Increment :data:`delivery_webhook_scheduler_errors` with a bounded ``error_type``."""
-    delivery_webhook_scheduler_errors.labels(
+def record_scheduler_isolation_error(scheduler: str, tenant_id: str, error: BaseException) -> None:
+    """Increment :data:`scheduler_isolation_errors` with bounded labels."""
+    scheduler_isolation_errors.labels(
+        scheduler=sanitize_scheduler(scheduler),
         tenant_id=tenant_id,
         error_type=categorize_error(error),
     ).inc()

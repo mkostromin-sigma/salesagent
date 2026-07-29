@@ -7,7 +7,9 @@ Prometheus series accumulating without bound, plus unbounded ``error_type`` (fro
 
 """
 
-from prometheus_client import Histogram
+import pytest
+from prometheus_client import Counter, Histogram
+from sqlalchemy.exc import OperationalError
 
 
 def _series_count(collector) -> int:
@@ -33,9 +35,9 @@ def test_no_histogram_has_tenant_id_label():
 
 def test_categorize_error_bounds_error_type_to_enum():
     """categorize_error must collapse arbitrary exceptions into a fixed enum."""
-    from src.core.metrics import categorize_error
+    from src.core.metrics import ERROR_TYPE_VALUES, categorize_error
 
-    allowed = {"validation", "timeout", "model_error", "other"}
+    allowed = set(ERROR_TYPE_VALUES)
 
     # 1000 distinct exception classes must all map into the fixed enum.
     seen = set()
@@ -47,47 +49,67 @@ def test_categorize_error_bounds_error_type_to_enum():
     assert len(allowed) <= 5
 
 
-def test_record_ai_review_error_cardinality_bounded():
-    """Recording 1000 unique error types for one tenant must produce a bounded
-    number of series (<= enum size, accounting for Counter's _total/_created
-    sample pair)."""
+def _error_type_counters():
+    """Derive Counters that carry a bounded ``error_type`` label."""
     from src.core import metrics
 
-    metrics.ai_review_errors.clear()
-    for i in range(1000):
-        exc_cls = type(f"FakeError{i}", (Exception,), {})
-        metrics.record_ai_review_error(tenant_id="t1", error=exc_cls("boom"))
-
-    samples = list(metrics.ai_review_errors.collect())[0].samples
-    # One tenant x <=4 enum error types. prometheus emits _total + _created per
-    # label set, so <= 4 * 2 = 8; allow headroom up to 10.
-    assert len(samples) <= 10, f"Expected bounded error_type series, got {len(samples)}"
+    found = []
+    for name in dir(metrics):
+        obj = getattr(metrics, name)
+        if isinstance(obj, Counter) and "error_type" in getattr(obj, "_labelnames", ()):
+            found.append((name, obj))
+    return found
 
 
-def test_record_media_buy_status_scheduler_error_cardinality_bounded():
-    """Status scheduler error counter must bound error_type the same way."""
+@pytest.mark.parametrize(
+    ("name", "recorder_kwargs"),
+    [
+        ("ai_review_errors", {"via": "ai_review"}),
+        ("scheduler_isolation_errors", {"via": "scheduler", "scheduler": "media_buy_status"}),
+        ("scheduler_isolation_errors", {"via": "scheduler", "scheduler": "delivery_webhook"}),
+    ],
+)
+def test_error_type_counter_cardinality_bounded(name, recorder_kwargs):
+    """Recording 1000 unique error types for one tenant must stay bounded."""
     from src.core import metrics
 
-    metrics.media_buy_status_scheduler_errors.clear()
-    for i in range(1000):
-        exc_cls = type(f"FakeStatusSchedError{i}", (Exception,), {})
-        metrics.record_media_buy_status_scheduler_error(tenant_id="t1", error=exc_cls("boom"))
+    assert name in {n for n, _ in _error_type_counters()}
+    collector = getattr(metrics, name)
+    collector.clear()
 
-    samples = list(metrics.media_buy_status_scheduler_errors.collect())[0].samples
-    assert len(samples) <= 10, f"Expected bounded error_type series, got {len(samples)}"
+    if recorder_kwargs["via"] == "ai_review":
+        for i in range(1000):
+            exc_cls = type(f"FakeError{i}", (Exception,), {})
+            metrics.record_ai_review_error(tenant_id="t1", error=exc_cls("boom"))
+    else:
+        for i in range(1000):
+            exc_cls = type(f"FakeSchedError{i}", (Exception,), {})
+            metrics.record_scheduler_isolation_error(
+                scheduler=recorder_kwargs["scheduler"],
+                tenant_id="t1",
+                error=exc_cls("boom"),
+            )
+
+    # prometheus emits _total + _created per label set.
+    assert _series_count(collector) <= len(metrics.ERROR_TYPE_VALUES) * 2
 
 
-def test_record_delivery_webhook_scheduler_error_cardinality_bounded():
-    """Delivery webhook scheduler error counter must bound error_type the same way."""
+def test_scheduler_isolation_oracle_uses_db_error_class():
+    """Unit oracle must exercise a class the scheduler loop can raise."""
     from src.core import metrics
 
-    metrics.delivery_webhook_scheduler_errors.clear()
-    for i in range(1000):
-        exc_cls = type(f"FakeDeliverySchedError{i}", (Exception,), {})
-        metrics.record_delivery_webhook_scheduler_error(tenant_id="t1", error=exc_cls("boom"))
-
-    samples = list(metrics.delivery_webhook_scheduler_errors.collect())[0].samples
-    assert len(samples) <= 10, f"Expected bounded error_type series, got {len(samples)}"
+    metrics.scheduler_isolation_errors.clear()
+    metrics.record_scheduler_isolation_error(
+        scheduler="media_buy_status",
+        tenant_id="t1",
+        error=OperationalError("SELECT 1", {}, Exception("timeout")),
+    )
+    assert (
+        metrics.scheduler_isolation_errors.labels(
+            scheduler="media_buy_status", tenant_id="t1", error_type="db_error"
+        )._value.get()
+        == 1
+    )
 
 
 def test_sanitize_policy_triggered_allowlist():
@@ -105,6 +127,15 @@ def test_sanitize_policy_triggered_allowlist():
     assert sanitize_policy_triggered(None) == "other"
 
 
+def test_sanitize_scheduler_allowlist():
+    from src.core.metrics import SCHEDULER_ALLOWLIST, sanitize_scheduler
+
+    for known in SCHEDULER_ALLOWLIST:
+        assert sanitize_scheduler(known) == known
+    assert sanitize_scheduler("not_a_real_scheduler") == "other"
+    assert sanitize_scheduler(None) == "other"
+
+
 def test_ai_review_total_cardinality_bounded_under_freeform_policy():
     """Feeding 1000 free-form policy_triggered values through the recording
     path must not explode ai_review_total series for a single tenant/decision."""
@@ -118,7 +149,6 @@ def test_ai_review_total_cardinality_bounded_under_freeform_policy():
             policy_triggered=f"free_form_{i}",
         )
 
-    samples = list(metrics.ai_review_total.collect())[0].samples
     # tenant t1 x decision pending_review x policy in {whatever known + other}.
     # Free-form all collapse to 'other' -> 1 label set -> <= 2 samples.
-    assert len(samples) <= 4, f"Expected bounded policy_triggered series, got {len(samples)}"
+    assert _series_count(metrics.ai_review_total) <= 4

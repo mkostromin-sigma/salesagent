@@ -14,7 +14,6 @@ import asyncio
 import logging
 import os
 from datetime import UTC, datetime
-from typing import NamedTuple
 
 from sqlalchemy import select
 
@@ -88,12 +87,13 @@ class MediaBuyStatusScheduler:
     async def _update_statuses(self) -> None:
         """Check and update media buy statuses based on flight dates.
 
-        Per-buy work runs inside a SAVEPOINT (``session.begin_nested``) so a
-        DB error on one buy rolls back only that buy; siblings still reach the
-        terminal ``session.commit``. Connection-class errors
-        (``OperationalError`` / ``DisconnectionError``) are *not* isolated —
-        they re-raise through :func:`run_isolated_batch` so ``get_db_session``
-        can trip the process-global breaker.
+        Per-buy work runs inside a SAVEPOINT opened by
+        :func:`run_isolated_batch` (``session=``) so a DB error on one buy
+        rolls back only that buy; siblings still reach the terminal
+        ``session.commit``. Dead-connection errors
+        (``connection_invalidated`` / ``DisconnectionError``) are *not*
+        isolated — they re-raise so ``get_db_session`` can trip the
+        process-global breaker.
         """
         now = datetime.now(UTC)
 
@@ -150,16 +150,18 @@ class MediaBuyStatusScheduler:
                         updated_count += 1
                         logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
 
-                if updated_count > 0:
+                if outcome.processed > 0:
                     session.commit()
                 # Suppress all-quiet ticks (60s cadence); WARNING when every
                 # attempted flip failed so the error tally stays visible.
-                if updated_count or errors:
-                    summary = f"Media buy status update complete: {updated_count} updated, {errors} errors"
-                    if errors and not updated_count:
-                        logger.warning(summary)
-                    else:
-                        logger.info(summary)
+                log_batch_summary(
+                    logger,
+                    "Media buy status update complete",
+                    outcome.processed,
+                    outcome.errors,
+                    suppress_when_quiet=True,
+                    success_label="updated",
+                )
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)

@@ -551,12 +551,12 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
 
     Uses a SAVEPOINT-backed per-buy body: injecting ``SELECT 1/0`` poisons the
     statement and would abort a single terminal commit without isolation.
-    Delivery webhook isolation is analogous for non-ORM I/O; this loop also
-    defers ORM state, so savepoints are required here.
 
     Observability is asserted via the module logger (not ``caplog``): integration
     CI loads logfire's pytest plugin, which intercepts stdlib logging so
-    ``caplog.records`` stays empty even at root INFO.
+    ``caplog.records`` stays empty even at root INFO. (Also
+    ``logging.basicConfig(..., force=True)`` in logging_config strips pytest
+    capture handlers.)
     """
     tenant_id = _create_test_tenant(f"tenant_isolation_1714_{raiser_slot}")
     principal_id = _create_test_principal(tenant_id)
@@ -594,14 +594,16 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
         processed.append(media_buy.media_buy_id)
         if media_buy.media_buy_id == bad_buy_id:
             # Division by zero → InternalError/DataError; poisons the TX unless
-            # wrapped in begin_nested. Not OperationalError, so isolation applies.
+            # wrapped in begin_nested.
             session.execute(text("SELECT 1/0"))
         return real_compute(media_buy, now_arg, session)
 
-    from src.core.metrics import media_buy_status_scheduler_errors
+    from src.core.metrics import scheduler_isolation_errors
 
-    # Division-by-zero maps through categorize_error → "other"
-    metric_before = media_buy_status_scheduler_errors.labels(tenant_id=tenant_id, error_type="other")._value.get()
+    # DataError maps through categorize_error → "db_error"
+    metric_before = scheduler_isolation_errors.labels(
+        scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
+    )._value.get()
 
     with (
         patch.object(status_scheduler_mod.logger, "error") as mock_error,
@@ -623,16 +625,130 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     assert f"media_buy_id={bad_buy_id}" in err_msg
     assert mock_error.call_args.kwargs.get("exc_info") is True
 
-    summary_msgs = [
+    info_summaries = [
         call.args[0]
-        for call in (*mock_info.call_args_list, *mock_warning.call_args_list)
+        for call in mock_info.call_args_list
         if call.args and "Media buy status update complete:" in str(call.args[0])
     ]
-    assert len(summary_msgs) == 1
-    assert "2 updated, 1 errors" in summary_msgs[0]
+    warning_summaries = [
+        call.args[0]
+        for call in mock_warning.call_args_list
+        if call.args and "Media buy status update complete:" in str(call.args[0])
+    ]
+    assert len(info_summaries) == 1
+    assert "2 updated, 1 errors" in info_summaries[0]
+    assert warning_summaries == []
 
-    metric_after = media_buy_status_scheduler_errors.labels(tenant_id=tenant_id, error_type="other")._value.get()
+    metric_after = scheduler_isolation_errors.labels(
+        scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
+    )._value.get()
     assert metric_after == metric_before + 1
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_operational_error_class_is_isolated_without_invalidated(integration_db):
+    """OperationalError without connection_invalidated must isolate (#1714 class)."""
+    from sqlalchemy.exc import OperationalError
+
+    tenant_id = _create_test_tenant("tenant_isolation_oe_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    now = datetime.now(UTC)
+    past_start = now - timedelta(days=7)
+    past_end = now - timedelta(hours=1)
+
+    buy_ids = ["mb_oe_a", "mb_oe_b", "mb_oe_c"]
+    bad_buy_id = "mb_oe_b"
+
+    for mid in buy_ids:
+        _create_media_buy(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=mid,
+            status="active",
+            start_time=past_start,
+            end_time=past_end,
+        )
+
+    scheduler = MediaBuyStatusScheduler()
+    real_compute = scheduler._compute_new_status
+    processed: list[str] = []
+
+    def _compute_with_oe(media_buy, now_arg, session):
+        processed.append(media_buy.media_buy_id)
+        if media_buy.media_buy_id == bad_buy_id:
+            # Statement-timeout shaped failure: OperationalError, connection still usable.
+            raise OperationalError("SELECT …", {}, Exception("QueryCanceled"))
+        return real_compute(media_buy, now_arg, session)
+
+    from src.core.metrics import scheduler_isolation_errors
+
+    metric_before = scheduler_isolation_errors.labels(
+        scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
+    )._value.get()
+
+    with patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_oe):
+        await scheduler._update_statuses()
+
+    assert set(processed) == set(buy_ids)
+    assert _get_media_buy_status(tenant_id, "mb_oe_a") == "completed"
+    assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
+    assert _get_media_buy_status(tenant_id, "mb_oe_c") == "completed"
+
+    metric_after = scheduler_isolation_errors.labels(
+        scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
+    )._value.get()
+    assert metric_after == metric_before + 1
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_all_failing_flips_emit_warning_summary(integration_db):
+    """All-fail batch must WARNING the summary; INFO must not carry it."""
+    tenant_id = _create_test_tenant("tenant_isolation_all_fail_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    now = datetime.now(UTC)
+    past_start = now - timedelta(days=7)
+    past_end = now - timedelta(hours=1)
+
+    buy_ids = ["mb_all_fail_a", "mb_all_fail_b", "mb_all_fail_c"]
+    for mid in buy_ids:
+        _create_media_buy(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=mid,
+            status="active",
+            start_time=past_start,
+            end_time=past_end,
+        )
+
+    scheduler = MediaBuyStatusScheduler()
+
+    def _always_fail(_media_buy, _now_arg, _session):
+        raise ValueError("flip failed")
+
+    with (
+        patch.object(status_scheduler_mod.logger, "info") as mock_info,
+        patch.object(status_scheduler_mod.logger, "warning") as mock_warning,
+        patch.object(scheduler, "_compute_new_status", side_effect=_always_fail),
+    ):
+        await scheduler._update_statuses()
+
+    warning_msgs = [
+        call.args[0]
+        for call in mock_warning.call_args_list
+        if call.args and "Media buy status update complete:" in str(call.args[0])
+    ]
+    info_msgs = [
+        call.args[0]
+        for call in mock_info.call_args_list
+        if call.args and "Media buy status update complete:" in str(call.args[0])
+    ]
+    assert len(warning_msgs) == 1
+    assert "0 updated, 3 errors" in warning_msgs[0]
+    assert info_msgs == []
 
 
 # =============================================================================
