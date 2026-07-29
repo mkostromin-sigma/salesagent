@@ -421,6 +421,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     from src.services.media_buy_creative_readiness import (
                         compute_media_buy_status_from_flight_dates,
                         evaluate_creative_finalize_readiness_for_session,
+                        stamp_media_buy_approval,
                     )
 
                     readiness = evaluate_creative_finalize_readiness_for_session(
@@ -438,8 +439,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
 
-                    media_buy.approved_at = datetime.now(UTC)
-                    media_buy.approved_by = user_email
+                    stamp_media_buy_approval(media_buy, approved_by=user_email)
                     media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
                     # Capture canonical status while media_buy is still attached.
                     # execute_approved_media_buy opens its own session and leaves this

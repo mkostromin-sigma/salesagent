@@ -14,6 +14,7 @@ from src.services.media_buy_creative_readiness import (
     evaluate_creative_finalize_readiness,
     evaluate_creative_finalize_readiness_for_session,
     log_creative_finalize_hold,
+    stamp_media_buy_approval,
 )
 
 
@@ -178,6 +179,14 @@ class TestApplyCreativeFinalizeHold:
         assert not any(" reason=" in r.message for r in caplog.records)
 
 
+class TestStampMediaBuyApproval:
+    def test_stamps_provenance(self):
+        media_buy = MagicMock()
+        stamp_media_buy_approval(media_buy, approved_by="op@example.com")
+        assert media_buy.approved_by == "op@example.com"
+        assert media_buy.approved_at is not None
+
+
 class TestLogCreativeFinalizeHold:
     def test_uses_hold_reason_key(self, caplog):
         readiness = CreativeFinalizeReadiness(
@@ -238,6 +247,32 @@ class TestComputeMediaBuyStatusFromFlightDates:
         mb.end_time = None
         mb.start_date = (datetime.now(UTC) + timedelta(days=2)).date()
         mb.end_date = (datetime.now(UTC) + timedelta(days=10)).date()
+        assert compute_media_buy_status_from_flight_dates(mb) == "scheduled"
+
+    def test_active_when_in_window(self):
+        mb = MagicMock()
+        mb.start_time = datetime.now(UTC) - timedelta(days=1)
+        mb.end_time = datetime.now(UTC) + timedelta(days=10)
+        mb.start_date = None
+        mb.end_date = None
+        assert compute_media_buy_status_from_flight_dates(mb) == "active"
+
+    def test_active_when_only_start_in_past(self):
+        """Single-boundary fallback: past start_time alone → active."""
+        mb = MagicMock()
+        mb.start_time = datetime.now(UTC) - timedelta(days=1)
+        mb.end_time = None
+        mb.start_date = None
+        mb.end_date = None
+        assert compute_media_buy_status_from_flight_dates(mb) == "active"
+
+    def test_scheduled_when_only_start_in_future(self):
+        """Single-boundary: future start_time alone → scheduled."""
+        mb = MagicMock()
+        mb.start_time = datetime.now(UTC) + timedelta(days=2)
+        mb.end_time = None
+        mb.start_date = None
+        mb.end_date = None
         assert compute_media_buy_status_from_flight_dates(mb) == "scheduled"
 
 

@@ -181,6 +181,8 @@ def make_pending_media_buy(integration_db):
             "tenant_id": tenant.tenant_id,
             "media_buy_id": media_buy.media_buy_id,
             "principal_id": principal.principal_id,
+            "context_id": context.context_id,
+            "step_id": step.step_id,
         }
 
     try:
@@ -577,6 +579,38 @@ class TestAdminMediaBuyRejectWebhook:
             f"approve echo webhook must also embed canonical media_buy_status, got {embedded.get('media_buy_status')!r}"
         )
 
+    def test_a2a_approve_webhook_embeds_media_buy_status(
+        self, authenticated_admin_session, make_pending_media_buy, webhook_capture
+    ):
+        """A2A approve embeds the same canonical media_buy_status as the MCP sibling.
+
+        KM Jul29: both approve assertions previously ran under protocol=\"mcp\" only;
+        the a2a create_a2a_webhook_payload branch had zero coverage for the dual-emit
+        media_buy_status field. Mirror test_a2a_reject_webhook_carries_policy_violation_task
+        for the approve Success path.
+        """
+        from google.protobuf.json_format import MessageToDict
+
+        ids = make_pending_media_buy(protocol="a2a", media_buy_id="mb_a2a_approve", tenant_id="a2a_appr_tenant")
+
+        _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+        assert "payload" in webhook_capture, "A2A approve route did not send a webhook payload"
+        task = webhook_capture["payload"]
+        body = MessageToDict(task, preserving_proto_field_name=True)
+
+        artifacts = body.get("artifacts") or []
+        assert artifacts, f"A2A approve Task must embed the result artifact, got {body!r}"
+        datas = [part.get("data", {}).get("data", part.get("data", {})) for part in artifacts[0].get("parts", [])]
+        result_data = next(
+            (d for d in datas if isinstance(d, dict) and d.get("media_buy_id") == ids["media_buy_id"]),
+            None,
+        )
+        assert result_data is not None, f"A2A approve artifact must carry the Success payload, got {artifacts!r}"
+        assert result_data.get("media_buy_status") == "pending_start", (
+            f"A2A approve must embed canonical media_buy_status matching MCP sibling, "
+            f"got media_buy_status={result_data.get('media_buy_status')!r}"
+        )
+
 
 class TestAdminMediaBuyApproveHold:
     """Approve with Hold predicate (#1696): pending_creatives, no adapter, no webhook."""
@@ -622,3 +656,95 @@ class TestAdminMediaBuyApproveHold:
             assert buy.status == "pending_creatives", f"hold arm must persist pending_creatives, got {buy.status!r}"
             assert buy.approved_at is not None
             assert buy.approved_by
+
+
+def _post_workflow_approve(admin_session, ids: dict):
+    """Drive the real workflows approve route (JSON) and assert 200 success."""
+    resp = admin_session.post(
+        f"/tenant/{ids['tenant_id']}/workflows/{ids['context_id']}/steps/{ids['step_id']}/approve",
+        content_type="application/json",
+        json={},
+    )
+    assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.data!r}"
+    body = resp.get_json()
+    assert body.get("success") is True, f"expected success, got {body!r}"
+    return body
+
+
+class TestAdminWorkflowApproveHold:
+    """Workflows approve twin of TestAdminMediaBuyApproveHold (#1696 / KM Jul29).
+
+    Grades the real ``approve_workflow_step`` Flask route (decorators intact) against
+    persisted MediaBuy state — not decorator-stripped unit doubles.
+    """
+
+    @pytest.mark.parametrize(
+        "make_kwargs,expected_hold",
+        [
+            ({"include_assignment": False}, "no_assignments"),
+            ({"include_assignment": True, "creative_approved": False}, "unapproved_creatives"),
+        ],
+        ids=["no_assignments", "unapproved_creatives"],
+    )
+    def test_workflow_approve_holds_without_execute(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+        make_kwargs,
+        expected_hold,
+    ):
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        suffix = f"wf{expected_hold.replace('_', '')[:6]}"
+        ids = make_pending_media_buy(
+            tenant_id=f"wfh_{suffix}_t",
+            media_buy_id=f"mb_wfh_{suffix}",
+            principal_id=f"wfh_{suffix}_p",
+            **make_kwargs,
+        )
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+        ) as mock_execute:
+            _post_workflow_approve(authenticated_admin_session, ids)
+
+        mock_execute.assert_not_called()
+
+        with MediaBuyUoW(ids["tenant_id"]) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(ids["media_buy_id"])
+            assert buy is not None
+            assert buy.status == "pending_creatives", f"hold arm must persist pending_creatives, got {buy.status!r}"
+            assert buy.approved_at is not None
+            assert buy.approved_by
+
+    def test_workflow_approve_ready_persists_flight_status_and_executes(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+    ):
+        """Ready arm: real compute (unpatched) → scheduled for future-start buy + execute."""
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        ids = make_pending_media_buy(
+            tenant_id="wf_ready_t",
+            media_buy_id="mb_wf_ready",
+            principal_id="wf_ready_p",
+        )
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+            return_value=(True, None),
+        ) as mock_execute:
+            _post_workflow_approve(authenticated_admin_session, ids)
+
+        mock_execute.assert_called_once_with(ids["media_buy_id"], ids["tenant_id"])
+
+        with MediaBuyUoW(ids["tenant_id"]) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(ids["media_buy_id"])
+            assert buy is not None
+            # make_pending_media_buy seeds start_time = now+7d → scheduled
+            assert buy.status == "scheduled", f"ready arm must persist flight-window status, got {buy.status!r}"
+            assert buy.approved_at is not None
+            assert buy.approved_by == "test@example.com"

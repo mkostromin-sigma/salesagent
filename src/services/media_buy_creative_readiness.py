@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Literal
+from typing import Literal, cast
 
 from sqlalchemy.orm import Session
 
@@ -127,6 +127,12 @@ def log_creative_finalize_hold(media_buy_id: str, readiness: CreativeFinalizeRea
     )
 
 
+def stamp_media_buy_approval(media_buy: MediaBuy, *, approved_by: str) -> None:
+    """Stamp approval provenance once — shared by hold and ready arms."""
+    media_buy.approved_at = datetime.now(UTC)
+    media_buy.approved_by = approved_by
+
+
 def apply_creative_finalize_hold(
     media_buy: MediaBuy,
     readiness: CreativeFinalizeReadiness,
@@ -134,8 +140,7 @@ def apply_creative_finalize_hold(
     approved_by: str,
 ) -> None:
     """Apply hold outcome: provenance + pending_creatives + single info log."""
-    media_buy.approved_at = datetime.now(UTC)
-    media_buy.approved_by = approved_by
+    stamp_media_buy_approval(media_buy, approved_by=approved_by)
     media_buy.status = "pending_creatives"
     log_creative_finalize_hold(media_buy.media_buy_id, readiness)
 
@@ -158,14 +163,16 @@ def compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
     """Compute post-approve status from flight window: active / scheduled / completed."""
     now = datetime.now(UTC)
 
+    # MediaBuy annotates start_date/end_date as Mapped[Date] (SQLAlchemy type), not
+    # Mapped[date]; runtime values are datetime.date. Cast bridges the model typo.
     start_time = _coerce_flight_boundary(
         media_buy.start_time,
-        getattr(media_buy, "start_date", None),
+        cast(date | None, media_buy.start_date),
         end_of_day=False,
     )
     end_time = _coerce_flight_boundary(
         media_buy.end_time,
-        getattr(media_buy, "end_date", None),
+        cast(date | None, media_buy.end_date),
         end_of_day=True,
     )
 

@@ -15,9 +15,6 @@ from adcp.types import (
 from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.models import (
-    MediaBuy,
-)
-from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
@@ -79,15 +76,6 @@ def _cleanup_completed_tasks():
         for task_id in completed_tasks:
             del _ai_review_tasks[task_id]
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
-
-
-def _compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
-    """Compute status from flight dates (active / scheduled / completed)."""
-    from src.services.media_buy_creative_readiness import (
-        compute_media_buy_status_from_flight_dates,
-    )
-
-    return compute_media_buy_status_from_flight_dates(media_buy)
 
 
 async def _call_webhook_for_creative_status(
@@ -601,13 +589,22 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 approved_at=datetime.now(UTC),
             )
 
-            if approval.ok:
-                # No post-execute read or write here. The callee resolved the flight
-                # window and committed it in the same write that bumped the revision;
-                # this route only reports what it was told.
-                logger.info(
-                    f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} created in adapter -> {approval.status}"
+            if success:
+                # Update media buy status in a separate UoW
+                from src.services.media_buy_creative_readiness import (
+                    compute_media_buy_status_from_flight_dates,
+                    stamp_media_buy_approval,
                 )
+
+                with AdminCreativeUoW(tenant_id) as uow2:
+                    assert uow2.media_buys is not None
+                    mb = uow2.media_buys.get_by_id(action["media_buy_id"])
+                    if mb:
+                        stamp_media_buy_approval(mb, approved_by=approved_by)
+                        mb.status = compute_media_buy_status_from_flight_dates(mb)
+                    # auto-commits
+
+                logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")
             else:
                 logger.error(
                     f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"

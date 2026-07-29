@@ -205,6 +205,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     from src.services.media_buy_creative_readiness import (
                         compute_media_buy_status_from_flight_dates,
                         evaluate_creative_finalize_readiness_for_session,
+                        stamp_media_buy_approval,
                     )
 
                     readiness = evaluate_creative_finalize_readiness_for_session(
@@ -219,8 +220,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         )
                         return jsonify({"success": True}), 200
 
-                    media_buy.approved_at = datetime.now(UTC)
-                    media_buy.approved_by = user_email
+                    stamp_media_buy_approval(media_buy, approved_by=user_email)
 
                     # Execute adapter creation
                     from src.core.tools.media_buy_create import execute_approved_media_buy
