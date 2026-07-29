@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import contextmanager, nullcontext
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 from sqlalchemy.exc import DisconnectionError
 from sqlalchemy.orm import Session
@@ -49,12 +49,18 @@ class SchedulerItemContext(NamedTuple):
     media_buy_id: str
 
 
-def media_buy_context(media_buy: object) -> SchedulerItemContext:
+class _HasMediaBuyIds(Protocol):
+    tenant_id: str
+    principal_id: str
+    media_buy_id: str
+
+
+def media_buy_context(media_buy: _HasMediaBuyIds) -> SchedulerItemContext:
     """Build :class:`SchedulerItemContext` with keyword fields (swap-safe)."""
     return SchedulerItemContext(
-        tenant_id=media_buy.tenant_id,  # type: ignore[attr-defined]
-        principal_id=media_buy.principal_id,  # type: ignore[attr-defined]
-        media_buy_id=media_buy.media_buy_id,  # type: ignore[attr-defined]
+        tenant_id=media_buy.tenant_id,
+        principal_id=media_buy.principal_id,
+        media_buy_id=media_buy.media_buy_id,
     )
 
 
@@ -97,7 +103,7 @@ def _item_transaction_scope(session: Session | None):
             yield
 
 
-def _safe_on_error(on_error: Callable[[object, Exception], None], ctx: object, exc: Exception) -> None:
+def _safe_on_error[C](on_error: Callable[[C, Exception], None], ctx: C, exc: Exception) -> None:
     """Invoke ``on_error`` without letting a raising handler abort the batch."""
     try:
         on_error(ctx, exc)
