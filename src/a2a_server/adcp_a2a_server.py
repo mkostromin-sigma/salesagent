@@ -62,6 +62,7 @@ from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPError,
+    AdCPTaskNotFoundError,
     AdCPValidationError,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
@@ -414,23 +415,15 @@ class AdCPRequestHandler(RequestHandler):
             testing_context=identity.testing_context,
         )
 
-    # Snake_case op ids for record_boundary_error → buyer-facing wire phrases.
-    _AUTH_OPERATION_WIRE_PHRASES: dict[str, str] = {
-        "get_task": "get task",
-        "cancel_task": "cancel task",
-        "get_push_notification_config": "get push notification config",
-        "create_push_notification_config": "create push notification config",
-        "list_push_notification_configs": "list push notification configs",
-        "delete_push_notification_config": "delete push notification config",
-    }
-
     def _authenticate(self, context: ServerCallContext | None, *, operation: str) -> ResolvedIdentity:
         """Resolve a valid principal identity for authenticated A2A operations.
 
         Auth failures (``A2AError`` / ``InvalidRequestError``) propagate unchanged.
         Unexpected failures become ``InternalError`` with a fixed human-phrase
-        message — never interpolate ``str(exc)`` or raw snake_case op ids into
-        the client-facing message (e.g. ``get_task`` → ``"get task failed"``).
+        message and a two-layer recovery envelope — never interpolate ``str(exc)``
+        or raw snake_case op ids into the client-facing message
+        (e.g. ``get_task`` → ``"get task failed"``). Op ids are chosen so
+        ``operation.replace("_", " ")`` is the wire phrase (no hand-maintained map).
         """
         auth_token = self._get_auth_token(context)
         try:
@@ -439,8 +432,20 @@ class AdCPRequestHandler(RequestHandler):
             raise
         except Exception as e:
             record_boundary_error("a2a", operation, e)
-            wire_op = self._AUTH_OPERATION_WIRE_PHRASES.get(operation, operation.replace("_", " "))
-            raise InternalError(message=f"{wire_op} failed") from e
+            # Underscore→space is the wire phrase; keep op ids underscore-replaceable.
+            wire_op = operation.replace("_", " ")
+            # Fixed message + typed envelope — do NOT route through
+            # ``normalize_to_adcp_error(e)`` (re-copies ``str(exc)`` / SQL).
+            raise InternalError(
+                message=f"{wire_op} failed",
+                data=build_two_layer_error_envelope(
+                    AdCPError(
+                        message=f"{wire_op} failed",
+                        error_code="INTERNAL_ERROR",
+                        recovery="transient",
+                    )
+                ),
+            ) from e
 
     def _log_a2a_operation(
         self,
@@ -1167,21 +1172,34 @@ class AdCPRequestHandler(RequestHandler):
         task = self.tasks.get(task_id)
         expected_owner = _TaskOwner(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
         if task is None or self._task_owners.get(task_id) != expected_owner:
-            logger.warning(
-                "Failed to authorize task access for %s: tenant_id=%s principal_id=%s",
-                task_id,
-                identity.tenant_id,
-                identity.principal_id,
-            )
-            not_found = self._task_not_found(task_id)
+            # Wire must stay indistinguishable (existence oracle); log may branch.
+            if task is not None:
+                logger.warning(
+                    "Ownership denial for task %s: caller tenant_id=%s principal_id=%s",
+                    task_id,
+                    identity.tenant_id,
+                    identity.principal_id,
+                )
+            else:
+                logger.warning(
+                    "Unknown task id on %s: task_id=%s caller tenant_id=%s principal_id=%s",
+                    operation,
+                    task_id,
+                    identity.tenant_id,
+                    identity.principal_id,
+                )
+            # Telemetry uses typed AdCPError (WARNING branch). ``TaskNotFoundError``
+            # is an A2AError, not AdCPError — passing it took the untyped
+            # ``exc_info=True`` path with no active exception (NoneType: None)
+            # and logged ordinary stale-handle polls at ERROR.
             record_boundary_error(
                 "a2a",
                 operation,
-                not_found,
+                AdCPTaskNotFoundError(message=f"Task not found: {task_id}"),
                 tenant_id=identity.tenant_id,
                 principal_id=identity.principal_id,
             )
-            raise not_found
+            raise self._task_not_found(task_id)
         return task
 
     async def on_get_task(
@@ -1311,7 +1329,9 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            identity = self._authenticate(context, operation="create_push_notification_config")
+            # Op id must match tool_context + body error path ("set …") so auth
+            # failures join the same method vocabulary.
+            identity = self._authenticate(context, operation="set_push_notification_config")
             tool_context = self._make_tool_context(identity, "set_push_notification_config")
 
             # In a2a-sdk 1.0, TaskPushNotificationConfig is a flat protobuf message
@@ -1371,7 +1391,7 @@ class AdCPRequestHandler(RequestHandler):
         except Exception as e:
             record_boundary_error(
                 "a2a",
-                "create_push_notification_config",
+                "set_push_notification_config",
                 e,
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,

@@ -102,9 +102,18 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
 
 
 def _is_a2a_test_file(path: Path) -> bool:
-    """A2A test files are governed by the stricter zero-tolerance guard."""
+    """A2A test files are governed by the stricter zero-tolerance factory guard.
+
+    Path-aware: unit/integration/e2e ``test_a2a*`` (and architecture a2a guards)
+    are skipped here so the factory guard owns them at zero tolerance.
+    """
     name = path.name
-    return name.startswith("test_a2a") or name.startswith("test_architecture_a2a")
+    if name.startswith("test_architecture_a2a"):
+        return True
+    if not name.startswith("test_a2a"):
+        return False
+    parts = path.parts
+    return "unit" in parts or "integration" in parts or "e2e" in parts
 
 
 def _count_inline_resolved_identity(filepath: Path) -> list[int]:
