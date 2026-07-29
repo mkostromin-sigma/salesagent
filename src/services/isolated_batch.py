@@ -11,6 +11,10 @@ Escape is gated on connection state
 failures inherit ``OperationalError`` but leave the connection usable after
 ``ROLLBACK TO SAVEPOINT``.
 
+Optional ``session=`` opens ``begin_nested()`` per item for ORM-mutating
+callers (status scheduler). Delivery keeps ``session=None`` because a
+SAVEPOINT cannot span the webhook ``await`` / nested session commits.
+
 Callers supply ``item_context`` to capture any values needed for error logging
 *before* the item body runs — under production ``autoflush=True`` a flush
 failure expires ORM attributes, so reading them inside ``on_error`` can raise

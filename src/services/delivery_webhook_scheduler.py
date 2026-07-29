@@ -91,11 +91,12 @@ class DeliveryWebhookScheduler:
     async def _send_reports(self) -> None:
         """Send reports for all active media buys with configured webhooks.
 
-        Per-buy work runs inside a SAVEPOINT opened by
-        :func:`run_isolated_batch_async` (``session=``) so a DB error on one
-        buy rolls back only that buy. Dead-connection errors
-        (``connection_invalidated`` / ``DisconnectionError``) re-raise so
-        ``get_db_session`` can trip the process-global breaker.
+        Per-buy exception isolation uses :func:`run_isolated_batch_async`
+        without ``session=``: a SAVEPOINT cannot span the webhook POST
+        ``await`` (and nested ``get_db_session`` commits in the webhook
+        path). Status scheduler owns SAVEPOINT isolation for ORM flips;
+        delivery isolates non-ORM send failures and meters them only.
+        Dead-connection errors still re-raise via the escape predicate.
         """
         logger.info("Starting scheduled delivery report webhook batch")
 
@@ -127,7 +128,6 @@ class DeliveryWebhookScheduler:
                     _handle_item,
                     item_context=media_buy_context,
                     on_error=_on_error,
-                    session=session,
                     scheduler="delivery_webhook",
                 )
 

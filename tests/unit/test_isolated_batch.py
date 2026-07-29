@@ -260,9 +260,10 @@ def test_run_isolated_batch_opens_savepoint_when_session_provided():
 
 def test_run_isolated_batch_records_scheduler_metric():
     ctx_obj = media_buy_context(MagicMock(tenant_id="tenant-a", principal_id="p", media_buy_id="mb"))
+    raised = OperationalError("SELECT 1", {}, Exception("timeout"))
 
     def handle(_item: int) -> bool:
-        raise OperationalError("SELECT 1", {}, Exception("timeout"))
+        raise raised
 
     with patch("src.services.isolated_batch.record_scheduler_isolation_error") as mock_record:
         outcome = run_isolated_batch(
@@ -274,6 +275,8 @@ def test_run_isolated_batch_records_scheduler_metric():
         )
 
     assert outcome.errors == 1
-    mock_record.assert_called_once()
-    assert mock_record.call_args.kwargs["scheduler"] == "media_buy_status"
-    assert mock_record.call_args.kwargs["tenant_id"] == "tenant-a"
+    mock_record.assert_called_once_with(
+        scheduler="media_buy_status",
+        tenant_id="tenant-a",
+        error=raised,
+    )
