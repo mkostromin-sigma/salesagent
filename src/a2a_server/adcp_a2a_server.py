@@ -619,17 +619,11 @@ class AdCPRequestHandler(RequestHandler):
         context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
 
         # Extract push notification config from protocol layer (A2A SendMessageConfiguration).
-        # SSRF-reject unsafe URLs before stash / task creation.
+        # SSRF gate runs after auth resolution below (defense-in-depth: AUTH_REQUIRED
+        # before scheme/blocked-host checks when the request requires credentials).
         push_notification_config: TaskPushNotificationConfig | None = None
         if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
             push_notification_config = params.configuration.task_push_notification_config
-            if push_notification_config.url:
-                _reject_unsafe_a2a_webhook_url(push_notification_config.url)
-                logger.info(
-                    "Protocol-level push notification config provided for task %s: %s",
-                    task_id,
-                    webhook_url_for_log(push_notification_config.url),
-                )
 
         # Prepare task metadata (JSON-serializable only — protobuf Struct)
         task_metadata: dict[str, Any] = {
@@ -645,9 +639,6 @@ class AdCPRequestHandler(RequestHandler):
             status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
             metadata=_dict_to_struct(task_metadata),
         )
-        # Store push notification config outside protobuf metadata (not JSON-serializable)
-        if push_notification_config:
-            self._task_push_configs[task_id] = push_notification_config
         self.tasks[task_id] = task
 
         try:
@@ -680,6 +671,18 @@ class AdCPRequestHandler(RequestHandler):
                         )
                     ),
                 )
+
+            # SSRF-reject unsafe push URLs after the auth-required gate so callers
+            # that need credentials see AUTH_REQUIRED before scheme/blocked-host checks.
+            if push_notification_config and push_notification_config.url:
+                _reject_unsafe_a2a_webhook_url(push_notification_config.url)
+                logger.info(
+                    "Protocol-level push notification config provided for task %s: %s",
+                    task_id,
+                    webhook_url_for_log(push_notification_config.url),
+                )
+            if push_notification_config:
+                self._task_push_configs[task_id] = push_notification_config
 
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed

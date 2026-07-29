@@ -11,6 +11,7 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -361,8 +362,6 @@ def _post_approval_webhook_with_retries(
     headers: dict[str, str],
 ) -> None:
     """POST the approval payload with retries; refuse open redirects."""
-    import httpx
-
     safe_url = webhook_url_for_log(webhook_url)
     max_retries = 3
     for attempt in range(max_retries):

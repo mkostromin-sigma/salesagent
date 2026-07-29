@@ -919,14 +919,19 @@ class ContextManager(DatabaseManager):
                                 )
                             )
 
-                            def _log_task_result(t: asyncio.Task, config_url: str = safe_webhook_url) -> None:
+                            def _log_task_result(
+                                t: asyncio.Task,
+                                raw_url: str = push_notification_config.url,
+                                safe_url: str = safe_webhook_url,
+                            ) -> None:
                                 # Runs AFTER pin_task's discard (see pin_task
                                 # docstring), so this log-and-swallow can't hold
                                 # the strong ref past completion.
+                                # Pass raw URL — _log_webhook_send_outcome owns sanitize.
                                 try:
-                                    _log_webhook_send_outcome(config_url, t.result())
+                                    _log_webhook_send_outcome(raw_url, t.result())
                                 except Exception as e:
-                                    console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
+                                    console.print(f"[red]❌ Webhook failed for {safe_url}: {str(e)}[/red]")
 
                             # Strong-ref pin against asyncio's weak-ref task
                             # tracker; discard runs before _log_task_result.
@@ -940,7 +945,7 @@ class ContextManager(DatabaseManager):
                                     metadata=metadata,
                                 )
                             )
-                            _log_webhook_send_outcome(safe_webhook_url, sent)
+                            _log_webhook_send_outcome(push_notification_config.url, sent)
 
                     except requests.exceptions.Timeout:
                         console.print(f"[red]❌ Webhook timeout for {safe_webhook_url}[/red]")
