@@ -176,11 +176,19 @@ def _make_nl_message(text: str) -> SendMessageRequest:
 
 
 def _assert_not_found_matches(exc: TaskNotFoundError, task_id: str) -> None:
-    """Grades the exception object (not the JSON-RPC wire envelope)."""
-    expected = AdCPRequestHandler._task_not_found(task_id)
-    assert exc.message == expected.message
+    """Grades the exception object (not the JSON-RPC wire envelope).
+
+    Literal message/data — never call ``_task_not_found`` for the expected side
+    (both sides would move together and hide an identity leak in the envelope).
+    """
+    assert exc.message == f"Task not found: {task_id}"
     # Grades exception object ``data``, not the wire envelope (compat drops it).
-    assert exc.data == expected.data
+    assert exc.data == {"task_id": task_id}
+    blob = f"{exc.message}{exc.data!s}"
+    assert _TENANT not in blob
+    assert _OWNER not in blob
+    assert _SIBLING not in blob
+    assert "leaked_tenant" not in blob
 
 
 @pytest.mark.asyncio
@@ -195,7 +203,7 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
     sibling = PrincipalFactory.make_identity(principal_id=_SIBLING, tenant_id=_TENANT, protocol="a2a")
     other_tenant = PrincipalFactory.make_identity(principal_id=_OWNER, tenant_id=_OTHER_TENANT, protocol="a2a")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
-    params = _make_nl_message("Show me available products in the catalog")
+    params = SendMessageRequest(message=create_a2a_text_message("Show me available products in the catalog"))
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=owner):
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
@@ -424,7 +432,7 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_c
     Mutating the ``_authenticate`` except branch back to ``_task_not_found`` must
     redden this test: buyers see a fixed human-phrase InternalError, not not-found.
     """
-    handler = _owned_handler()
+    handler = seeded_owned_a2a_handler()
 
     with (
         patch.object(handler, "_get_auth_token", return_value="tok"),
@@ -438,9 +446,12 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_c
             await getattr(handler, method_name)(request_cls(id=_TASK_ID), context=None)
 
     raised = exc_info.value
-    assert not isinstance(raised, TaskNotFoundError)
+    assert type(raised) is InternalError
     assert raised.message == wire_message
     assert "_" not in raised.message
+    # Recovery envelope attached (compat may still flatten ``data`` on the wire).
+    assert raised.data is not None
+    assert "adcp_error" in raised.data
 
 
 @pytest.mark.asyncio
@@ -455,23 +466,22 @@ async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name)
     mutating ``!= expected_owner`` out of the gate reddens this path — unknown-id
     alone would stay green.
     """
-    handler = _owned_handler()
+    handler = seeded_owned_a2a_handler()
     owner = PrincipalFactory.make_identity(principal_id=_OWNER, tenant_id=_TENANT, protocol="a2a")
     sibling = PrincipalFactory.make_identity(principal_id=_SIBLING, tenant_id=_TENANT, protocol="a2a")
-
-    def resolve(*, auth_token: str | None, **_kwargs):
-        if auth_token == "sibling-tok":
-            return sibling
-        if auth_token == "owner-tok":
-            return owner
-        raise AssertionError(f"unexpected token: {auth_token!r}")
+    resolve = token_identity_resolver(
+        {
+            OWNED_TASK_SIBLING_TOK: sibling,
+            OWNED_TASK_OWNER_TOK: owner,
+        }
+    )
 
     with patch("src.core.resolved_identity.resolve_identity", side_effect=resolve):
-        sibling_ctx = make_a2a_context(auth_token="sibling-tok", headers={"host": "test.example.com"})
+        sibling_ctx = make_a2a_context(auth_token=OWNED_TASK_SIBLING_TOK, headers={"host": "test.example.com"})
         with pytest.raises(TaskNotFoundError) as deny_exc:
             await getattr(handler, method_name)(request_cls(id=_TASK_ID), context=sibling_ctx)
 
-        owner_ctx = make_a2a_context(auth_token="owner-tok", headers={"host": "test.example.com"})
+        owner_ctx = make_a2a_context(auth_token=OWNED_TASK_OWNER_TOK, headers={"host": "test.example.com"})
         with pytest.raises(TaskNotFoundError) as unknown_exc:
             await getattr(handler, method_name)(request_cls(id="task_does_not_exist"), context=owner_ctx)
 

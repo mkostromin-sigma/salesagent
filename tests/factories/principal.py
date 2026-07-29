@@ -67,7 +67,9 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         that need deferred config resolution.
         """
         resolved_tenant = (
-            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
+            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides)
+            if tenant is _UNSET and tenant_id is not None
+            else (None if tenant is _UNSET else tenant)
         )
         if testing_context is _UNSET:
             testing_context = AdCPTestContext(
