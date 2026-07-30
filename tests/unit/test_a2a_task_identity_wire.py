@@ -27,18 +27,12 @@ from tests.a2a_helpers import (
     OWNED_TASK_SIBLING,
     OWNED_TASK_SIBLING_TOK,
     OWNED_TASK_TENANT,
+    assert_wire_task_not_found,
     auth_headers_mapping,
     seeded_owned_a2a_handler,
     token_identity_resolver,
 )
 from tests.factories import PrincipalFactory
-
-_TENANT = OWNED_TASK_TENANT
-_OWNER = OWNED_TASK_OWNER
-_SIBLING = OWNED_TASK_SIBLING
-_TASK_ID = OWNED_TASK_ID
-_OWNER_TOK = OWNED_TASK_OWNER_TOK
-_SIBLING_TOK = OWNED_TASK_SIBLING_TOK
 
 
 class _AuthHeaderContextBuilder(ServerCallContextBuilder):
@@ -86,35 +80,31 @@ def test_sibling_wire_error_matches_unknown_id(method):
     must redden this: sibling would get a result while unknown still errors.
     """
     handler = seeded_owned_a2a_handler()
-    owner = PrincipalFactory.make_identity(principal_id=_OWNER, tenant_id=_TENANT, protocol="a2a")
-    sibling = PrincipalFactory.make_identity(principal_id=_SIBLING, tenant_id=_TENANT, protocol="a2a")
-    resolve = token_identity_resolver({_SIBLING_TOK: sibling, _OWNER_TOK: owner})
+    owner = PrincipalFactory.make_identity(principal_id=OWNED_TASK_OWNER, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
+    sibling = PrincipalFactory.make_identity(
+        principal_id=OWNED_TASK_SIBLING, tenant_id=OWNED_TASK_TENANT, protocol="a2a"
+    )
+    resolve = token_identity_resolver({OWNED_TASK_SIBLING_TOK: sibling, OWNED_TASK_OWNER_TOK: owner})
 
     client = _client_for(handler)
     with (
         patch("src.core.resolved_identity.resolve_identity", side_effect=resolve),
         patch.object(handler, "_log_a2a_operation"),
     ):
-        sibling_body = _post_task(client, method=method, task_id=_TASK_ID, token=_SIBLING_TOK)
-        unknown_body = _post_task(client, method=method, task_id="task_does_not_exist", token=_OWNER_TOK)
-        owner_body = _post_task(client, method=method, task_id=_TASK_ID, token=_OWNER_TOK)
+        sibling_body = _post_task(client, method=method, task_id=OWNED_TASK_ID, token=OWNED_TASK_SIBLING_TOK)
+        unknown_body = _post_task(client, method=method, task_id="task_does_not_exist", token=OWNED_TASK_OWNER_TOK)
+        owner_body = _post_task(client, method=method, task_id=OWNED_TASK_ID, token=OWNED_TASK_OWNER_TOK)
 
     assert "error" in sibling_body
     assert "error" in unknown_body
     assert "result" in owner_body
 
-    sibling_err = sibling_body["error"]
-    unknown_err = unknown_body["error"]
-    # v0.3 compat flattens structured ``data`` to null (#1670); assert both None
-    # today so unequal task_id payloads do not falsely fail when flattening lifts.
-    assert sibling_err["code"] == unknown_err["code"] == -32603
-    assert sibling_err.get("data") is None
-    assert unknown_err.get("data") is None
-    assert sibling_err["message"].startswith("Task not found:")
-    assert unknown_err["message"].startswith("Task not found:")
-    assert _TASK_ID in sibling_err["message"]
-    assert "task_does_not_exist" in unknown_err["message"]
-    assert owner_body["result"]["id"] == _TASK_ID
+    # Exact equality — startswith would miss a suffix identity leak.
+    # v0.3 compat flattens structured data to null (#1670); when that lifts,
+    # the strict xfail in tests/e2e/test_a2a_endpoints_working.py XPASSes.
+    assert_wire_task_not_found(sibling_body["error"], OWNED_TASK_ID)
+    assert_wire_task_not_found(unknown_body["error"], "task_does_not_exist")
+    assert owner_body["result"]["id"] == OWNED_TASK_ID
 
 
 @pytest.mark.parametrize("method", ["tasks/get", "tasks/cancel"])
@@ -123,11 +113,13 @@ def test_unauthenticated_wire_is_auth_failure_not_task_not_found(method):
     handler = seeded_owned_a2a_handler()
     client = _client_for(handler)
     with patch.object(handler, "_log_a2a_operation"):
-        body = _post_task(client, method=method, task_id=_TASK_ID, token=None)
+        body = _post_task(client, method=method, task_id=OWNED_TASK_ID, token=None)
 
     assert "error" in body
     err = body["error"]
     # Compat still uses -32603; distinction from not-found is the message string.
+    # See also the strict xfail sibling grading -32001 when #1670 lands.
     assert err["code"] == -32603
+    assert err["data"] is None
+    assert err["message"] == "Missing authentication token"
     assert "Task not found" not in err["message"]
-    assert "Missing authentication token" in err["message"]

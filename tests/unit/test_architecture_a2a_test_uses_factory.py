@@ -25,12 +25,9 @@ from tests.unit._architecture_helpers import iter_call_expressions
 def _a2a_test_files() -> list[Path]:
     repo_root = Path(__file__).resolve().parents[2]
     paths: list[Path] = []
-    for pattern in (
-        "tests/unit/test_a2a*.py",
-        "tests/integration/test_a2a*.py",
-        "tests/e2e/test_a2a*.py",
-    ):
-        paths.extend(repo_root.glob(pattern))
+    for suite in ("unit", "integration", "e2e"):
+        # Recursive: depth ≥ 2 ``test_a2a*.py`` must not escape the guard.
+        paths.extend((repo_root / "tests" / suite).rglob("test_a2a*.py"))
     return paths
 
 

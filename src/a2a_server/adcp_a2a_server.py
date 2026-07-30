@@ -221,7 +221,17 @@ DISCOVERY_SKILLS = frozenset(
 )
 
 
-def _internal_error_for(operation: str, exc: Exception) -> InternalError:
+def _task_not_found_message(task_id: str) -> str:
+    """Buyer-facing not-found message shared by wire raise and deny telemetry."""
+    return f"Task not found: {task_id}"
+
+
+def _safe_task_id_for_log(task_id: str) -> str:
+    """Truncate / neutralize attacker-controlled task ids before file/audit logs."""
+    return task_id.replace("\r", "\\r").replace("\n", "\\n")[:100]
+
+
+def _internal_error_for(operation: str, _exc: Exception) -> InternalError:
     """Canonical InternalError shape for non-skill A2A boundary failures.
 
     Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
@@ -232,23 +242,32 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     for semantically identical untyped failures — divergence on the buyer-
     facing wire message for the same condition.
 
-    Use this helper at every non-skill ``InternalError(...)`` raise site that
-    is NOT a deliberate protocol-level convention (see push-notif handlers
-    below). The canonical prefix is ``"{operation} failed: {exc}"`` so
-    storyboard runners can parse the failure uniformly.
+    Use this helper at non-skill ``InternalError(...)`` raise sites that are
+    not a deliberate protocol-level convention. Do **not** use it from
+    ``_authenticate``: that path deliberately bypasses
+    ``normalize_to_adcp_error`` so SQL / bound parameters never reach the
+    client-facing message or envelope.
+
+    Client-facing message is a fixed ``"{operation} failed"`` phrase — never
+    interpolate ``str(exc)`` (SQLAlchemy includes SQL + bound params). Exception
+    detail belongs in ``record_boundary_error`` at the call site only
+    (``_exc`` is retained for call-site clarity / future typed mapping).
 
     The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
     this helper too — they have no async Task to carry a DataPart, so the two-layer
-    envelope rides in the error's ``data`` field (``error.data["errors"][0]["code"]``
-    / ``error.data["adcp_error"]``). ``InternalError`` stays an ``A2AError`` so the
-    SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error; raising
-    a non-``A2AError`` (e.g. ``AdCPAdapterError``) would hit the dispatcher's
-    ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
-    envelope.
+    envelope is attached on ``InternalError.data``. Under v0.3 compat that
+    ``data`` is flattened to null on the wire (#1670); attaching it is still
+    correct for when flattening lifts. ``InternalError`` stays an ``A2AError`` so
+    the SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error;
+    raising a non-``A2AError`` would hit the dispatcher's ``except Exception``
+    branch and be flattened to a bare ``InternalError`` with no envelope.
     """
+    # Fixed phrase only — class defaults map INTERNAL_ERROR → SERVICE_UNAVAILABLE
+    # with recovery=transient on the envelope.
+    fixed = f"{operation} failed"
     return InternalError(
-        message=f"{operation} failed: {exc}",
-        data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
+        message=fixed,
+        data=build_two_layer_error_envelope(AdCPError(message=fixed)),
     )
 
 
@@ -436,15 +455,11 @@ class AdCPRequestHandler(RequestHandler):
             wire_op = operation.replace("_", " ")
             # Fixed message + typed envelope — do NOT route through
             # ``normalize_to_adcp_error(e)`` (re-copies ``str(exc)`` / SQL).
+            # AdCPError class defaults: INTERNAL_ERROR → wire SERVICE_UNAVAILABLE,
+            # recovery=transient (do not hand-write error_code=/recovery=).
             raise InternalError(
                 message=f"{wire_op} failed",
-                data=build_two_layer_error_envelope(
-                    AdCPError(
-                        message=f"{wire_op} failed",
-                        error_code="INTERNAL_ERROR",
-                        recovery="transient",
-                    )
-                ),
+                data=build_two_layer_error_envelope(AdCPError(message=f"{wire_op} failed")),
             ) from e
 
     def _log_a2a_operation(
@@ -712,6 +727,7 @@ class AdCPRequestHandler(RequestHandler):
             # Store task + push config + owner together only after identity
             # resolution succeeds. Auth failure above must leave no orphan
             # entries in self.tasks / _task_push_configs / _task_owners. #1702
+            # Push config lives outside protobuf metadata (not JSON-serializable).
             if push_notification_config:
                 self._task_push_configs[task_id] = push_notification_config
             self.tasks[task_id] = task
@@ -1148,7 +1164,7 @@ class AdCPRequestHandler(RequestHandler):
         the real route returns ``data: null``. Populating it is still correct
         and becomes readable when #1670 closes, the same as the code.
         """
-        return TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
+        return TaskNotFoundError(message=_task_not_found_message(task_id), data={"task_id": task_id})
 
     def _get_owned_in_memory_task_or_raise(
         self, task_id: str, context: ServerCallContext | None, *, operation: str
@@ -1173,10 +1189,12 @@ class AdCPRequestHandler(RequestHandler):
         expected_owner = _TaskOwner(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
         if task is None or self._task_owners.get(task_id) != expected_owner:
             # Wire must stay indistinguishable (existence oracle); log may branch.
-            if task is not None:
+            log_task_id = _safe_task_id_for_log(task_id)
+            ownership_miss = task is not None
+            if ownership_miss:
                 logger.warning(
                     "Ownership denial for task %s: caller tenant_id=%s principal_id=%s",
-                    task_id,
+                    log_task_id,
                     identity.tenant_id,
                     identity.principal_id,
                 )
@@ -1184,7 +1202,7 @@ class AdCPRequestHandler(RequestHandler):
                 logger.warning(
                     "Unknown task id on %s: task_id=%s caller tenant_id=%s principal_id=%s",
                     operation,
-                    task_id,
+                    log_task_id,
                     identity.tenant_id,
                     identity.principal_id,
                 )
@@ -1192,12 +1210,17 @@ class AdCPRequestHandler(RequestHandler):
             # is an A2AError, not AdCPError — passing it took the untyped
             # ``exc_info=True`` path with no active exception (NoneType: None)
             # and logged ordinary stale-handle polls at ERROR.
+            # Unknown-id / stale-handle: omit tenant_id/principal_id so sinks
+            # self-skip (no feed/audit flood). Ownership miss keeps full sinks.
+            telem_kwargs: dict[str, Any] = {}
+            if ownership_miss:
+                telem_kwargs["tenant_id"] = identity.tenant_id
+                telem_kwargs["principal_id"] = identity.principal_id
             record_boundary_error(
                 "a2a",
                 operation,
-                AdCPTaskNotFoundError(message=f"Task not found: {task_id}"),
-                tenant_id=identity.tenant_id,
-                principal_id=identity.principal_id,
+                AdCPTaskNotFoundError(message=_task_not_found_message(log_task_id)),
+                **telem_kwargs,
             )
             raise self._task_not_found(task_id)
         return task

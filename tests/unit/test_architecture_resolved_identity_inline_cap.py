@@ -69,7 +69,6 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/integration/test_update_media_buy_persistence.py": 1,
     "tests/unit/test_adcp_25_creative_management.py": 1,
     "tests/unit/test_auth_consistency.py": 3,
-    "tests/unit/test_auth_context_middleware_population.py": 0,
     "tests/unit/test_auth_requirements.py": 6,
     "tests/unit/test_authorized_properties_behavioral.py": 2,
     "tests/unit/test_brand_manifest_policy.py": 1,
@@ -101,19 +100,31 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
 }
 
 
+# Anchor scan paths on REPO_ROOT so the guard works from any cwd
+# (matches pattern from VALUE_ERROR_PER_FILE_CAP / Pattern A guards).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SCAN_DIRS = [_REPO_ROOT / "tests"]
+
+
+def _rel(path: Path) -> str:
+    """Return the path relative to repo root, with forward slashes."""
+    return str(path.relative_to(_REPO_ROOT)).replace("\\", "/")
+
+
 def _is_a2a_test_file(path: Path) -> bool:
     """A2A test files are governed by the stricter zero-tolerance factory guard.
 
     Path-aware: unit/integration/e2e ``test_a2a*`` (and architecture a2a guards)
     are skipped here so the factory guard owns them at zero tolerance.
+    Use repo-relative prefixes — never ``"unit" in path.parts`` on an absolute
+    path (any ancestor named ``unit``/``integration``/``e2e`` would fail open).
     """
     name = path.name
     if name.startswith("test_architecture_a2a"):
         return True
     if not name.startswith("test_a2a"):
         return False
-    parts = path.parts
-    return "unit" in parts or "integration" in parts or "e2e" in parts
+    return _rel(path).startswith(("tests/unit/", "tests/integration/", "tests/e2e/"))
 
 
 def _count_inline_resolved_identity(filepath: Path) -> list[int]:
@@ -139,17 +150,6 @@ def _count_inline_resolved_identity(filepath: Path) -> list[int]:
         elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
             lines.append(node.lineno)
     return lines
-
-
-# Anchor scan paths on REPO_ROOT so the guard works from any cwd
-# (matches pattern from VALUE_ERROR_PER_FILE_CAP / Pattern A guards).
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_SCAN_DIRS = [_REPO_ROOT / "tests"]
-
-
-def _rel(path: Path) -> str:
-    """Return the path relative to repo root, with forward slashes."""
-    return str(path.relative_to(_REPO_ROOT)).replace("\\", "/")
 
 
 from tests.unit._per_file_cap_guard import (
