@@ -325,9 +325,10 @@ class TestA2ARequestHandler:
         between two byte-identical copies.
 
         Both halves of the raise are pinned: the human-readable message AND the
-        structured ``data`` payload clients actually parse. Asserting the message
-        alone would let ``data={"task_id": ...}`` be deleted with the suite still
-        green, since the id appears in the message either way.
+        structured ``data`` field on the exception object (the JSON-RPC wire
+        still returns ``data: null`` under v0.3 compat — see #1670). Asserting
+        the message alone would let ``data={"task_id": ...}`` be deleted with
+        the suite still green, since the id appears in the message either way.
 
         Auth is mocked so this grades the not-found shape after the identity
         gate (#1702), not an auth-failure collapse into the same error.
@@ -336,7 +337,7 @@ class TestA2ARequestHandler:
             with pytest.raises(TaskNotFoundError) as exc:
                 await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
         assert "task_does_not_exist" in str(exc.value)  # the requested id is surfaced
-        assert exc.value.data == {"task_id": "task_does_not_exist"}  # ...and machine-readable
+        assert exc.value.data == {"task_id": "task_does_not_exist"}  # exception-object payload
 
     def test_handler_has_skill_methods(self):
         """Test that handler has skill-specific methods."""

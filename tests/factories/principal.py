@@ -37,7 +37,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         dry_run: bool = False,
         auth_token: str | None = None,
         tenant: Any = _UNSET,
-        testing_context: AdCPTestContext | None = None,
+        testing_context: Any = _UNSET,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
         """Build a ResolvedIdentity without DB persistence.
@@ -46,7 +46,9 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass explicit tenant=None for auth-error tests.
         Pass **tenant_overrides for domain fields (approval_mode, etc).
         Pass testing_context to override the default (e.g. set
-        test_session_id for harness routing).
+        test_session_id for harness routing). Pass ``testing_context=None``
+        explicitly for anonymous A2A discovery (production
+        ``AdCPTestContext.from_headers({})`` returns None).
 
         ``tenant`` is typed ``Any`` to match the underlying
         ``ResolvedIdentity.tenant`` field, which accepts plain dicts in
@@ -58,7 +60,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
             if tenant is _UNSET and tenant_id is not None
             else (None if tenant is _UNSET else tenant)
         )
-        if testing_context is None:
+        if testing_context is _UNSET:
             testing_context = AdCPTestContext(
                 dry_run=dry_run,
                 mock_time=None,
@@ -79,11 +81,13 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         """Anonymous A2A discovery identity — principal_id/tenant None, protocol a2a.
 
         Production always returns ResolvedIdentity (never None) for discovery.
+        ``testing_context=None`` matches ``AdCPTestContext.from_headers({})``.
         """
         return cls.make_identity(
             principal_id=None,
             tenant_id=tenant_id,
             tenant=None,
             protocol="a2a",
+            testing_context=None,
             **kwargs,
         )

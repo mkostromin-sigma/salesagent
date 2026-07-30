@@ -13,9 +13,9 @@ from types import MappingProxyType
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
-from a2a.types import Task, TaskState, TaskStatus
+from a2a.types import Task, TaskNotFoundError, TaskState, TaskStatus
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _TaskOwner
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _task_not_found_message, _TaskOwner
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.resolved_identity import ResolvedIdentity
 
@@ -30,7 +30,7 @@ OWNED_TASK_SIBLING_TOK = "sibling-tok"
 
 def make_a2a_context(
     auth_token: str | None = None,
-    headers: dict[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> ServerCallContext:
     """Build a ServerCallContext for A2A handler tests.
 
@@ -44,7 +44,10 @@ def make_a2a_context(
     Returns:
         ServerCallContext ready to pass to handler.on_message_send(params, context=ctx).
     """
-    auth_ctx = AuthContext(auth_token=auth_token, headers=headers or {})
+    auth_ctx = AuthContext(
+        auth_token=auth_token,
+        headers=auth_headers_mapping(headers) if headers is not None else auth_headers_mapping({}),
+    )
     return ServerCallContext(state={AUTH_CONTEXT_STATE_KEY: auth_ctx})
 
 
@@ -77,7 +80,7 @@ def token_identity_resolver(
     """``resolve_identity`` side_effect: Bearer token → identity (shared by unit+wire)."""
 
     def resolve(*, auth_token: str | None, **_kwargs: object) -> ResolvedIdentity:
-        if auth_token is None or auth_token not in mapping:
+        if auth_token not in mapping:
             raise AssertionError(f"unexpected token: {auth_token!r}")
         return mapping[auth_token]
 
@@ -87,3 +90,42 @@ def token_identity_resolver(
 def auth_headers_mapping(headers: Mapping[str, str]) -> MappingProxyType[str, str]:
     """Immutable header map for ``AuthContext`` (matches production typing)."""
     return MappingProxyType({k.lower(): v for k, v in headers.items()})
+
+
+def assert_task_not_found_nondisclosure(
+    exc: TaskNotFoundError,
+    task_id: str,
+    *,
+    forbidden_substrings: tuple[str, ...] = (
+        OWNED_TASK_TENANT,
+        OWNED_TASK_OWNER,
+        OWNED_TASK_SIBLING,
+        "leaked_tenant",
+    ),
+) -> None:
+    """Shared non-disclosure oracle for unit-altitude TaskNotFoundError objects.
+
+    Literal message/data — never call ``_task_not_found`` for the expected side
+    (both sides would move together and hide an identity leak). Message text must
+    match production ``_task_not_found_message`` so telemetry and wire stay joined.
+    """
+    assert exc.message == _task_not_found_message(task_id)
+    # Grades exception object ``data``, not the wire envelope (compat drops it).
+    assert exc.data == {"task_id": task_id}
+    blob = f"{exc.message}{exc.data!s}"
+    for needle in forbidden_substrings:
+        assert needle not in blob
+
+
+def assert_wire_task_not_found(err: Mapping[str, object], task_id: str) -> None:
+    """Exact wire-body oracle for not-found (v0.3 compat: code -32603, data null).
+
+    When #1670 removes flattening, the strict xfail sibling at
+    ``tests/e2e/test_a2a_endpoints_working.py`` (TestA2AServerIntegration) XPASSes
+    by design while this hard-fails — keep the pointer at the failure site.
+    """
+    assert err == {
+        "code": -32603,
+        "message": _task_not_found_message(task_id),
+        "data": None,
+    }

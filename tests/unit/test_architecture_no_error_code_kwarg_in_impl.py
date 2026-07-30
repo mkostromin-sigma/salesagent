@@ -19,7 +19,7 @@ from pathlib import Path
 from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters"]
+SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters", REPO_ROOT / "src" / "a2a_server"]
 
 # The only sanctioned error_code= sites: the two boundary helpers that call
 # AdCPError.synthesize(). Keyed by (relative_path, enclosing_function_name) so the

@@ -797,11 +797,14 @@ class BaseTestEnv:
 
         if auth_token:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+            from tests.a2a_helpers import auth_headers_mapping
 
-            headers = {
-                "x-adcp-auth": auth_token,
-                "x-adcp-tenant": a2a_identity.tenant_id or "",
-            }
+            headers = auth_headers_mapping(
+                {
+                    "x-adcp-auth": auth_token,
+                    "x-adcp-tenant": a2a_identity.tenant_id or "",
+                }
+            )
             server_context = ServerCallContext(
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
@@ -811,6 +814,7 @@ class BaseTestEnv:
             # None. Create+own co-location reads ``identity.tenant_id`` (#1702);
             # mocking None made unauth A2A BDD paths AttributeError into
             # SERVICE_UNAVAILABLE instead of AUTH_REQUIRED.
+            # Pin: @T-UC-011-list-unauth grades this compensating unauth path.
             # Use PrincipalFactory (not inline ResolvedIdentity) for the arch guard.
             from tests.factories.principal import PrincipalFactory
 
