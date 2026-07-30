@@ -1370,6 +1370,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
                 "response for sandbox accounts (BR-RULE-209 INV-4)"
             ),
+            # Async submitted envelope: _sync_creatives_impl returns
+            # SyncCreativesResponse, which extends the library SUCCESS shape — there
+            # is no SyncCreativesSubmitted variant anywhere on the sync_creatives
+            # path, so the buyer can never be handed a task_id to poll. Steps
+            # (including the tasks/get poll binder) are implemented and grade the
+            # wire the moment production grows the variant. #1780
+            "T-UC-006-main-async-submitted": (
+                "SPEC-PRODUCTION GAP: sync_creatives has no submitted envelope — "
+                "_sync_creatives_impl only returns the success variant, so status='submitted' "
+                "with a pollable task_id is never emitted"
+            ),
+            # Same submitted-envelope gap as main-async-submitted; sandbox INV-11
+            # (omit sandbox on submitted) cannot grade until that envelope exists.
+            "T-UC-006-sandbox-submitted-no-flag": (
+                "SPEC-PRODUCTION GAP: sync_creatives has no submitted envelope — "
+                "sandbox INV-11 (omit sandbox on submitted) cannot be graded until "
+                "status='submitted' with a pollable task_id is emitted"
+            ),
             # Sandbox: invalid format_id does not trigger validation error at _impl level
             "T-UC-006-sandbox-validation": (
                 "SPEC-PRODUCTION GAP: production does not validate format_id pattern "
@@ -3189,6 +3207,11 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
+# Locally-added A2A protocol-method scenarios (tasks/get, tasks/cancel — #1780).
+# Tagged @a2a as well, so they are never parametrized across transports: the
+# methods exist only on the A2A wire.
+_A2A_TASK_OWNERSHIP_TAG_PREFIX = "T-A2A-TASK-OWNERSHIP"
+
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
 # variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
 _NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
@@ -3230,6 +3253,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     # Admin scenarios use Flask test_client, not API transports
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
+        return
+
+    # A2A task ownership grades tasks/get|cancel on the shared handler only —
+    # no MCP/REST equivalent. Skip multiply even if a scenario drops @a2a.
+    if any(t.startswith(_A2A_TASK_OWNERSHIP_TAG_PREFIX) for t in marker_names):
         return
 
     # IMPL-only scenarios: harness has no transport wrappers for this path

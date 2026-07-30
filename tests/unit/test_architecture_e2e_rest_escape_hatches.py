@@ -440,6 +440,14 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
+        # The A2A task store lives on the handler instance inside the server
+        # process; over e2e that process is not ours, so no test-side seed can
+        # place a task in it. Ownership is graded in-process instead (#1780).
+        (
+            "tests/harness/_base.py",
+            "seed_a2a_task",
+            "in-process handler memory",
+        ),
     }
 )
 
