@@ -54,7 +54,9 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass explicit tenant=None for auth-error tests.
         Pass **tenant_overrides for domain fields (approval_mode, etc).
         Pass testing_context to override the default (e.g. set
-        test_session_id for harness routing).
+        test_session_id for harness routing). Pass ``testing_context=None``
+        explicitly for anonymous A2A discovery (production
+        ``AdCPTestContext.from_headers({})`` returns None).
 
         ``testing_context`` meanings:
         - omitted / sentinel (default): populated ``AdCPTestContext``
