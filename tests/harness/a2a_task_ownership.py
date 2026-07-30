@@ -1,0 +1,93 @@
+"""A2ATaskOwnershipEnv — multi-principal env for the A2A in-memory task gate.
+
+``tasks/get`` / ``tasks/cancel`` authorize an in-memory hit against the
+``_TaskOwner`` recorded at create (#1702). Grading that gate needs three real,
+DB-backed callers — the owner, a sibling principal in the SAME tenant, and a
+principal in ANOTHER tenant — because the denial must be identical for a
+cross-principal caller, a cross-tenant caller, and an unknown task id.
+
+Real tokens (not injected identities) so each dispatch runs the production auth
+chain: header → token → DB lookup → ResolvedIdentity. Nothing is patched; the
+handler, its task store, and the ownership gate are all production code.
+
+Usage::
+
+    with A2ATaskOwnershipEnv() as env:
+        env.setup_principals()
+        env.seed_a2a_task("task-1", identity=env.identity_for_role("owner"))
+        denied = env._run_a2a_task_method(
+            "tasks/get", "task-1", identity=env.identity_for_role("sibling")
+        )
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from src.core.resolved_identity import ResolvedIdentity
+from tests.harness._base import IntegrationEnv
+
+OWNER_ROLE = "owner"
+SIBLING_ROLE = "sibling"
+OTHER_TENANT_ROLE = "other_tenant"
+
+
+class A2ATaskOwnershipEnv(IntegrationEnv):
+    """Integration env exposing owner / same-tenant sibling / other-tenant callers."""
+
+    EXTERNAL_PATCHES: dict[str, str] = {}
+
+    OWNER_TENANT_ID = "task_owner_tenant"
+    OWNER_PRINCIPAL_ID = "task_owner"
+    SIBLING_PRINCIPAL_ID = "task_sibling"
+    OTHER_TENANT_ID = "task_other_tenant"
+    OTHER_PRINCIPAL_ID = "task_other_principal"
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("tenant_id", self.OWNER_TENANT_ID)
+        kwargs.setdefault("principal_id", self.OWNER_PRINCIPAL_ID)
+        super().__init__(**kwargs)
+        self._role_identities: dict[str, ResolvedIdentity] = {}
+
+    def setup_principals(self) -> tuple[Any, Any]:
+        """Seed the owner tenant + all three principals, each with a real access token.
+
+        Returns the (tenant, owner principal) pair for the owning tenant.
+        """
+        from tests.factories import PrincipalFactory, TenantFactory
+
+        tenant, owner = self.setup_default_data()
+        PrincipalFactory(tenant=tenant, principal_id=self.SIBLING_PRINCIPAL_ID)
+        other_tenant = TenantFactory(tenant_id=self.OTHER_TENANT_ID)
+        PrincipalFactory(tenant=other_tenant, principal_id=self.OTHER_PRINCIPAL_ID)
+        self._commit_factory_data()
+        return tenant, owner
+
+    def identity_for_role(self, role: str) -> ResolvedIdentity:
+        """A2A ``ResolvedIdentity`` carrying the real token of *role*'s principal.
+
+        Roles: ``owner``, ``sibling`` (same tenant), ``other_tenant``. Built by
+        re-pointing the env at that principal so the token comes from the seeded
+        row, then restoring the owner as the env default — callers always name
+        the role they mean rather than depending on env state.
+        """
+        from tests.harness.transport import Transport
+
+        role_targets = {
+            OWNER_ROLE: (self.OWNER_TENANT_ID, self.OWNER_PRINCIPAL_ID),
+            SIBLING_ROLE: (self.OWNER_TENANT_ID, self.SIBLING_PRINCIPAL_ID),
+            OTHER_TENANT_ROLE: (self.OTHER_TENANT_ID, self.OTHER_PRINCIPAL_ID),
+        }
+        if role not in self._role_identities:
+            tenant_id, principal_id = role_targets[role]
+            self.switch_tenant(tenant_id)
+            self.switch_principal(principal_id)
+            identity = self.identity_for(Transport.A2A)
+            assert identity.auth_token, (
+                f"No access token resolved for role {role!r} ({tenant_id}/{principal_id}) — "
+                "call setup_principals() before building role identities."
+            )
+            self._role_identities[role] = identity
+            self.switch_tenant(self.OWNER_TENANT_ID)
+            self.switch_principal(self.OWNER_PRINCIPAL_ID)
+        return self._role_identities[role]
