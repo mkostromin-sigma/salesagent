@@ -48,26 +48,32 @@ class WorkflowRepository:
     # WorkflowStep reads
     # ------------------------------------------------------------------
 
-    def get_by_step_id(self, step_id: str) -> WorkflowStep | None:
-        """Get a workflow step by its ID within the tenant."""
-        return self._session.scalars(
-            select(WorkflowStep)
-            .join(DBContext)
-            .where(
-                WorkflowStep.step_id == step_id,
-                DBContext.tenant_id == self._tenant_id,
-            )
-        ).first()
+    def get_by_step_id(self, step_id: str, *, principal_id: str | None = None) -> WorkflowStep | None:
+        """Get a workflow step by its ID within the tenant.
 
-    def get_by_step_id_or_raise(self, step_id: str) -> WorkflowStep:
+        When ``principal_id`` is set, also require ``contexts.principal_id`` to
+        match (buyer-path ownership). Admin/service callers omit it for
+        tenant-only lookup. ``WorkflowStep.owner`` is a role enum
+        (principal|publisher|system), not the ownership key — ownership is
+        ``Context.principal_id``.
+        """
+        conditions = [
+            WorkflowStep.step_id == step_id,
+            DBContext.tenant_id == self._tenant_id,
+        ]
+        if principal_id is not None:
+            conditions.append(DBContext.principal_id == principal_id)
+        return self._session.scalars(select(WorkflowStep).join(DBContext).where(*conditions)).first()
+
+    def get_by_step_id_or_raise(self, step_id: str, *, principal_id: str) -> WorkflowStep:
         """Get a workflow step by ID or raise ``AdCPTaskNotFoundError``.
 
-        Collapses the task fetch-and-raise guard shared by get_task/complete_task.
-        No ``context`` parameter by design: those tools carry the FastMCP transport
-        ``Context``, not an AdCP ``ContextObject``, so the task not-found envelope
-        stays context-less rather than echoing a transport object into a repository.
+        Requires ``principal_id`` (buyer-path). Missing step **or** wrong
+        principal yields the same ``AdCPTaskNotFoundError`` (no ownership
+        oracle). Collapses the fetch-and-raise guard shared by get_task and
+        complete_task. No transport ``context`` parameter by design.
         """
-        step = self.get_by_step_id(step_id)
+        step = self.get_by_step_id(step_id, principal_id=principal_id)
         if step is None:
             from src.core.exceptions import AdCPTaskNotFoundError
 

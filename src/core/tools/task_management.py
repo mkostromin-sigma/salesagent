@@ -139,12 +139,12 @@ async def get_task(
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)
-    require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
+    principal_id = require_principal_id(identity)  # F-03: authenticated principal + ownership key
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
-        task = uow.workflows.get_by_step_id_or_raise(task_id)
+        task = uow.workflows.get_by_step_id_or_raise(task_id, principal_id=principal_id)
 
         mappings = uow.workflows.get_mappings_for_step(task_id)
 
@@ -215,7 +215,7 @@ async def complete_task(
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
-        task = uow.workflows.get_by_step_id_or_raise(task_id)
+        task = uow.workflows.get_by_step_id_or_raise(task_id, principal_id=principal_id)
 
         if task.status not in ["pending", "in_progress", "requires_approval"]:
             raise AdCPConflictError(f"Task {task_id} is already {task.status} and cannot be completed")

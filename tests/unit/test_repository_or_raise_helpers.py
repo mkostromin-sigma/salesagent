@@ -75,11 +75,38 @@ class TestWorkflowOrRaise:
     def test_get_by_step_id_or_raise_returns_when_present(self):
         step = MagicMock()
         repo = _repo_with_first(WorkflowRepository, step)
-        assert repo.get_by_step_id_or_raise("step-1") is step
+        assert repo.get_by_step_id_or_raise("step-1", principal_id="principal-a") is step
 
     def test_get_by_step_id_or_raise_raises_when_absent(self):
         repo = _repo_with_first(WorkflowRepository, None)
         with pytest.raises(AdCPTaskNotFoundError) as exc:
-            repo.get_by_step_id_or_raise("step-missing")
+            repo.get_by_step_id_or_raise("step-missing", principal_id="principal-a")
         assert exc.value.error_code == "TASK_NOT_FOUND"
         assert "step-missing" in str(exc.value)
+
+    def test_get_by_step_id_or_raise_sibling_principal_same_as_absent(self):
+        """Wrong principal and unknown id share TASK_NOT_FOUND (no ownership oracle).
+
+        Spec: AdCP 3.1.1 L1 Agent and Account Isolation — fail closed without
+        distinguishing unauthorized from not-found. Sibling-principal durable
+        get_task is ungraded (UC-027 is cross-tenant only).
+        """
+        repo_wrong = _repo_with_first(WorkflowRepository, None)
+        repo_missing = _repo_with_first(WorkflowRepository, None)
+        with pytest.raises(AdCPTaskNotFoundError) as wrong_exc:
+            repo_wrong.get_by_step_id_or_raise("step-1", principal_id="sibling-b")
+        with pytest.raises(AdCPTaskNotFoundError) as missing_exc:
+            repo_missing.get_by_step_id_or_raise("step-missing", principal_id="principal-a")
+        assert wrong_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
+        assert str(wrong_exc.value) == "Task step-1 not found"
+        assert str(missing_exc.value) == "Task step-missing not found"
+
+    def test_get_by_step_id_filters_principal_in_sql(self):
+        """Principal filter is applied in the WHERE clause (not post-fetch)."""
+        session = MagicMock()
+        session.scalars.return_value.first.return_value = None
+        repo = WorkflowRepository(session, "tenant-1")
+        repo.get_by_step_id("step-1", principal_id="principal-a")
+        compiled = str(session.scalars.call_args[0][0].compile(compile_kwargs={"literal_binds": True}))
+        assert "principal_id" in compiled
+        assert "principal-a" in compiled
