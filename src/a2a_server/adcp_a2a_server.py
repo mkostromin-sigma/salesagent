@@ -248,10 +248,11 @@ def _internal_error_for(operation: str, _exc: Exception) -> InternalError:
     ``normalize_to_adcp_error`` so SQL / bound parameters never reach the
     client-facing message or envelope.
 
-    Client-facing message is a fixed ``"{operation} failed"`` phrase — never
-    interpolate ``str(exc)`` (SQLAlchemy includes SQL + bound params). Exception
-    detail belongs in ``record_boundary_error`` at the call site only
-    (``_exc`` is retained for call-site clarity / future typed mapping).
+    Typed ``AdCPError`` keeps its intentional buyer-facing ``.message`` and
+    envelope (e.g. NL ``AdCPCapabilityNotSupportedError``). Untyped exceptions
+    use a fixed ``"{operation} failed"`` phrase — never interpolate
+    ``str(exc)`` (SQLAlchemy includes SQL + bound params). Untyped detail
+    belongs in ``record_boundary_error`` at the call site only.
 
     The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
     this helper too — they have no async Task to carry a DataPart, so the two-layer
@@ -262,8 +263,13 @@ def _internal_error_for(operation: str, _exc: Exception) -> InternalError:
     raising a non-``A2AError`` would hit the dispatcher's ``except Exception``
     branch and be flattened to a bare ``InternalError`` with no envelope.
     """
-    # Fixed phrase only — class defaults map INTERNAL_ERROR → SERVICE_UNAVAILABLE
-    # with recovery=transient on the envelope.
+    if isinstance(_exc, AdCPError):
+        return InternalError(
+            message=_exc.message,
+            data=build_two_layer_error_envelope(_exc),
+        )
+    # Untyped: fixed phrase only — class defaults map INTERNAL_ERROR →
+    # SERVICE_UNAVAILABLE with recovery=transient on the envelope.
     fixed = f"{operation} failed"
     return InternalError(
         message=fixed,
