@@ -3259,6 +3259,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return
 
+    # A2A task ownership grades tasks/get|cancel on the shared handler only —
+    # no MCP/REST equivalent. Skip multiply even if a scenario drops @a2a.
+    if any(t.startswith(_A2A_TASK_OWNERSHIP_TAG_PREFIX) for t in marker_names):
+        return
+
     # IMPL-only scenarios: harness has no transport wrappers for this path
     for uc_prefix, required_tag in _IMPL_ONLY:
         tag_prefix = f"T-{uc_prefix}-"
