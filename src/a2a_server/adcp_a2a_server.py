@@ -1587,6 +1587,9 @@ class AdCPRequestHandler(RequestHandler):
             "approve_creative": self._handle_approve_creative_skill,
             "get_media_buy_status": self._handle_get_media_buy_status_skill,
             "optimize_media_buy": self._handle_optimize_media_buy_skill,
+            # Durable AdCP task tools (principal-scoped get / complete)
+            "get_task": self._handle_get_task_skill,
+            "complete_task": self._handle_complete_task_skill,
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         }
@@ -1920,6 +1923,35 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit approve_creative skill invocation."""
         raise UnsupportedOperationError(message="approve_creative skill not yet implemented")
+
+    async def _handle_get_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+        """Handle explicit get_task skill — durable principal-scoped workflow lookup.
+
+        Spec grounding (AdCP 3.1.1 enums/error-code.json REFERENCE_NOT_FOUND):
+        a typed task_id that does not exist or is not accessible by the caller
+        MUST emit REFERENCE_NOT_FOUND uniformly (sibling principal = unknown id).
+        """
+        from src.core.tools.task_management import get_task
+
+        task_id = parameters.get("task_id")
+        if not task_id:
+            raise AdCPValidationError("task_id is required", field="task_id")
+        return await get_task(task_id=task_id, identity=identity)
+
+    async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
+        """Handle explicit complete_task skill — principal-scoped durable completion."""
+        from src.core.tools.task_management import complete_task
+
+        task_id = parameters.get("task_id")
+        if not task_id:
+            raise AdCPValidationError("task_id is required", field="task_id")
+        return await complete_task(
+            task_id=task_id,
+            status=parameters.get("status", "completed"),
+            response_data=parameters.get("response_data"),
+            error_message=parameters.get("error_message"),
+            identity=identity,
+        )
 
     # Signals skill handlers removed - should come from dedicated signals agents
 
@@ -2419,6 +2451,19 @@ def create_agent_card() -> AgentCard:
                 name="optimize_media_buy",
                 description="Optimize media buy performance and targeting",
                 tags=["optimization", "performance", "targeting", "adcp"],
+            ),
+            # Durable AdCP task tools (principal-scoped)
+            AgentSkill(
+                id="get_task",
+                name="get_task",
+                description="Get details for a durable workflow task by task_id",
+                tags=["task", "workflow", "status", "adcp"],
+            ),
+            AgentSkill(
+                id="complete_task",
+                name="complete_task",
+                description="Complete or fail a durable workflow task by task_id",
+                tags=["task", "workflow", "complete", "adcp"],
             ),
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead

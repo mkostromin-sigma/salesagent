@@ -1,8 +1,10 @@
 """Integration: durable get_by_step_id_or_raise / get_task / complete_task are principal-scoped.
 
 AdCP 3.1.1 L1 Agent and Account Isolation — bind on create, verify on access;
-same TASK_NOT_FOUND for sibling principal as for unknown id (ungraded for
-sibling-principal; UC-027 grades cross-tenant only).
+same REFERENCE_NOT_FOUND on the wire for sibling principal as for unknown id
+(pinned enums/error-code.json @ 04f59d2d5: typed task_id that does not exist
+or is not accessible). UC-027 BDD grades the wire path; this module grades
+the in-process repository + tool contract.
 """
 
 from __future__ import annotations
@@ -27,6 +29,23 @@ def _identity(tenant_id: str, principal_id: str) -> ResolvedIdentity:
         tenant_id=tenant_id,
         protocol="mcp",
     )
+
+
+def _assert_same_not_found(
+    sibling_exc: pytest.ExceptionInfo[AdCPTaskNotFoundError],
+    missing_exc: pytest.ExceptionInfo[AdCPTaskNotFoundError],
+    *,
+    expected_id: str,
+) -> None:
+    """Sibling-principal denial must be wire-indistinguishable from unknown id.
+
+    Asserts the buyer-facing wire code (REFERENCE_NOT_FOUND), not the internal
+    TASK_NOT_FOUND taxonomy, plus the uniform message shape.
+    """
+    assert sibling_exc.value.wire_error_code == missing_exc.value.wire_error_code == "REFERENCE_NOT_FOUND"
+    assert sibling_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
+    assert str(sibling_exc.value) == f"Task {expected_id} not found"
+    assert str(missing_exc.value) == "Task step_does_not_exist not found"
 
 
 @pytest.fixture
@@ -107,9 +126,7 @@ def test_sibling_principal_same_error_as_unknown(principal_scoped_step):
             "step_does_not_exist",
             principal_id=data["owner_principal_id"],
         )
-    assert sibling_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
-    assert str(sibling_exc.value) == f"Task {data['step_id']} not found"
-    assert str(missing_exc.value) == "Task step_does_not_exist not found"
+    _assert_same_not_found(sibling_exc, missing_exc, expected_id=data["step_id"])
 
 
 def test_tenant_only_lookup_still_works_without_principal(principal_scoped_step):
@@ -134,9 +151,7 @@ async def test_get_task_owner_ok_sibling_same_as_unknown(principal_scoped_step):
         await get_task(task_id=data["step_id"], identity=sibling)
     with pytest.raises(AdCPTaskNotFoundError) as missing_exc:
         await get_task(task_id="step_does_not_exist", identity=owner)
-    assert sibling_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
-    assert str(sibling_exc.value) == f"Task {data['step_id']} not found"
-    assert str(missing_exc.value) == "Task step_does_not_exist not found"
+    _assert_same_not_found(sibling_exc, missing_exc, expected_id=data["step_id"])
 
 
 @pytest.mark.asyncio
@@ -149,9 +164,7 @@ async def test_complete_task_owner_ok_sibling_same_as_unknown(principal_scoped_s
         await complete_task(task_id=data["pending_step_id"], identity=sibling)
     with pytest.raises(AdCPTaskNotFoundError) as missing_exc:
         await complete_task(task_id="step_does_not_exist", identity=owner)
-    assert sibling_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
-    assert str(sibling_exc.value) == f"Task {data['pending_step_id']} not found"
-    assert str(missing_exc.value) == "Task step_does_not_exist not found"
+    _assert_same_not_found(sibling_exc, missing_exc, expected_id=data["pending_step_id"])
 
     result = await complete_task(task_id=data["pending_step_id"], status="completed", identity=owner)
     assert result["task_id"] == data["pending_step_id"]

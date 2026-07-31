@@ -3190,8 +3190,9 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
-# variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
-_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
+# variant would 404). get_media_buys (UC-019) and get_task/complete_task (UC-027)
+# are A2A/MCP-only.
+_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-", "T-UC-027-")
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:

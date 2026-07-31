@@ -27,6 +27,11 @@ def _repo_with_first(repo_cls, first_value):
     return repo_cls(session, "tenant-1")
 
 
+def _compiled_last_select(session: MagicMock) -> str:
+    """Compile the most recent ``session.scalars(...)`` SELECT with literal binds."""
+    return str(session.scalars.call_args[0][0].compile(compile_kwargs={"literal_binds": True}))
+
+
 class TestMediaBuyOrRaise:
     def test_get_by_id_or_raise_returns_when_present(self):
         media_buy = MagicMock()
@@ -96,7 +101,7 @@ class TestWorkflowOrRaise:
         repo = WorkflowRepository(session, "tenant-1")
         with pytest.raises(AdCPTaskNotFoundError):
             repo.get_by_step_id_or_raise("step-1", principal_id="sibling-b")
-        compiled = str(session.scalars.call_args[0][0].compile(compile_kwargs={"literal_binds": True}))
+        compiled = _compiled_last_select(session)
         assert "principal_id" in compiled
         assert "sibling-b" in compiled
 
@@ -115,6 +120,6 @@ class TestWorkflowOrRaise:
         session.scalars.return_value.first.return_value = None
         repo = WorkflowRepository(session, "tenant-1")
         repo.get_by_step_id("step-1", principal_id="principal-a")
-        compiled = str(session.scalars.call_args[0][0].compile(compile_kwargs={"literal_binds": True}))
+        compiled = _compiled_last_select(session)
         assert "principal_id" in compiled
         assert "principal-a" in compiled
