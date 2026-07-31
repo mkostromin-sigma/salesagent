@@ -112,6 +112,26 @@ def then_task_not_found(ctx: dict, task_id: str) -> None:
     error = env.last_a2a_task_error
     assert error is not None, f"Expected a task-not-found error for {task_id}, got none"
     assert_wire_task_not_found(error, task_id)
+    blob = f"{error.get('message', '')}{error.get('data')!s}"
+    for needle in (
+        env.OWNER_TENANT_ID,
+        env.OWNER_PRINCIPAL_ID,
+        env.SIBLING_PRINCIPAL_ID,
+        env.OTHER_TENANT_ID,
+        env.OTHER_PRINCIPAL_ID,
+    ):
+        assert needle not in blob, f"identity leak {needle!r} in not-found body: {error!r}"
+
+
+@then("the A2A task response should be an authentication failure, not task-not-found")
+def then_auth_failure_not_task_not_found(ctx: dict) -> None:
+    """Unauthenticated callers must not receive the ownership-denial not-found shape."""
+    env = ctx["env"]
+    assert env.last_a2a_task is None, f"Unauth call still returned a Task: {env.last_a2a_task}"
+    error = env.last_a2a_task_error
+    assert error is not None, "Expected an authentication failure, got none"
+    assert error.get("message") == "Missing authentication token", f"expected auth-failure message, got {error!r}"
+    assert "Task not found" not in str(error.get("message", ""))
 
 
 @then("the A2A task response should be an authentication failure, not task-not-found")

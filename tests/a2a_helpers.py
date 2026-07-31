@@ -311,7 +311,6 @@ def assert_wire_task_not_found(err: JsonRpcError | Mapping[str, object], task_id
     ``tests/e2e/test_a2a_endpoints_working.py`` (TestA2AServerIntegration) XPASSes
     by design while this hard-fails — keep the pointer at the failure site.
     """
-    safe_id = _safe_task_id_for_log(task_id)
     assert err == {
         "code": -32603,
         "message": f"Task not found: {task_id}",

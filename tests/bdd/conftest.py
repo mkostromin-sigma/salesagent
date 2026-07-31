@@ -3260,7 +3260,9 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         return
 
     # A2A task ownership grades tasks/get|cancel on the shared handler only —
-    # no MCP/REST equivalent. Skip multiply even if a scenario drops @a2a.
+    # no MCP/REST equivalent. Redundant with ``_TRANSPORT_SPECIFIC_TAGS`` today
+    # (all scenarios also carry ``@a2a``, which returns above); kept as
+    # belt-and-braces if a scenario drops ``@a2a`` while retaining the tag prefix.
     if any(t.startswith(_A2A_TASK_OWNERSHIP_TAG_PREFIX) for t in marker_names):
         return
 

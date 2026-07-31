@@ -40,6 +40,7 @@ from src.core.schemas import GetProductsResponse
 from tests.a2a_helpers import (
     OWNED_TASK_FORBIDDEN_SUBSTRINGS,
     OWNED_TASK_ID,
+    OWNED_TASK_OTHER_TENANT,
     OWNED_TASK_OWNER,
     OWNED_TASK_OWNER_TOK,
     OWNED_TASK_SIBLING,
@@ -262,7 +263,7 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
         principal_id=OWNED_TASK_SIBLING, tenant_id=OWNED_TASK_TENANT, protocol="a2a"
     )
     other_tenant = PrincipalFactory.make_identity(
-        principal_id=OWNED_TASK_OWNER, tenant_id=_OTHER_TENANT, protocol="a2a"
+        principal_id=OWNED_TASK_OWNER, tenant_id=OWNED_TASK_OTHER_TENANT, protocol="a2a"
     )
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
     params = SendMessageRequest(message=create_a2a_text_message("Show me available products in the catalog"))
