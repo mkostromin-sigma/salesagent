@@ -39,7 +39,7 @@ def discover_creative_formats_from_url(url):
     return []
 
 
-from flask import Blueprint, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 
 from src.admin.utils import echo_context, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
@@ -462,7 +462,12 @@ def approve_creative(tenant_id, creative_id, **kwargs):
     """Approve a creative."""
     try:
         data = request.get_json() or {}
+        # Creative-level reviewer may still come from the request body.
         approved_by = data.get("approved_by", "admin")
+        # MediaBuy.approved_by is operator provenance — same session source as
+        # operations / workflows (not the creative-approver request field).
+        user_info = session.get("user", {})
+        operator_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
         # Collect data needed for post-commit side effects
         webhook_data: dict[str, Any] = {}
@@ -562,7 +567,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     if readiness.ready:
                         media_buy_actions.append({"media_buy_id": media_buy_id})
                     else:
-                        log_creative_finalize_hold(media_buy_id, readiness)
+                        log_creative_finalize_hold(media_buy_id, readiness, context_tag="[CREATIVE APPROVAL]")
 
             # UoW auto-commits here
 
@@ -600,7 +605,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     assert uow2.media_buys is not None
                     mb = uow2.media_buys.get_by_id(action["media_buy_id"])
                     if mb:
-                        stamp_media_buy_approval(mb, approved_by=approved_by)
+                        stamp_media_buy_approval(mb, approved_by=operator_email)
                         mb.status = compute_media_buy_status_from_flight_dates(mb)
                     # auto-commits
 

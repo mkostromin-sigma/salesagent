@@ -446,7 +446,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # instance expired/detached after commit — do not touch ORM attrs later.
                     from datetime import date as date_cls
 
-                    from src.core.tools._media_buy_status import resolve_canonical_status
+                    from src.core.media_buy_status import resolve_canonical_status
 
                     webhook_media_buy_status = resolve_canonical_status(media_buy, date_cls.today())
                     db_session.commit()

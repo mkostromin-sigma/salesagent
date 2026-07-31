@@ -117,10 +117,16 @@ def evaluate_creative_finalize_readiness_for_session(
     )
 
 
-def log_creative_finalize_hold(media_buy_id: str, readiness: CreativeFinalizeReadiness) -> None:
-    """Log a finalize hold at info with a stable ``hold_reason=`` key."""
+def log_creative_finalize_hold(
+    media_buy_id: str,
+    readiness: CreativeFinalizeReadiness,
+    *,
+    context_tag: str = "[APPROVAL]",
+) -> None:
+    """Log a finalize hold with an approval-trail tag and stable event key."""
     logger.info(
-        "Creative finalize hold for media buy %s hold_reason=%s unapproved=%s",
+        "%s Creative finalize hold for media buy %s hold_reason=%s unapproved=%s event=creative_finalize_hold",
+        context_tag,
         media_buy_id,
         readiness.hold_reason,
         readiness.unapproved_creative_ids,

@@ -612,15 +612,38 @@ class TestAdminMediaBuyRejectWebhook:
         )
 
 
+_APPROVE_HOLD_CASES = [
+    ({"include_assignment": False}, "no_assignments"),
+    ({"include_assignment": True, "creative_approved": False}, "unapproved_creatives"),
+]
+
+
+def _assert_persisted_status(ids: dict, expected_status: str, *, approved_by: str | None = None) -> None:
+    """Read back MediaBuy via UoW and assert status + approval provenance once."""
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    with MediaBuyUoW(ids["tenant_id"]) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(ids["media_buy_id"])
+        assert buy is not None
+        assert buy.status == expected_status, f"expected status {expected_status!r}, got {buy.status!r}"
+        assert buy.approved_at is not None
+        if approved_by is not None:
+            assert buy.approved_by == approved_by
+        else:
+            assert buy.approved_by
+
+
+def _assert_persisted_hold(ids: dict, *, approved_by: str | None = None) -> None:
+    _assert_persisted_status(ids, "pending_creatives", approved_by=approved_by)
+
+
 class TestAdminMediaBuyApproveHold:
     """Approve with Hold predicate (#1696): pending_creatives, no adapter, no webhook."""
 
     @pytest.mark.parametrize(
         "make_kwargs,expected_hold",
-        [
-            ({"include_assignment": False}, "no_assignments"),
-            ({"include_assignment": True, "creative_approved": False}, "unapproved_creatives"),
-        ],
+        _APPROVE_HOLD_CASES,
         ids=["no_assignments", "unapproved_creatives"],
     )
     def test_approve_holds_without_execute_or_webhook(
@@ -631,8 +654,6 @@ class TestAdminMediaBuyApproveHold:
         make_kwargs,
         expected_hold,
     ):
-        from src.core.database.repositories.uow import MediaBuyUoW
-
         suffix = expected_hold.replace("_", "")[:8]
         ids = make_pending_media_buy(
             tenant_id=f"hold_{suffix}_tenant",
@@ -648,14 +669,7 @@ class TestAdminMediaBuyApproveHold:
 
         mock_execute.assert_not_called()
         assert "payload" not in webhook_capture, f"hold arm ({expected_hold}) must not fire the approve webhook"
-
-        with MediaBuyUoW(ids["tenant_id"]) as uow:
-            assert uow.media_buys is not None
-            buy = uow.media_buys.get_by_id(ids["media_buy_id"])
-            assert buy is not None
-            assert buy.status == "pending_creatives", f"hold arm must persist pending_creatives, got {buy.status!r}"
-            assert buy.approved_at is not None
-            assert buy.approved_by
+        _assert_persisted_hold(ids)
 
 
 def _post_workflow_approve(admin_session, ids: dict):
@@ -680,10 +694,7 @@ class TestAdminWorkflowApproveHold:
 
     @pytest.mark.parametrize(
         "make_kwargs,expected_hold",
-        [
-            ({"include_assignment": False}, "no_assignments"),
-            ({"include_assignment": True, "creative_approved": False}, "unapproved_creatives"),
-        ],
+        _APPROVE_HOLD_CASES,
         ids=["no_assignments", "unapproved_creatives"],
     )
     def test_workflow_approve_holds_without_execute(
@@ -693,8 +704,6 @@ class TestAdminWorkflowApproveHold:
         make_kwargs,
         expected_hold,
     ):
-        from src.core.database.repositories.uow import MediaBuyUoW
-
         suffix = f"wf{expected_hold.replace('_', '')[:6]}"
         ids = make_pending_media_buy(
             tenant_id=f"wfh_{suffix}_t",
@@ -709,14 +718,7 @@ class TestAdminWorkflowApproveHold:
             _post_workflow_approve(authenticated_admin_session, ids)
 
         mock_execute.assert_not_called()
-
-        with MediaBuyUoW(ids["tenant_id"]) as uow:
-            assert uow.media_buys is not None
-            buy = uow.media_buys.get_by_id(ids["media_buy_id"])
-            assert buy is not None
-            assert buy.status == "pending_creatives", f"hold arm must persist pending_creatives, got {buy.status!r}"
-            assert buy.approved_at is not None
-            assert buy.approved_by
+        _assert_persisted_hold(ids)
 
     def test_workflow_approve_ready_persists_flight_status_and_executes(
         self,
@@ -724,8 +726,6 @@ class TestAdminWorkflowApproveHold:
         make_pending_media_buy,
     ):
         """Ready arm: real compute (unpatched) → scheduled for future-start buy + execute."""
-        from src.core.database.repositories.uow import MediaBuyUoW
-
         ids = make_pending_media_buy(
             tenant_id="wf_ready_t",
             media_buy_id="mb_wf_ready",
@@ -739,12 +739,5 @@ class TestAdminWorkflowApproveHold:
             _post_workflow_approve(authenticated_admin_session, ids)
 
         mock_execute.assert_called_once_with(ids["media_buy_id"], ids["tenant_id"])
-
-        with MediaBuyUoW(ids["tenant_id"]) as uow:
-            assert uow.media_buys is not None
-            buy = uow.media_buys.get_by_id(ids["media_buy_id"])
-            assert buy is not None
-            # make_pending_media_buy seeds start_time = now+7d → scheduled
-            assert buy.status == "scheduled", f"ready arm must persist flight-window status, got {buy.status!r}"
-            assert buy.approved_at is not None
-            assert buy.approved_by == "test@example.com"
+        # make_pending_media_buy seeds start_time = now+7d → scheduled
+        _assert_persisted_status(ids, "scheduled", approved_by="test@example.com")

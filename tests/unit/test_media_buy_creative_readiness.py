@@ -3,8 +3,6 @@
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES, CreativeStatusEnum
 from src.services.media_buy_creative_readiness import (
     CreativeFinalizeReadiness,
@@ -174,8 +172,10 @@ class TestApplyCreativeFinalizeHold:
 
         assert media_buy.status == "pending_creatives"
         assert media_buy.approved_by == "op@example.com"
-        assert media_buy.approved_at is not None
+        assert isinstance(media_buy.approved_at, datetime)
         assert any("hold_reason=unapproved_creatives" in r.message for r in caplog.records)
+        assert any("[APPROVAL]" in r.message for r in caplog.records)
+        assert any("event=creative_finalize_hold" in r.message for r in caplog.records)
         assert not any(" reason=" in r.message for r in caplog.records)
 
 
@@ -184,7 +184,7 @@ class TestStampMediaBuyApproval:
         media_buy = MagicMock()
         stamp_media_buy_approval(media_buy, approved_by="op@example.com")
         assert media_buy.approved_by == "op@example.com"
-        assert media_buy.approved_at is not None
+        assert isinstance(media_buy.approved_at, datetime)
 
 
 class TestLogCreativeFinalizeHold:
@@ -196,8 +196,10 @@ class TestLogCreativeFinalizeHold:
             hold_message="held",
         )
         with caplog.at_level("INFO", logger="src.services.media_buy_creative_readiness"):
-            log_creative_finalize_hold("mb_x", readiness)
+            log_creative_finalize_hold("mb_x", readiness, context_tag="[CREATIVE APPROVAL]")
         assert any("hold_reason=no_assignments" in r.message for r in caplog.records)
+        assert any("[CREATIVE APPROVAL]" in r.message for r in caplog.records)
+        assert any("event=creative_finalize_hold" in r.message for r in caplog.records)
 
 
 class TestCoerceFlightBoundary:
@@ -274,212 +276,3 @@ class TestComputeMediaBuyStatusFromFlightDates:
         mb.start_date = None
         mb.end_date = None
         assert compute_media_buy_status_from_flight_dates(mb) == "scheduled"
-
-
-def _unwrap(fn):
-    while hasattr(fn, "__wrapped__"):
-        fn = fn.__wrapped__
-    return fn
-
-
-@pytest.mark.parametrize(
-    "hold",
-    [
-        CreativeFinalizeReadiness(
-            ready=False,
-            unapproved_creative_ids=[],
-            hold_reason="no_assignments",
-            hold_message="Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM.",
-        ),
-        CreativeFinalizeReadiness(
-            ready=False,
-            unapproved_creative_ids=["c_pending"],
-            hold_reason="unapproved_creatives",
-            hold_message="Media buy approved! Waiting for 1 creative(s) to be approved before creating in GAM.",
-        ),
-    ],
-)
-class TestApproveRoutesHoldBehavior:
-    """Hold arm: pending_creatives + execute_approved_media_buy must not run."""
-
-    def test_approve_workflow_step_holds_without_execute(self, hold):
-        from src.admin.app import create_app
-        from src.admin.blueprints import workflows
-
-        app = create_app()
-        media_buy = MagicMock()
-        media_buy.media_buy_id = "mb_hold"
-        media_buy.status = "pending_approval"
-
-        step = MagicMock()
-        mapping = MagicMock()
-        mapping.object_type = "media_buy"
-        mapping.object_id = "mb_hold"
-
-        db = MagicMock()
-        db_cm = MagicMock()
-        db_cm.__enter__ = MagicMock(return_value=db)
-        db_cm.__exit__ = MagicMock(return_value=False)
-
-        approve = _unwrap(workflows.approve_workflow_step)
-        with (
-            app.test_request_context(
-                "/tenant/t1/workflows/wf1/steps/s1/approve",
-                method="POST",
-            ),
-            patch("src.admin.blueprints.workflows.get_db_session", return_value=db_cm),
-            patch("src.admin.blueprints.workflows.WorkflowRepository") as mock_wf_repo_cls,
-            patch("src.admin.blueprints.workflows.MediaBuyRepository") as mock_mb_repo_cls,
-            patch(
-                "src.services.media_buy_creative_readiness.evaluate_creative_finalize_readiness_for_session",
-                return_value=hold,
-            ) as mock_eval,
-            patch(
-                "src.core.tools.media_buy_create.execute_approved_media_buy",
-            ) as mock_execute,
-            patch("src.admin.services.media_buy_creative_readiness.flash") as mock_flash,
-            patch("src.admin.blueprints.workflows.session", {"user": {"email": "op@example.com"}}),
-        ):
-            wf_repo = mock_wf_repo_cls.return_value
-            wf_repo.update_status.return_value = step
-            wf_repo.get_mappings_for_step.return_value = [mapping]
-            mock_mb_repo_cls.return_value.get_by_id.return_value = media_buy
-
-            response, status = approve("t1", "wf1", "s1")
-
-        assert status == 200
-        assert response.get_json()["success"] is True
-        assert media_buy.status == "pending_creatives"
-        assert media_buy.approved_by == "op@example.com"
-        mock_eval.assert_called_once_with(db, "t1", media_buy_id="mb_hold")
-        mock_execute.assert_not_called()
-        # Step-status commit, then hold pending_creatives commit via apply helper.
-        assert db.commit.call_count == 2
-        mock_flash.assert_called_once_with(hold.hold_message, "info")
-
-    def test_approve_media_buy_holds_without_execute(self, hold):
-        from src.admin.app import create_app
-        from src.admin.blueprints import operations
-
-        app = create_app()
-        media_buy = MagicMock()
-        media_buy.media_buy_id = "mb_hold"
-        media_buy.status = "pending_approval"
-        media_buy.start_time = None
-        media_buy.end_time = None
-        media_buy.principal_id = "p1"
-
-        step = MagicMock()
-        step.step_id = "step_1"
-        step.context_id = "ctx_1"
-        step.tool_name = "create_media_buy"
-        step.request_data = {}
-        step.comments = []
-
-        db = MagicMock()
-        db_cm = MagicMock()
-        db_cm.__enter__ = MagicMock(return_value=db)
-        db_cm.__exit__ = MagicMock(return_value=False)
-        db.scalars.return_value.first.return_value = step
-
-        approve = _unwrap(operations.approve_media_buy)
-        with (
-            app.test_request_context(
-                "/tenant/t1/media-buy/mb_hold/approve",
-                method="POST",
-                data={"action": "approve"},
-            ),
-            patch("src.core.database.database_session.get_db_session", return_value=db_cm),
-            patch("src.admin.blueprints.operations.MediaBuyRepository") as mock_mb_repo_cls,
-            patch(
-                "src.services.media_buy_creative_readiness.evaluate_creative_finalize_readiness_for_session",
-                return_value=hold,
-            ) as mock_eval,
-            patch(
-                "src.core.tools.media_buy_create.execute_approved_media_buy",
-            ) as mock_execute,
-            patch("src.admin.services.media_buy_creative_readiness.flash") as mock_flash,
-            patch("flask.redirect", return_value="redirected") as mock_redirect,
-            patch("flask.url_for", return_value="/detail"),
-            patch("flask.session", {"user": {"email": "op@example.com"}}),
-        ):
-            mock_mb_repo_cls.return_value.get_by_id.return_value = media_buy
-            result = approve("t1", "mb_hold")
-
-        assert result == "redirected"
-        assert media_buy.status == "pending_creatives"
-        mock_eval.assert_called_once_with(db, "t1", media_buy_id="mb_hold")
-        mock_execute.assert_not_called()
-        # Hold path: single commit for pending_creatives + approval metadata.
-        db.commit.assert_called_once_with()
-        mock_flash.assert_called_once_with(hold.hold_message, "info")
-        mock_redirect.assert_called_once_with("/detail")
-
-
-class TestApproveWorkflowReadyArm:
-    """Ready arm: compute flight status + execute_approved_media_buy are exercised."""
-
-    def test_approve_workflow_step_ready_executes(self):
-        from src.admin.app import create_app
-        from src.admin.blueprints import workflows
-
-        app = create_app()
-        media_buy = MagicMock()
-        media_buy.media_buy_id = "mb_ready"
-        media_buy.status = "pending_approval"
-
-        step = MagicMock()
-        mapping = MagicMock()
-        mapping.object_type = "media_buy"
-        mapping.object_id = "mb_ready"
-
-        db = MagicMock()
-        db_cm = MagicMock()
-        db_cm.__enter__ = MagicMock(return_value=db)
-        db_cm.__exit__ = MagicMock(return_value=False)
-
-        ready = CreativeFinalizeReadiness(
-            ready=True,
-            unapproved_creative_ids=[],
-            hold_reason=None,
-            hold_message=None,
-        )
-
-        approve = _unwrap(workflows.approve_workflow_step)
-        with (
-            app.test_request_context(
-                "/tenant/t1/workflows/wf1/steps/s1/approve",
-                method="POST",
-            ),
-            patch("src.admin.blueprints.workflows.get_db_session", return_value=db_cm),
-            patch("src.admin.blueprints.workflows.WorkflowRepository") as mock_wf_repo_cls,
-            patch("src.admin.blueprints.workflows.MediaBuyRepository") as mock_mb_repo_cls,
-            patch(
-                "src.services.media_buy_creative_readiness.evaluate_creative_finalize_readiness_for_session",
-                return_value=ready,
-            ) as mock_eval,
-            patch(
-                "src.services.media_buy_creative_readiness.compute_media_buy_status_from_flight_dates",
-                return_value="scheduled",
-            ) as mock_compute,
-            patch(
-                "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=(True, None),
-            ) as mock_execute,
-            patch("src.admin.blueprints.workflows.flash") as mock_flash,
-            patch("src.admin.blueprints.workflows.session", {"user": {"email": "op@example.com"}}),
-        ):
-            wf_repo = mock_wf_repo_cls.return_value
-            wf_repo.update_status.return_value = step
-            wf_repo.get_mappings_for_step.return_value = [mapping]
-            mock_mb_repo_cls.return_value.get_by_id.return_value = media_buy
-
-            response, status = approve("t1", "wf1", "s1")
-
-        assert status == 200
-        assert response.get_json()["success"] is True
-        mock_eval.assert_called_once_with(db, "t1", media_buy_id="mb_ready")
-        mock_execute.assert_called_once_with("mb_ready", "t1")
-        mock_compute.assert_called_once_with(media_buy)
-        assert media_buy.status == "scheduled"
-        mock_flash.assert_called_once_with("Workflow step approved and media buy created successfully", "success")

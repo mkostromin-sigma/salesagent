@@ -220,7 +220,12 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         )
                         return jsonify({"success": True}), 200
 
+                    # Commit provenance + flight status before execute (same contract
+                    # as operations.approve_media_buy) so a failed adapter still
+                    # records who approved the buy.
                     stamp_media_buy_approval(media_buy, approved_by=user_email)
+                    media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
+                    db.commit()
 
                     # Execute adapter creation
                     from src.core.tools.media_buy_create import execute_approved_media_buy
@@ -232,9 +237,6 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
                         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
                         return jsonify({"success": False, "error": error_msg}), 500
-
-                    media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
-                    db.commit()
 
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")
