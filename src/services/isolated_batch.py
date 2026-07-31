@@ -40,7 +40,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import NamedTuple, Protocol
+from typing import NamedTuple, Protocol, runtime_checkable
 
 from sqlalchemy.exc import DisconnectionError
 from sqlalchemy.orm import Session
@@ -75,6 +75,11 @@ class _HasMediaBuyIds(Protocol):
     tenant_id: str
     principal_id: str
     media_buy_id: str
+
+
+@runtime_checkable
+class _HasTenantId(Protocol):
+    tenant_id: str
 
 
 def media_buy_context(media_buy: _HasMediaBuyIds) -> SchedulerItemContext:
@@ -183,14 +188,8 @@ def _tally_isolated_failure[C](
 ) -> None:
     """Shared escape-miss path: guard on_error and optionally meter."""
     _safe_on_error(on_error, ctx, exc)
-    if scheduler is not None:
-        # Callers that pass ``scheduler=`` must supply a context with tenant_id
-        # (both production sites use :class:`SchedulerItemContext`).
-        record_scheduler_isolation_error(
-            scheduler=scheduler,
-            tenant_id=ctx.tenant_id,  # type: ignore[attr-defined]
-            error=exc,
-        )
+    if scheduler is not None and isinstance(ctx, _HasTenantId):
+        record_scheduler_isolation_error(scheduler=scheduler, tenant_id=ctx.tenant_id, error=exc)
 
 
 @contextmanager
