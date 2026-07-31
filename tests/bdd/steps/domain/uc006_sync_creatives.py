@@ -1496,7 +1496,8 @@ def _get_assignment_from_db(ctx: dict) -> object:
 def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
     """Assert a per-creative failure with the expected error code.
 
-    Checks SyncCreativeResult.action=="failed" first, then falls back to ctx["error"].
+    Prefers production ``errors[].code`` on a failed SyncCreativeResult, then
+    falls back to message inference / ``ctx["error"]``.
     """
     from src.core.exceptions import AdCPError
 
@@ -1509,19 +1510,30 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
             if action_str == "failed":
                 errs = getattr(r, "errors", None) or []
                 if errs:
-                    inferred = _infer_error_code_from_message(str(errs[0]))
+                    first = errs[0]
+                    production_code = getattr(first, "code", None)
+                    if production_code == expected_code:
+                        return
+                    if production_code:
+                        pytest.xfail(
+                            f"SPEC-PRODUCTION GAP: expected {expected_code}, got "
+                            f"errors[0].code={production_code!r} from {first!r}"
+                        )
+                    inferred = _infer_error_code_from_message(str(first))
                     if inferred == expected_code:
                         return
                     pytest.xfail(
                         f"SPEC-PRODUCTION GAP: expected {expected_code}, inferred '{inferred}' "
-                        f"from error message: {errs[0]}"
+                        f"from error message: {first}"
                     )
     if error is not None:
         if isinstance(error, AdCPError) and error.error_code == expected_code:
             return
+        err_code = getattr(error, "code", None) or getattr(error, "error_code", None)
+        if err_code == expected_code:
+            return
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected {expected_code}, got "
-            f"{type(error).__name__}(code={getattr(error, 'error_code', '?')}): {error}"
+            f"SPEC-PRODUCTION GAP: expected {expected_code}, got {type(error).__name__}(code={err_code!r}): {error}"
         )
     pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code} but no error occurred. Response: {resp}")
 
@@ -2109,15 +2121,20 @@ def then_creative_action_failed(ctx: dict) -> None:
 def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
     """Promote SyncCreativeResult.errors[] to ctx["error"] for downstream Then steps.
 
-    Production stores per-creative failures as plain strings in errors[]. Some
-    error strings contain structured info (e.g. "GEMINI_API_KEY not configured")
-    that downstream steps can parse. We wrap the first error as a synthetic object
-    with error_code/message/suggestion derived from the string content.
+    Prefer the typed production Error (``code`` / ``suggestion`` / ``recovery``)
+    when present. Older plain-string advisories fall back to message inference.
     """
     if not errs:
         return
 
-    first_err = str(errs[0])
+    first = errs[0]
+    production_code = getattr(first, "code", None)
+    if production_code and not isinstance(first, (str, Exception)):
+        # Real adcp.types.Error — Then steps already understand .code/.message/.suggestion
+        ctx["error"] = first
+        return
+
+    first_err = str(first)
     error_code = _infer_error_code_from_message(first_err)
     suggestion = _infer_suggestion_from_message(first_err)
 

@@ -290,6 +290,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "CREATIVE_GEMINI_KEY_MISSING"
+    And the error recovery should be "terminal"
     And the error message should contain "GEMINI_API_KEY"
     And the error should include a "suggestion" field
     And the suggestion should contain "seller"

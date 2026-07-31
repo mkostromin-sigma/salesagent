@@ -435,8 +435,14 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
 
     if isinstance(error, AdCPError):
         assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
-    else:
-        raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
+        return
+    # Per-creative / per-package advisory Error models carry recovery directly.
+    actual = getattr(error, "recovery", None)
+    if actual is not None:
+        actual_str = actual.value if hasattr(actual, "value") else str(actual)
+        assert actual_str == recovery, f"Expected recovery '{recovery}', got '{actual_str}'"
+        return
+    raise AssertionError(f"Cannot check recovery on {type(error).__name__}: {error!r}")
 
 
 @then('the error should include a "suggestion" field')

@@ -2319,7 +2319,13 @@ class TestGenerativeCreativeBuild:
             if hasattr(action_val, "value"):
                 action_val = action_val.value
             assert action_val == "failed"
-            assert any("GEMINI_API_KEY" in e.message for e in (result.errors or []))
+            errs = result.errors or []
+            assert any("GEMINI_API_KEY" in e.message for e in errs)
+            assert errs[0].code == "CREATIVE_GEMINI_KEY_MISSING"
+            assert errs[0].recovery == "terminal"
+            assert errs[0].suggestion is not None
+            assert "seller" in errs[0].suggestion.lower()
+            assert "GEMINI" in errs[0].suggestion
 
 
 # ============================================================================

@@ -364,7 +364,12 @@ class TestGenerativeUpdateGeminiKeyMissing:
 
             creative_result = result.creatives[0]
             assert creative_result.action == "failed"
-            assert any("GEMINI_API_KEY" in e for e in _error_messages(creative_result.errors))
+            errs = creative_result.errors or []
+            assert any("GEMINI_API_KEY" in e for e in _error_messages(errs))
+            assert errs[0].code == "CREATIVE_GEMINI_KEY_MISSING"
+            assert errs[0].recovery == "terminal"
+            assert errs[0].suggestion is not None
+            assert "seller" in errs[0].suggestion.lower()
 
 
 # ── Approval Mode UPDATE Tests (covers lines 97-139) ──────────────────────

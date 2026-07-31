@@ -33,6 +33,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+_GEMINI_KEY_MISSING_SUGGESTION = "Ask the seller to configure GEMINI_API_KEY in their agent settings"
+
+
+def _failed_sync_result_from_error(creative_id: str, error: AdCPErrorDetail) -> SyncCreativeResult:
+    """Wrap a per-creative advisory Error in a failed SyncCreativeResult."""
+    return SyncCreativeResult(
+        creative_id=creative_id,
+        action="failed",
+        errors=[error],
+        review_feedback=None,
+        assigned_to=None,
+        assignment_errors=None,
+    )
+
+
 def _failed_sync_result(
     creative_id: str,
     error_msg: str,
@@ -426,7 +441,9 @@ def _update_existing_creative(
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
             # and admin-fixable — not a transient creative-agent outage. Surface it
-            # honestly so the buyer does not retry a misconfiguration.
+            # honestly so the buyer does not retry a misconfiguration. Use a
+            # platform-specific code (not CONFIGURATION_ERROR) so the advisory
+            # stays inside a success artifact without inverting wire-placement MUST.
             error_msg = str(config_error)
             logger.error(
                 "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
@@ -716,7 +733,9 @@ def _create_new_creative(
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
             # and admin-fixable — not a transient creative-agent outage. Surface it
-            # honestly so the buyer does not retry a misconfiguration.
+            # honestly so the buyer does not retry a misconfiguration. Use a
+            # platform-specific code (not CONFIGURATION_ERROR) so the advisory
+            # stays inside a success artifact without inverting wire-placement MUST.
             error_msg = str(config_error)
             logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
             return (_failed_sync_result(creative_id, error_msg, code="CONFIGURATION_ERROR"), False)

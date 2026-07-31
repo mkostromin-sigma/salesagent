@@ -27,9 +27,16 @@ _SPEC_CODES = {
     "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
 }
 
+# Platform-specific codes permitted by pinned core/error.json ("Sellers MAY use
+# codes not in the standard vocabulary … agents MUST handle unknown codes
+# gracefully by falling back to the recovery classification").
+_PLATFORM_SPECIFIC_CODES = {
+    "CREATIVE_GEMINI_KEY_MISSING",  # sync_creatives GEMINI misconfig advisory (#1831)
+}
+
 # All acceptable codes: wire-standard (SDK + spec supplement) + justified
-# internal + spec-required literals
-_ALLOWED_CODES = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | _SPEC_CODES
+# internal + spec-required literals + platform-specific advisories
+_ALLOWED_CODES = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | _SPEC_CODES | _PLATFORM_SPECIFIC_CODES
 
 # Anchor scan paths on the test file's location so they resolve correctly
 # regardless of pytest's working directory (CI runs from the repo root;

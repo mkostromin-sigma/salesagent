@@ -158,8 +158,13 @@ class TestGenerativeCreatives:
         assert isinstance(result, SyncCreativesResponse)
         assert len(result.creatives) == 1
         assert result.creatives[0].action == "failed"
-        assert result.creatives[0].errors
-        assert any("GEMINI_API_KEY" in str(err) for err in result.creatives[0].errors)
+        errs = result.creatives[0].errors
+        assert errs
+        assert any("GEMINI_API_KEY" in str(err) for err in errs)
+        assert errs[0].code == "CREATIVE_GEMINI_KEY_MISSING"
+        assert errs[0].recovery == "terminal"
+        assert errs[0].suggestion is not None
+        assert "seller" in errs[0].suggestion.lower()
 
     def test_message_extraction_from_assets(self, integration_db):
         """Test that message is correctly extracted from various asset roles."""
