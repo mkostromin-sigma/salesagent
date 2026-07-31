@@ -68,11 +68,17 @@ class WorkflowRepository:
     def get_by_step_id_or_raise(self, step_id: str, *, principal_id: str) -> WorkflowStep:
         """Get a workflow step by ID or raise ``AdCPTaskNotFoundError``.
 
-        Requires ``principal_id`` (buyer-path). Missing step **or** wrong
-        principal yields the same ``AdCPTaskNotFoundError`` (no ownership
-        oracle). Collapses the fetch-and-raise guard shared by get_task and
-        complete_task. No transport ``context`` parameter by design.
+        Requires a non-empty ``principal_id`` (buyer-path). Missing step **or**
+        wrong principal yields the same ``AdCPTaskNotFoundError`` (no ownership
+        oracle on this lookup). Collapses the fetch-and-raise guard shared by
+        get_task and complete_task. No transport ``context`` parameter by design.
+
+        Falsy ``principal_id`` is rejected before lookup so callers cannot
+        accidentally fall through to tenant-only scoping via
+        ``get_by_step_id(..., principal_id=None)``.
         """
+        if not principal_id:
+            raise ValueError("principal_id is required for get_by_step_id_or_raise")
         step = self.get_by_step_id(step_id, principal_id=principal_id)
         if step is None:
             from src.core.exceptions import AdCPTaskNotFoundError

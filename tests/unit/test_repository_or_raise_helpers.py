@@ -84,22 +84,30 @@ class TestWorkflowOrRaise:
         assert exc.value.error_code == "TASK_NOT_FOUND"
         assert "step-missing" in str(exc.value)
 
-    def test_get_by_step_id_or_raise_sibling_principal_same_as_absent(self):
-        """Wrong principal and unknown id share TASK_NOT_FOUND (no ownership oracle).
+    def test_get_by_step_id_or_raise_forwards_principal_id(self):
+        """Buyer or_raise always forwards principal_id into get_by_step_id.
 
-        Spec: AdCP 3.1.1 L1 Agent and Account Isolation — fail closed without
-        distinguishing unauthorized from not-found. Sibling-principal durable
-        get_task is ungraded (UC-027 is cross-tenant only).
+        Sibling ownership (row exists, wrong principal) is graded by SQL compile
+        + integration; this unit only locks the forwarding contract so a
+        regression that drops principal_id= cannot stay green here.
         """
-        repo_wrong = _repo_with_first(WorkflowRepository, None)
-        repo_missing = _repo_with_first(WorkflowRepository, None)
-        with pytest.raises(AdCPTaskNotFoundError) as wrong_exc:
-            repo_wrong.get_by_step_id_or_raise("step-1", principal_id="sibling-b")
-        with pytest.raises(AdCPTaskNotFoundError) as missing_exc:
-            repo_missing.get_by_step_id_or_raise("step-missing", principal_id="principal-a")
-        assert wrong_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
-        assert str(wrong_exc.value) == "Task step-1 not found"
-        assert str(missing_exc.value) == "Task step-missing not found"
+        session = MagicMock()
+        session.scalars.return_value.first.return_value = None
+        repo = WorkflowRepository(session, "tenant-1")
+        with pytest.raises(AdCPTaskNotFoundError):
+            repo.get_by_step_id_or_raise("step-1", principal_id="sibling-b")
+        compiled = str(session.scalars.call_args[0][0].compile(compile_kwargs={"literal_binds": True}))
+        assert "principal_id" in compiled
+        assert "sibling-b" in compiled
+
+    def test_get_by_step_id_or_raise_rejects_falsy_principal_id(self):
+        """Explicit None/empty must not silently tenant-scope via get_by_step_id."""
+        repo = _repo_with_first(WorkflowRepository, MagicMock())
+        with pytest.raises(ValueError, match="principal_id is required"):
+            repo.get_by_step_id_or_raise("step-1", principal_id=None)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="principal_id is required"):
+            repo.get_by_step_id_or_raise("step-1", principal_id="")
+        repo._session.scalars.assert_not_called()
 
     def test_get_by_step_id_filters_principal_in_sql(self):
         """Principal filter is applied in the WHERE clause (not post-fetch)."""
