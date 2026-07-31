@@ -416,9 +416,9 @@ async def test_auth_resolve_failure_leaves_no_orphan_push_config():
     assert handler.tasks == {}
     assert handler._task_owners == {}
     assert handler._task_push_configs == {}
-    webhook.assert_called_once()
-    assert webhook.call_args.kwargs.get("config") == push
-    assert webhook.call_args.kwargs.get("config").url == "https://example.com/hook"
+    # Thread request-scoped config (no orphan map write) — assert_called_once_with
+    # so the weak-mock guard does not flag a split call_args inspection.
+    webhook.assert_called_once_with(ANY, status="failed", config=push)
 
 
 def test_resolve_identity_without_principal_id_raises_invalid_request():
