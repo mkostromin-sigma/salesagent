@@ -1370,23 +1370,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
                 "response for sandbox accounts (BR-RULE-209 INV-4)"
             ),
-            # Async submitted envelope: _sync_creatives_impl returns
-            # SyncCreativesResponse, which extends the library SUCCESS shape — there
-            # is no SyncCreativesSubmitted variant anywhere on the sync_creatives
-            # path, so the buyer can never be handed a task_id to poll. Steps
-            # (including the tasks/get poll binder) are implemented and grade the
-            # wire the moment production grows the variant. #1780
+            # Async submitted envelope: CreativeSyncEnv.call_a2a uses
+            # sync_creatives_raw (not _run_a2a_handler), so wire_dict() fails
+            # with "wire_response missing" before the submitted envelope can be
+            # graded — that harness gap is the proximate cause on the default
+            # [a2a] node. Underlying SPEC-PRODUCTION GAP: sync_creatives has no
+            # submitted envelope (_sync_creatives_impl only returns the success
+            # variant). Poll step unbound until create→poll seam exists (#1780).
             "T-UC-006-main-async-submitted": (
-                "SPEC-PRODUCTION GAP: sync_creatives has no submitted envelope — "
-                "_sync_creatives_impl only returns the success variant, so status='submitted' "
-                "with a pollable task_id is never emitted"
+                "HARNESS GAP (proximate): CreativeSyncEnv.call_a2a does not stash "
+                "wire_response, so wire_dict() fails before grading. "
+                "SPEC-PRODUCTION GAP (underlying): sync_creatives has no submitted "
+                "envelope — _sync_creatives_impl only returns the success variant"
             ),
-            # Same submitted-envelope gap as main-async-submitted; sandbox INV-11
-            # (omit sandbox on submitted) cannot grade until that envelope exists.
+            # Same submitted-envelope gap as main-async-submitted; no poll step,
+            # so this entry retains the production-gap ratchet (flips when the
+            # envelope lands). A2A node also blocked by the wire_response stash.
             "T-UC-006-sandbox-submitted-no-flag": (
                 "SPEC-PRODUCTION GAP: sync_creatives has no submitted envelope — "
                 "sandbox INV-11 (omit sandbox on submitted) cannot be graded until "
-                "status='submitted' with a pollable task_id is emitted"
+                "status='submitted' with a pollable task_id is emitted "
+                "(A2A also blocked by CreativeSyncEnv wire_response stash gap)"
             ),
             # Sandbox: invalid format_id does not trigger validation error at _impl level
             "T-UC-006-sandbox-validation": (
@@ -3210,7 +3214,7 @@ _ADMIN_TAG_PREFIX = "T-ADMIN-"
 # Locally-added A2A protocol-method scenarios (tasks/get, tasks/cancel — #1780).
 # Tagged @a2a as well, so they are never parametrized across transports: the
 # methods exist only on the A2A wire.
-_A2A_TASK_OWNERSHIP_TAG_PREFIX = "T-A2A-TASK-OWNERSHIP"
+_A2A_TASK_OWNERSHIP_TAG_PREFIX = "T-A2A-TASK-OWNERSHIP-"
 
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
 # variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
@@ -3256,7 +3260,9 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         return
 
     # A2A task ownership grades tasks/get|cancel on the shared handler only —
-    # no MCP/REST equivalent. Skip multiply even if a scenario drops @a2a.
+    # no MCP/REST equivalent. Redundant with ``_TRANSPORT_SPECIFIC_TAGS`` today
+    # (all scenarios also carry ``@a2a``, which returns above); kept as
+    # belt-and-braces if a scenario drops ``@a2a`` while retaining the tag prefix.
     if any(t.startswith(_A2A_TASK_OWNERSHIP_TAG_PREFIX) for t in marker_names):
         return
 

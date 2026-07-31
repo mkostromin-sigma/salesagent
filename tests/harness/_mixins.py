@@ -35,6 +35,7 @@ from src.services.webhook_delivery_service import (
     CircuitState,
     WebhookDeliveryService,
 )
+from tests.harness._base import _NO_OVERRIDE
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import (

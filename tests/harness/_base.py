@@ -28,8 +28,6 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from tests.harness._realize import e2e_unsupported, realize_e2e
-
 # The MCP transport boots the real FastMCP app lifespan, which starts the
 # background schedulers. Those run a batch immediately on the *real* wall clock
 # and rewrite media-buy status rows — silently mutating data a test just seeded
@@ -43,9 +41,12 @@ os.environ.setdefault("ADCP_RUN_BACKGROUND_SCHEDULERS", "false")
 from tests.harness.transport import DeliverResult, strip_a2a_protocol_fields
 
 if TYPE_CHECKING:
+    from a2a.server.routes.common import ServerCallContext
+    from a2a.types import Task, TaskState
     from pydantic import BaseModel
     from sqlalchemy.orm import Session
 
+    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
     from src.core.resolved_identity import ResolvedIdentity
     from tests.harness.transport import E2EConfig, Transport, TransportResult
 
@@ -467,7 +468,7 @@ class BaseTestEnv:
         self._last_a2a_task_error: dict[str, Any] | None = None
         # One AdCPRequestHandler per env: the handler owns the in-memory task
         # store, so create → tasks/get / tasks/cancel must hit the same instance.
-        self._a2a_handler: Any = None
+        self._a2a_handler: AdCPRequestHandler | None = None
 
     # -- Transport mode -----------------------------------------------------
 
@@ -663,8 +664,8 @@ class BaseTestEnv:
         return self.deliver_a2a(**kwargs).payload
 
     @property
-    def last_a2a_task(self) -> Any:
-        """Raw A2A Task from the last ``_run_a2a_handler`` dispatch (or None).
+    def last_a2a_task(self) -> Task | None:
+        """Raw A2A Task from the last ``_run_a2a_handler`` / ``run_a2a_task_method``.
 
         Public accessor for Task-level contract assertions — e.g. the submitted
         (manual-approval) contract, where state=TASK_STATE_SUBMITTED with NO
@@ -863,7 +864,11 @@ class BaseTestEnv:
             payload=response_cls(**strip_a2a_protocol_fields(artifact_data)), wire_response=wire_response
         )
 
-    def _prepare_a2a_server_context(self, handler: Any, a2a_identity: Any) -> Any:
+    def _prepare_a2a_server_context(
+        self,
+        handler: AdCPRequestHandler,
+        a2a_identity: ResolvedIdentity | None,
+    ) -> ServerCallContext:
         """Build the ``ServerCallContext`` for one in-process A2A dispatch.
 
         Auth strategy mirrors _run_mcp_client. When the identity carries a real
@@ -875,7 +880,7 @@ class BaseTestEnv:
         chain itself is real. When no real token exists (unit mode), inject the
         identity directly via the single mock point (unchanged behavior).
 
-        Shared by ``_run_a2a_handler`` (skills) and ``_run_a2a_task_method``
+        Shared by ``_run_a2a_handler`` (skills) and ``run_a2a_task_method``
         (``tasks/get`` / ``tasks/cancel``) so both dispatch styles authenticate
         the same way against the same handler.
         """
@@ -893,6 +898,10 @@ class BaseTestEnv:
             # denial scenario would silently reuse the previous caller's identity.
             handler.__dict__.pop("_resolve_a2a_identity", None)
             handler.__dict__.pop("_get_auth_token", None)
+            # Oracle: deleting the two pops above leaves unit-mode lambdas in
+            # place and a subsequent token-mode sibling tasks/get is served.
+            assert "_resolve_a2a_identity" not in handler.__dict__
+            assert "_get_auth_token" not in handler.__dict__
 
             headers = auth_headers_mapping(
                 {
@@ -922,8 +931,8 @@ class BaseTestEnv:
             # otherwise the handler rejects the request before _resolve_a2a_identity
             # is called. Use auth_token from identity, falling back to a sentinel.
             # Unauthenticated (a2a_identity is None) stays token-less.
-            handler._resolve_a2a_identity = lambda *args, **kw: resolved  # type: ignore[assignment]
-            handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
+            handler._resolve_a2a_identity = lambda *args, **kw: resolved  # type: ignore[method-assign]
+            handler._get_auth_token = lambda *args, **kw: (  # type: ignore[method-assign]
                 (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
             )
             server_context = ServerCallContext()
@@ -936,7 +945,13 @@ class BaseTestEnv:
 
         return server_context
 
-    def _run_a2a_task_method(self, method: str, task_id: str, *, identity: Any = _NO_OVERRIDE) -> Any:
+    def run_a2a_task_method(
+        self,
+        method: str,
+        task_id: str,
+        *,
+        identity: Any = _NO_OVERRIDE,
+    ) -> Task | None:
         """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
 
         Runs against the SAME handler ``_run_a2a_handler`` uses, so the task a
@@ -946,23 +961,25 @@ class BaseTestEnv:
         These are protocol methods, not AdCP skills: there is no artifact and no
         two-layer envelope. Results land on the grading surface —
         ``last_a2a_task`` for the served Task, ``last_a2a_task_error`` for a
-        not-found (unknown id AND ownership denial collapse to it identically).
-        Anything else propagates as an unwrapped AdCPError, the same as skills.
+        JSON-RPC error (unknown id AND ownership denial collapse to not-found
+        identically; unauthenticated callers get an auth-failure body).
 
-        Denial altitude: calls ``on_get_task`` / ``on_cancel_task`` directly and,
-        on ``TaskNotFoundError``, stores a **compat-shaped reconstruction**
-        (``CoreInternalError(message=str(exc)).model_dump``) matching today's
-        v0.3 adapter body — it does **not** POST through
-        ``create_jsonrpc_routes(..., enable_v0_3_compat=True)``. Live JSON-RPC
-        wire serialization is graded in ``tests/unit/test_a2a_task_identity_wire.py``
-        (#1720).
+        Denial altitude: POSTs through ``create_jsonrpc_routes(...,
+        enable_v0_3_compat=True)`` — the same call production makes — on the
+        shared handler, reusing ``_prepare_a2a_server_context`` for auth.
+        Captures the real buyer wire body (not a reconstructed mirror).
 
-        Returns the served Task, or None when the call was denied.
+        Explicit ``identity=None`` is unauthenticated: empty ServerCallContext,
+        no unit-mode identity lambdas, so the handler's real auth failure
+        surfaces on the wire (must not collapse to task-not-found).
+
+        Returns the served Task, or None when the call errored.
         """
-        import asyncio
-
-        from a2a.server.jsonrpc_models import InternalError as CoreInternalError
-        from a2a.types import CancelTaskRequest, GetTaskRequest, TaskNotFoundError
+        from a2a.server.routes.common import ServerCallContext, ServerCallContextBuilder
+        from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
+        from starlette.applications import Starlette
+        from starlette.requests import Request
+        from starlette.testclient import TestClient
 
         from tests.harness.transport import Transport
 
@@ -972,59 +989,86 @@ class BaseTestEnv:
             self._ensure_tenant_for_audit(a2a_identity.tenant_id)
 
         handler = self.a2a_handler
-        server_context = self._prepare_a2a_server_context(handler, a2a_identity)
 
-        request_cls, on_method = {
-            "tasks/get": (GetTaskRequest, handler.on_get_task),
-            "tasks/cancel": (CancelTaskRequest, handler.on_cancel_task),
-        }[method]
+        if a2a_identity is None:
+            # Explicit unauthenticated dispatch — do not inject anonymous
+            # identity lambdas (skill-dispatch compensating path). Clear any
+            # leftover unit-mode mocks so the real auth chain denies.
+            handler.__dict__.pop("_resolve_a2a_identity", None)
+            handler.__dict__.pop("_get_auth_token", None)
+            server_context = ServerCallContext()
+        else:
+            server_context = self._prepare_a2a_server_context(handler, a2a_identity)
+
+        class _PreparedContextBuilder(ServerCallContextBuilder):
+            def build(self, request: Request) -> ServerCallContext:
+                return server_context
+
+        routes = create_jsonrpc_routes(
+            request_handler=handler,
+            rpc_url="/a2a",
+            context_builder=_PreparedContextBuilder(),
+            enable_v0_3_compat=True,
+        )
+        client = TestClient(Starlette(routes=routes))
 
         self._last_a2a_task = None
         self._last_a2a_task_error = None
-        try:
-            task = asyncio.run(on_method(request_cls(id=task_id), server_context))
-        except TaskNotFoundError as exc:
-            # Intentional altitude (#1780 review): mirror today's v0.3 compat body
-            # (enable_v0_3_compat rebuilds any raised error as CoreInternalError —
-            # code -32603, data dropped, #1670). Not a live JSON-RPC capture;
-            # adapter wire proof lives in test_a2a_task_identity_wire.py (#1720).
-            self._last_a2a_task_error = CoreInternalError(message=str(exc)).model_dump(by_alias=True)
+        response = client.post(
+            "/a2a",
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
+        )
+        assert response.status_code == 200, f"JSON-RPC {method} returned HTTP {response.status_code}: {response.text}"
+        body = response.json()
+        if "error" in body:
+            self._last_a2a_task_error = body["error"]
             return None
-        except Exception as exc:
-            raise _unwrap_a2a_server_error(exc) from exc
 
+        # Success: prefer the handler's stored Task (cancel mutates it in place)
+        # over re-parsing body["result"] — same instance the gate authorized.
+        task = handler.tasks.get(task_id)
         self._last_a2a_task = task
         return task
 
-    @realize_e2e(e2e_unsupported("in-process handler memory"))
-    def seed_a2a_task(self, task_id: str, *, identity: Any = _NO_OVERRIDE, state: Any = None) -> Any:
+    def seed_a2a_task(
+        self,
+        task_id: str,
+        *,
+        identity: Any = _NO_OVERRIDE,
+        state: TaskState | None = None,
+        record_owner: bool = True,
+    ) -> Task:
         """Seed an in-memory task owned by *identity* on the shared handler.
 
         Authz-gate altitude for ownership BDD (#1780): writes ``handler.tasks``
-        and ``_task_owners`` directly so get/cancel can grade the gate with real
-        tokens. This is **not** bind-on-create via ``on_message_send`` (that path
-        is covered by #1720 unit tests). Do not use this seed to claim create→poll
-        co-location in UC-006 — that Then fails until sync create records owners.
-
-        Over e2e the live server owns its own handler process memory, which no
-        test-side seed can reach — hence the ``e2e_unsupported`` realization.
+        and (unless ``record_owner=False``) ``_task_owners`` directly so
+        get/cancel can grade the gate with real tokens. This is **not**
+        bind-on-create via ``on_message_send`` (that path is covered by #1720
+        unit tests). Do not use this seed to claim create→poll co-location in
+        UC-006 — that Then fails until sync create records owners.
 
         Defaults to ``TASK_STATE_WORKING`` so a denied cancel has a state that
         would visibly change if the ownership gate let it through.
+
+        ``record_owner=False`` grades the fail-closed path for a task present
+        in ``handler.tasks`` with no ownership record.
         """
         from a2a.types import Task, TaskState, TaskStatus
 
-        from src.a2a_server.adcp_a2a_server import _TaskOwner
+        from tests.a2a_helpers import record_a2a_task_owner
         from tests.harness.transport import Transport
 
         owner = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
         handler = self.a2a_handler
         task = Task(id=task_id, status=TaskStatus(state=state or TaskState.TASK_STATE_WORKING))
         handler.tasks[task_id] = task
-        handler._task_owners[task_id] = _TaskOwner(
-            tenant_id=owner.tenant_id,
-            principal_id=owner.principal_id,
-        )
+        if record_owner:
+            record_a2a_task_owner(
+                handler,
+                task_id,
+                tenant_id=owner.tenant_id,
+                principal_id=owner.principal_id,
+            )
         return task
 
     def a2a_task_state(self, task_id: str) -> Any:

@@ -2,11 +2,10 @@
 
 Grades the protocol surface of ``tasks/get`` / ``tasks/cancel``, not an AdCP
 skill: a denial has no artifact and no two-layer envelope. The oracle is
-``assert_wire_task_not_found`` on the **handler-exception shape mirrored** to
-today's v0.3 JSON-RPC body (``CoreInternalError`` / ``-32603``) — not a live
-capture through ``create_jsonrpc_routes``. Live adapter wire serialization is
-proven in ``tests/unit/test_a2a_task_identity_wire.py`` (#1720). Never use
-``assert_envelope_shape`` / ``wire_error_envelope`` here.
+``assert_wire_task_not_found`` on the **live** v0.3 JSON-RPC body captured
+through ``create_jsonrpc_routes(..., enable_v0_3_compat=True)``. Live adapter
+wire serialization is also proven in ``tests/unit/test_a2a_task_identity_wire.py``
+(#1720). Never use ``assert_envelope_shape`` / ``wire_error_envelope`` here.
 
 Owner, same-tenant sibling and other-tenant caller are seeded by
 ``A2ATaskOwnershipEnv`` with real access tokens, so every dispatch runs the
@@ -41,18 +40,29 @@ def given_owned_in_memory_task(ctx: dict, task_id: str) -> None:
     env.seed_a2a_task(task_id, identity=env.identity_for_role("owner"))
 
 
-@when(parsers.parse('the "{role}" calls tasks/get for task "{task_id}"'))
-def when_role_calls_tasks_get(ctx: dict, role: str, task_id: str) -> None:
-    """Dispatch tasks/get as *role* against the shared handler."""
+@given(parsers.parse('an in-memory A2A task "{task_id}" with no owner record'))
+def given_orphan_in_memory_task(ctx: dict, task_id: str) -> None:
+    """Seed a task in ``handler.tasks`` without recording ``_task_owners``.
+
+    Grades the fail-closed path when a task exists but has no owner record
+    (legacy tasks / future create paths that forget to record ownership).
+    """
     env = ctx["env"]
-    env._run_a2a_task_method("tasks/get", task_id, identity=env.identity_for_role(role))
+    env.seed_a2a_task(task_id, identity=env.identity_for_role("owner"), record_owner=False)
 
 
-@when(parsers.parse('the "{role}" calls tasks/cancel for task "{task_id}"'))
-def when_role_calls_tasks_cancel(ctx: dict, role: str, task_id: str) -> None:
-    """Dispatch tasks/cancel as *role* against the shared handler."""
+@when(parsers.parse('the "{role}" calls {method} for task "{task_id}"'))
+def when_role_calls_task_method(ctx: dict, role: str, method: str, task_id: str) -> None:
+    """Dispatch ``tasks/get`` / ``tasks/cancel`` as *role* against the shared handler."""
     env = ctx["env"]
-    env._run_a2a_task_method("tasks/cancel", task_id, identity=env.identity_for_role(role))
+    env.run_a2a_task_method(method, task_id, identity=env.identity_for_role(role))
+
+
+@when(parsers.parse('an unauthenticated caller calls {method} for task "{task_id}"'))
+def when_unauth_calls_task_method(ctx: dict, method: str, task_id: str) -> None:
+    """Dispatch with ``identity=None`` — auth failure must not collapse to not-found."""
+    env = ctx["env"]
+    env.run_a2a_task_method(method, task_id, identity=None)
 
 
 @then(parsers.parse('the A2A task response should carry task "{task_id}" in state {state}'))
@@ -70,18 +80,40 @@ def then_task_served(ctx: dict, task_id: str, state: str) -> None:
 
 @then(parsers.parse('the A2A task response should be a JSON-RPC task-not-found error for "{task_id}"'))
 def then_task_not_found(ctx: dict, task_id: str) -> None:
-    """Assert the mirrored not-found body — the same for denial and unknown id.
+    """Assert the live not-found body — the same for denial and unknown id.
 
     ``assert_wire_task_not_found`` pins code/message/data literally on the
-    handler-exception reconstruction (not a live JSON-RPC response). An
-    ownership denial that leaked "you may not touch this" (or any tenant /
-    principal identifier) would fail here rather than pass as "some error".
+    captured JSON-RPC error (independent of ``_task_not_found_message``). An
+    ownership denial that leaked "you may not touch this" would fail the exact
+    equality. A static identity leak inside the shared message builder is
+    caught by the forbidden-substring check over this env's role ids (not the
+    unit-fixture defaults, which BDD bodies never contain).
     """
     env = ctx["env"]
     assert env.last_a2a_task is None, f"Denied call still returned a Task: {env.last_a2a_task}"
     error = env.last_a2a_task_error
     assert error is not None, f"Expected a task-not-found error for {task_id}, got none"
     assert_wire_task_not_found(error, task_id)
+    blob = f"{error.get('message', '')}{error.get('data')!s}"
+    for needle in (
+        env.OWNER_TENANT_ID,
+        env.OWNER_PRINCIPAL_ID,
+        env.SIBLING_PRINCIPAL_ID,
+        env.OTHER_TENANT_ID,
+        env.OTHER_PRINCIPAL_ID,
+    ):
+        assert needle not in blob, f"identity leak {needle!r} in not-found body: {error!r}"
+
+
+@then("the A2A task response should be an authentication failure, not task-not-found")
+def then_auth_failure_not_task_not_found(ctx: dict) -> None:
+    """Unauthenticated callers must not receive the ownership-denial not-found shape."""
+    env = ctx["env"]
+    assert env.last_a2a_task is None, f"Unauth call still returned a Task: {env.last_a2a_task}"
+    error = env.last_a2a_task_error
+    assert error is not None, "Expected an authentication failure, got none"
+    assert error.get("message") == "Missing authentication token", f"expected auth-failure message, got {error!r}"
+    assert "Task not found" not in str(error.get("message", ""))
 
 
 @then(parsers.parse('the stored task "{task_id}" should be in state {state}'))

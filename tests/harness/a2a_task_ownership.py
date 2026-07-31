@@ -15,7 +15,7 @@ Usage::
     with A2ATaskOwnershipEnv() as env:
         env.setup_principals()
         env.seed_a2a_task("task-1", identity=env.identity_for_role("owner"))
-        denied = env._run_a2a_task_method(
+        denied = env.run_a2a_task_method(
             "tasks/get", "task-1", identity=env.identity_for_role("sibling")
         )
 """
@@ -25,6 +25,13 @@ from __future__ import annotations
 from typing import Any
 
 from src.core.resolved_identity import ResolvedIdentity
+from tests.a2a_helpers import (
+    OWNED_TASK_OTHER_PRINCIPAL,
+    OWNED_TASK_OTHER_TENANT,
+    OWNED_TASK_OWNER,
+    OWNED_TASK_SIBLING,
+    OWNED_TASK_TENANT,
+)
 from tests.harness._base import IntegrationEnv
 
 OWNER_ROLE = "owner"
@@ -37,11 +44,14 @@ class A2ATaskOwnershipEnv(IntegrationEnv):
 
     EXTERNAL_PATCHES: dict[str, str] = {}
 
-    OWNER_TENANT_ID = "task_owner_tenant"
-    OWNER_PRINCIPAL_ID = "task_owner"
-    SIBLING_PRINCIPAL_ID = "task_sibling"
-    OTHER_TENANT_ID = "task_other_tenant"
-    OTHER_PRINCIPAL_ID = "task_other_principal"
+    # Shared with unit/wire altitudes (tests/a2a_helpers.py) — one vocabulary.
+    OWNER_TENANT_ID = OWNED_TASK_TENANT
+    OWNER_PRINCIPAL_ID = OWNED_TASK_OWNER
+    SIBLING_PRINCIPAL_ID = OWNED_TASK_SIBLING
+    OTHER_TENANT_ID = OWNED_TASK_OTHER_TENANT
+    # Same principal_id under another tenant so cross-tenant scenarios grade the
+    # tenant half of ``_TaskOwner`` (principal-only mutation must redden).
+    OTHER_PRINCIPAL_ID = OWNED_TASK_OTHER_PRINCIPAL
 
     def __init__(self, **kwargs: Any) -> None:
         kwargs.setdefault("tenant_id", self.OWNER_TENANT_ID)
@@ -82,12 +92,14 @@ class A2ATaskOwnershipEnv(IntegrationEnv):
             tenant_id, principal_id = role_targets[role]
             self.switch_tenant(tenant_id)
             self.switch_principal(principal_id)
-            identity = self.identity_for(Transport.A2A)
-            assert identity.auth_token, (
-                f"No access token resolved for role {role!r} ({tenant_id}/{principal_id}) — "
-                "call setup_principals() before building role identities."
-            )
-            self._role_identities[role] = identity
-            self.switch_tenant(self.OWNER_TENANT_ID)
-            self.switch_principal(self.OWNER_PRINCIPAL_ID)
+            try:
+                identity = self.identity_for(Transport.A2A)
+                assert identity.auth_token, (
+                    f"No access token resolved for role {role!r} ({tenant_id}/{principal_id}) — "
+                    "call setup_principals() before building role identities."
+                )
+                self._role_identities[role] = identity
+            finally:
+                self.switch_tenant(self.OWNER_TENANT_ID)
+                self.switch_principal(self.OWNER_PRINCIPAL_ID)
         return self._role_identities[role]
