@@ -1,4 +1,4 @@
-# Hand-authored companion to BR-UC-027 (PR #1812 review).
+# Hand-authored feature — companion to BR-UC-027 (PR #1812 review).
 #
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 # Upstream gap: BR-UC-027 grades cross-tenant REFERENCE_NOT_FOUND but has no
