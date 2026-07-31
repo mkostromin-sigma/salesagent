@@ -814,7 +814,9 @@ class BaseTestEnv:
             # None. Create+own co-location reads ``identity.tenant_id`` (#1702);
             # mocking None made unauth A2A BDD paths AttributeError into
             # SERVICE_UNAVAILABLE instead of AUTH_REQUIRED.
-            # Pin: @T-UC-011-list-unauth grades this compensating unauth path.
+            # Pin: @T-UC-011-list-unauth[a2a] and @T-UC-005-ext-a[a2a] — both
+            # invoke DISCOVERY_SKILLS, so execution passes the auth-required
+            # gate and reaches the create+own co-location (#1702 / R5-N5a).
             # Use PrincipalFactory (not inline ResolvedIdentity) for the arch guard.
             from tests.factories.principal import PrincipalFactory
 

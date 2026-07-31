@@ -10,12 +10,13 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
+from typing import Any
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
-from a2a.types import Task, TaskNotFoundError, TaskState, TaskStatus
+from a2a.types import CancelTaskRequest, GetTaskRequest, Task, TaskNotFoundError, TaskState, TaskStatus
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _task_not_found_message, _TaskOwner
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _safe_task_id_for_log, _TaskOwner
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.resolved_identity import ResolvedIdentity
 
@@ -26,6 +27,12 @@ OWNED_TASK_SIBLING = "principal_sibling"
 OWNED_TASK_ID = "task_owned_abc"
 OWNED_TASK_OWNER_TOK = "owner-tok"
 OWNED_TASK_SIBLING_TOK = "sibling-tok"
+
+# method_name / request_cls / JSON-RPC method — one vocabulary for unit + wire.
+TASK_METHOD_MATRIX: tuple[tuple[type, str, str], ...] = (
+    (GetTaskRequest, "on_get_task", "tasks/get"),
+    (CancelTaskRequest, "on_cancel_task", "tasks/cancel"),
+)
 
 
 def make_a2a_context(
@@ -61,6 +68,16 @@ def a2a_auth_as(handler: AdCPRequestHandler, identity: ResolvedIdentity) -> Iter
         yield
 
 
+async def invoke_owned_task_method(
+    handler: AdCPRequestHandler,
+    method_name: str,
+    request_cls: type,
+    task_id: str,
+) -> Any:
+    """Act half shared by ownership unit tests (auth already patched via ``a2a_auth_as``)."""
+    return await getattr(handler, method_name)(request_cls(id=task_id), context=None)
+
+
 def seeded_owned_a2a_handler(
     *,
     task_id: str = OWNED_TASK_ID,
@@ -80,7 +97,8 @@ def token_identity_resolver(
     """``resolve_identity`` side_effect: Bearer token → identity (shared by unit+wire)."""
 
     def resolve(*, auth_token: str | None, **_kwargs: object) -> ResolvedIdentity:
-        if auth_token not in mapping:
+        # Explicit None check restores the narrowing mypy needs for Mapping.__getitem__.
+        if auth_token is None or auth_token not in mapping:
             raise AssertionError(f"unexpected token: {auth_token!r}")
         return mapping[auth_token]
 
@@ -105,13 +123,15 @@ def assert_task_not_found_nondisclosure(
 ) -> None:
     """Shared non-disclosure oracle for unit-altitude TaskNotFoundError objects.
 
-    Literal message/data — never call ``_task_not_found`` for the expected side
-    (both sides would move together and hide an identity leak). Message text must
-    match production ``_task_not_found_message`` so telemetry and wire stay joined.
+    Expected message is a hand-written literal (never derived from production
+    ``_task_not_found_message`` — both sides would move together). Sanitizer
+    treatment matches ``_task_not_found`` so control-character ids stay joined.
     """
-    assert exc.message == _task_not_found_message(task_id)
-    # Grades exception object ``data``, not the wire envelope (compat drops it).
-    assert exc.data == {"task_id": task_id}
+    safe_id = _safe_task_id_for_log(task_id)
+    assert exc.message == f"Task not found: {safe_id}"
+    assert isinstance(exc.data, dict)
+    assert exc.data.get("task_id") == safe_id
+    assert "adcp_error" in exc.data
     blob = f"{exc.message}{exc.data!s}"
     for needle in forbidden_substrings:
         assert needle not in blob
@@ -124,8 +144,9 @@ def assert_wire_task_not_found(err: Mapping[str, object], task_id: str) -> None:
     ``tests/e2e/test_a2a_endpoints_working.py`` (TestA2AServerIntegration) XPASSes
     by design while this hard-fails — keep the pointer at the failure site.
     """
+    safe_id = _safe_task_id_for_log(task_id)
     assert err == {
         "code": -32603,
-        "message": _task_not_found_message(task_id),
+        "message": f"Task not found: {safe_id}",
         "data": None,
     }
