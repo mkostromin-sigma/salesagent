@@ -15,8 +15,6 @@ from src.core.database.database_session import get_engine
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import LazyTenantContext
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.task_management import complete_task, get_task
 from tests.factories import ALL_FACTORIES, PrincipalFactory, TenantFactory
 
@@ -24,17 +22,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 def _identity(tenant_id: str, principal_id: str) -> ResolvedIdentity:
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=LazyTenantContext(tenant_id),
         protocol="mcp",
-        testing_context=AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
     )
 
 
