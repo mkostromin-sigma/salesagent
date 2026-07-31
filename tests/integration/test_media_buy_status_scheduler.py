@@ -552,11 +552,10 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     Uses a SAVEPOINT-backed per-buy body: injecting ``SELECT 1/0`` poisons the
     statement and would abort a single terminal commit without isolation.
 
-    Observability is asserted via the module logger (not ``caplog``): integration
-    CI loads logfire's pytest plugin, which intercepts stdlib logging so
-    ``caplog.records`` stays empty even at root INFO. (Also
-    ``logging.basicConfig(..., force=True)`` in logging_config strips pytest
-    capture handlers.)
+    Observability is asserted via the module logger (not ``caplog``):
+    ``patch.object(logger, ...)`` distinguishes INFO vs WARNING and captures
+    the ``exc_info`` kwarg — substring matching on ``caplog`` does neither,
+    which the all-fail WARNING oracle needs.
     """
     tenant_id = _create_test_tenant(f"tenant_isolation_1714_{raiser_slot}")
     principal_id = _create_test_principal(tenant_id)
@@ -749,6 +748,100 @@ async def test_all_failing_flips_emit_warning_summary(integration_db):
     assert len(warning_msgs) == 1
     assert "0 updated, 3 errors" in warning_msgs[0]
     assert info_msgs == []
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_savepoint_release_failure_not_counted_processed_and_warns(integration_db):
+    """BLOCKER oracle through production entry: release failure is not processed.
+
+    All three flips "succeed" inside the body but SAVEPOINT release raises;
+    summary must WARNING ``0 updated, 3 errors`` (not INFO ``3 updated, 3 errors``).
+    """
+    tenant_id = _create_test_tenant("tenant_isolation_release_fail_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    now = datetime.now(UTC)
+    past_start = now - timedelta(days=7)
+    past_end = now - timedelta(hours=1)
+
+    buy_ids = ["mb_rel_a", "mb_rel_b", "mb_rel_c"]
+    for mid in buy_ids:
+        _create_media_buy(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=mid,
+            status="active",
+            start_time=past_start,
+            end_time=past_end,
+        )
+
+    scheduler = MediaBuyStatusScheduler()
+
+    def _always_overlong(_media_buy, _now_arg, _session):
+        # Over-length status triggers StringDataRightTruncation at SAVEPOINT release.
+        return "x" * 64
+
+    with (
+        patch.object(status_scheduler_mod.logger, "info") as mock_info,
+        patch.object(status_scheduler_mod.logger, "warning") as mock_warning,
+        patch.object(scheduler, "_compute_new_status", side_effect=_always_overlong),
+    ):
+        await scheduler._update_statuses()
+
+    for mid in buy_ids:
+        assert _get_media_buy_status(tenant_id, mid) == "active"
+
+    warning_msgs = [
+        call.args[0]
+        for call in mock_warning.call_args_list
+        if call.args and "Media buy status update complete:" in str(call.args[0])
+    ]
+    info_msgs = [
+        call.args[0]
+        for call in mock_info.call_args_list
+        if call.args and "Media buy status update complete:" in str(call.args[0])
+    ]
+    assert len(warning_msgs) == 1
+    assert "0 updated, 3 errors" in warning_msgs[0]
+    assert info_msgs == []
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_status_scheduler_invalidated_error_arms_real_breaker(integration_db):
+    """Real get_db_session CM must arm the breaker on escaped invalidated errors."""
+    from sqlalchemy.exc import OperationalError
+
+    import src.core.database.database_session as db_session_mod
+
+    tenant_id = _create_test_tenant("tenant_isolation_breaker_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    now = datetime.now(UTC)
+    _create_media_buy(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        media_buy_id="mb_breaker",
+        status="active",
+        start_time=now - timedelta(days=7),
+        end_time=now - timedelta(hours=1),
+    )
+
+    db_session_mod.reset_health_state()
+    assert db_session_mod._is_healthy is True
+
+    scheduler = MediaBuyStatusScheduler()
+
+    def _raise_invalidated(_media_buy, _now_arg, _session):
+        raise OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
+
+    try:
+        with patch.object(scheduler, "_compute_new_status", side_effect=_raise_invalidated):
+            await scheduler._update_statuses()
+        assert db_session_mod._is_healthy is False
+    finally:
+        db_session_mod.reset_health_state()
 
 
 # =============================================================================

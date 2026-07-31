@@ -92,11 +92,15 @@ class DeliveryWebhookScheduler:
         """Send reports for all active media buys with configured webhooks.
 
         Per-buy exception isolation uses :func:`run_isolated_batch_async`
-        without ``session=``: a SAVEPOINT cannot span the webhook POST
-        ``await`` (and nested ``get_db_session`` commits in the webhook
-        path). Status scheduler owns SAVEPOINT isolation for ORM flips;
-        delivery isolates non-ORM send failures and meters them only.
-        Dead-connection errors still re-raise via the escape predicate.
+        without ``session=``: ``get_db_session`` is thread-scoped, and the
+        webhook path opens a nested ``with get_db_session()`` that returns
+        the *same* Session and closes it on exit — a caller-side SAVEPOINT
+        cannot survive that close. Status scheduler owns SAVEPOINT isolation
+        for ORM flips; delivery isolates non-ORM send failures and meters
+        them only. On an isolated failure, ``on_error`` rolls back the outer
+        shared session so a poisoned transaction does not cascade to later
+        tenants. Dead-connection errors still re-raise via the escape
+        predicate.
         """
         logger.info("Starting scheduled delivery report webhook batch")
 
@@ -115,13 +119,12 @@ class DeliveryWebhookScheduler:
                     await self._send_report_for_media_buy(media_buy, reporting_webhook, session)
                     return True
 
-                def _on_error(ctx, exc: Exception) -> None:
-                    logger.error(
-                        f"Error sending report for media buy "
-                        f"(tenant_id={ctx.tenant_id}, principal_id={ctx.principal_id}, "
-                        f"media_buy_id={ctx.media_buy_id}): {exc}",
-                        exc_info=True,
-                    )
+                def _on_error(ctx: SchedulerItemContext, exc: Exception) -> None:
+                    # Outer session is read-only for this path; rollback clears
+                    # InFailedSqlTransaction poison so later tenants are not
+                    # mis-metered for a failure they did not cause.
+                    session.rollback()
+                    log_item_error(logger, "Error sending report for media buy", ctx, exc)
 
                 outcome = await run_isolated_batch_async(
                     media_buys,
@@ -136,6 +139,7 @@ class DeliveryWebhookScheduler:
                     "Daily delivery report batch complete",
                     outcome.processed,
                     outcome.errors,
+                    seen=outcome.seen,
                     suppress_when_quiet=False,
                     success_label="sent",
                 )

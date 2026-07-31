@@ -119,11 +119,29 @@ def test_scheduler_isolation_errors_increments(scheduler, error, error_type):
 
 
 def test_categorize_error_maps_sqlalchemy_to_db_error():
+    from sqlalchemy.exc import DataError, NoSuchColumnError, OperationalError
+
     from src.core.metrics import categorize_error
 
     assert categorize_error(OperationalError("SELECT 1", {}, Exception("x"))) == "db_error"
     assert categorize_error(DataError("SELECT 1/0", {}, Exception("x"))) == "db_error"
+    # NoSuchColumnError subclasses KeyError — must still be db_error (branch order).
+    assert categorize_error(NoSuchColumnError("missing")) == "db_error"
     assert categorize_error(ValueError("bad")) == "validation"
+
+
+def test_categorize_error_maps_requests_to_transport():
+    from requests.exceptions import ConnectionError as RequestsConnectionError
+    from requests.exceptions import HTTPError
+    from requests.exceptions import Timeout as RequestsTimeout
+
+    from src.core.metrics import categorize_error
+
+    assert categorize_error(RequestsConnectionError("down")) == "transport"
+    assert categorize_error(HTTPError("500")) == "transport"
+    assert categorize_error(RequestsTimeout("slow")) == "timeout"
+    assert categorize_error(ConnectionError("builtin")) == "transport"
+    assert categorize_error(RuntimeError("code bug")) == "other"
 
 
 def test_active_ai_reviews_gauge():

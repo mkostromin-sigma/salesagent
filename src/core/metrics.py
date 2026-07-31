@@ -18,6 +18,9 @@ Call sites must record AI-review metrics through :func:`record_ai_review` and
 """
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
+from requests.exceptions import RequestException
+from requests.exceptions import Timeout as RequestsTimeout
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.core.exceptions import (
     AdCPRateLimitError,
@@ -30,7 +33,7 @@ from src.core.exceptions import (
 # ---------------------------------------------------------------------------
 
 #: Fixed enum for the ``error_type`` label. Keep <= 5 values.
-ERROR_TYPE_VALUES = ("validation", "timeout", "model_error", "db_error", "other")
+ERROR_TYPE_VALUES = ("validation", "timeout", "transport", "db_error", "other")
 
 #: Closed set of ``policy_triggered`` values emitted by the AI review flow.
 #: Anything outside this set (e.g. an AI-generated free-form reason) collapses
@@ -64,22 +67,23 @@ def categorize_error(error: BaseException) -> str:
     The mapping is intentionally coarse — its only job is to keep Prometheus
     series count constant regardless of how many exception classes exist.
     """
-    # Local import keeps the metrics module free of a hard SQLAlchemy load
-    # cycle for callers that only need AI-review helpers.
-    from sqlalchemy.exc import SQLAlchemyError
-
     # Timeouts first: a TimeoutError may also subclass OSError, and project
     # AdCP errors that mean "service unavailable" are timeout-ish operationally.
-    if isinstance(error, TimeoutError | AdCPServiceUnavailableError | AdCPRateLimitError):
+    # requests.Timeout is checked before RequestException (its parent).
+    if isinstance(
+        error,
+        TimeoutError | RequestsTimeout | AdCPServiceUnavailableError | AdCPRateLimitError,
+    ):
         return "timeout"
-    if isinstance(error, ValueError | TypeError | KeyError | AdCPValidationError):
-        return "validation"
-    # AI/model layer surfaces failures as RuntimeError or connection errors.
-    if isinstance(error, RuntimeError | ConnectionError):
-        return "model_error"
-    # Scheduler / ORM failures — DataError, OperationalError, InterfaceError, …
+    # SQLAlchemy before builtin KeyError: NoSuchColumnError subclasses both
+    # SQLAlchemyError and KeyError; it is a DB failure, not validation.
     if isinstance(error, SQLAlchemyError):
         return "db_error"
+    if isinstance(error, ValueError | TypeError | KeyError | AdCPValidationError):
+        return "validation"
+    # Transport: builtin ConnectionError + requests/httpx-style RequestException.
+    if isinstance(error, ConnectionError | RequestException):
+        return "transport"
     return "other"
 
 

@@ -150,18 +150,22 @@ class MediaBuyStatusScheduler:
                         updated_count += 1
                         logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
 
-                if outcome.processed > 0:
-                    session.commit()
-                # Suppress all-quiet ticks (60s cadence); WARNING when every
-                # attempted flip failed so the error tally stays visible.
-                log_batch_summary(
-                    logger,
-                    "Media buy status update complete",
-                    outcome.processed,
-                    outcome.errors,
-                    suppress_when_quiet=True,
-                    success_label="updated",
-                )
+                try:
+                    if outcome.processed > 0:
+                        session.commit()
+                finally:
+                    # Suppress all-quiet ticks (60s cadence); WARNING when every
+                    # visited item failed so the error tally stays visible.
+                    # Emit even if commit raises — otherwise the tally is lost.
+                    log_batch_summary(
+                        logger,
+                        "Media buy status update complete",
+                        outcome.processed,
+                        outcome.errors,
+                        seen=outcome.seen,
+                        suppress_when_quiet=True,
+                        success_label="updated",
+                    )
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)

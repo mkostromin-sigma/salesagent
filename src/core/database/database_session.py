@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import pydantic_core
 from sqlalchemy import create_engine, event, select
-from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.core.database.db_config import DatabaseConfig, int_env
@@ -31,12 +31,23 @@ _last_health_check: float = 0.0
 _health_check_interval = 60  # Check health every 60 seconds
 _is_healthy = True
 
-#: Exception types that mean the DB connection is gone / unusable. Owned here
-#: because :func:`get_db_session` keys the process-global circuit breaker on
-#: exactly this set; callers that isolate per-item failures (schedulers) must
-#: re-raise these so the breaker still trips. Keep in sync via this constant —
-#: do not restate the tuple at call sites.
-CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (OperationalError, DisconnectionError)
+#: Exception *classes* that :func:`get_db_session` treats as circuit-breaker
+#: keys (arms ``_is_healthy = False``). This is the breaker's class set — not
+#: the per-item isolation escape predicate.
+#:
+#: Schedulers isolate per-item failures via ``default_escape_isolation`` in
+#: ``isolated_batch``, which keys on connection *state*
+#: (``connection_invalidated`` / ``DisconnectionError``), not on membership
+#: in this tuple. A plain ``OperationalError`` (e.g. statement timeout) is
+#: deliberately isolated and must NOT be re-raised by callers. When escape
+#: *does* re-raise a dead connection, the exception class must be in this
+#: tuple so the breaker actually arms — hence ``InterfaceError`` is included
+#: alongside ``OperationalError`` / ``DisconnectionError``.
+CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    OperationalError,
+    DisconnectionError,
+    InterfaceError,
+)
 
 
 def _pydantic_json_serializer(obj: Any) -> str:

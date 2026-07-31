@@ -73,7 +73,7 @@ def test_error_type_counter_cardinality_bounded(name, recorder_kwargs):
     """Recording 1000 unique error types for one tenant must stay bounded."""
     from src.core import metrics
 
-    assert name in {n for n, _ in _error_type_counters()}
+    assert {n for n, _ in _error_type_counters()} == {"ai_review_errors", "scheduler_isolation_errors"}
     collector = getattr(metrics, name)
     collector.clear()
 
@@ -152,3 +152,25 @@ def test_ai_review_total_cardinality_bounded_under_freeform_policy():
     # tenant t1 x decision pending_review x policy in {whatever known + other}.
     # Free-form all collapse to 'other' -> 1 label set -> <= 2 samples.
     assert _series_count(metrics.ai_review_total) <= 4
+
+
+def test_scheduler_isolation_cardinality_bounded_under_freeform_scheduler():
+    """sanitize_scheduler must run on the recording path (sibling of policy_triggered)."""
+    from src.core import metrics
+
+    metrics.scheduler_isolation_errors.clear()
+    for i in range(1000):
+        metrics.record_scheduler_isolation_error(
+            scheduler=f"free_form_scheduler_{i}",
+            tenant_id="t1",
+            error=ValueError("x"),
+        )
+
+    # All free-form names collapse to scheduler="other" x error_type in enum.
+    assert _series_count(metrics.scheduler_isolation_errors) <= len(metrics.ERROR_TYPE_VALUES) * 2
+    assert (
+        metrics.scheduler_isolation_errors.labels(
+            scheduler="other", tenant_id="t1", error_type="validation"
+        )._value.get()
+        == 1000
+    )
