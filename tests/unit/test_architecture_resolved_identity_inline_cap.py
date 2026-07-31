@@ -16,9 +16,9 @@ those files at their current count via a per-file cap dict that can only
 shrink. New files with inline sites fail immediately; existing files with
 fewer sites force the cap down to match (no silent regressions).
 
-A2A test files are skipped here because the stricter A2A-only guard already
-enforces zero on them — including A2A files in this dict would double-cap
-them.
+A2A ``test_a2a*.py`` files are skipped here because the stricter A2A-only
+guard already enforces zero on them — including A2A files in this dict would
+double-cap them. ``test_architecture_a2a*`` helpers stay under this cap guard.
 """
 
 from __future__ import annotations
@@ -114,14 +114,14 @@ def _rel(path: Path) -> str:
 def _is_a2a_test_file(path: Path) -> bool:
     """A2A test files are governed by the stricter zero-tolerance factory guard.
 
-    Path-aware: unit/integration/e2e ``test_a2a*`` (and architecture a2a guards)
-    are skipped here so the factory guard owns them at zero tolerance.
+    Path-aware: unit/integration/e2e ``test_a2a*`` are skipped here so the
+    factory guard owns them at zero tolerance. Architecture helpers named
+    ``test_architecture_a2a*`` stay under THIS cap guard (the factory guard's
+    ``test_a2a*`` glob never matches that prefix — R5-F1).
     Use repo-relative prefixes — never ``"unit" in path.parts`` on an absolute
     path (any ancestor named ``unit``/``integration``/``e2e`` would fail open).
     """
     name = path.name
-    if name.startswith("test_architecture_a2a"):
-        return True
     if not name.startswith("test_a2a"):
         return False
     return _rel(path).startswith(("tests/unit/", "tests/integration/", "tests/e2e/"))
@@ -194,3 +194,35 @@ def test_resolved_identity_caps_only_shrink() -> None:
         _count_inline_resolved_identity,
         repo_root=_REPO_ROOT,
     )
+
+
+@pytest.mark.arch_guard
+def test_is_a2a_test_file_anchored_rel_not_ancestor_name() -> None:
+    """Fail-open regression: only repo-relative suite prefixes count (R5-N5b)."""
+    assert _is_a2a_test_file(_REPO_ROOT / "tests" / "unit" / "test_a2a_x.py") is True
+    assert _is_a2a_test_file(_REPO_ROOT / "tests" / "bdd" / "test_a2a_x.py") is False
+    assert _is_a2a_test_file(_REPO_ROOT / "tests" / "unit" / "test_architecture_a2a_x.py") is False
+
+
+@pytest.mark.arch_guard
+def test_count_inline_resolved_identity_self_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Matcher self-test: detects direct + attribute calls; factory yields 0 (R5-N5b)."""
+    # Point scan helper's a2a predicate off so tmp files are counted.
+    monkeypatch.setattr(
+        "tests.unit.test_architecture_resolved_identity_inline_cap._is_a2a_test_file",
+        lambda _p: False,
+    )
+    positive = tmp_path / "probe.py"
+    positive.write_text(
+        "from src.core.resolved_identity import ResolvedIdentity\n"
+        "import src.core.resolved_identity as mod\n"
+        "ResolvedIdentity(principal_id='a')\n"
+        "mod.ResolvedIdentity(principal_id='b')\n"
+    )
+    assert _count_inline_resolved_identity(positive) == [3, 4]
+
+    negative = tmp_path / "factory_probe.py"
+    negative.write_text(
+        "from tests.factories.principal import PrincipalFactory\nPrincipalFactory.make_identity(principal_id='a')\n"
+    )
+    assert _count_inline_resolved_identity(negative) == []

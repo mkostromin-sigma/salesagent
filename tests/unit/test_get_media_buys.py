@@ -44,24 +44,33 @@ from src.core.tools.media_buy_list import (
 # ---------------------------------------------------------------------------
 
 
+_TESTING_CONTEXT_UNSET = object()
+
+
 def make_identity(
     tenant_id="tenant_1",
     principal_id="principal_1",
     tenant=None,
-    testing_context=None,
+    testing_context=_TESTING_CONTEXT_UNSET,
 ):
-    """Create a ResolvedIdentity for testing."""
+    """Create a ResolvedIdentity for testing.
+
+    Omitting ``testing_context`` keeps the factory default (populated
+    ``AdCPTestContext``). Pass ``testing_context=None`` explicitly for anonymous.
+    """
     from tests.factories import PrincipalFactory
 
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "adapter_type": "mock"}
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=testing_context,
-    )
+    kwargs: dict = {
+        "principal_id": principal_id,
+        "tenant_id": tenant_id,
+        "tenant": tenant,
+        "protocol": "mcp",
+    }
+    if testing_context is not _TESTING_CONTEXT_UNSET:
+        kwargs["testing_context"] = testing_context
+    return PrincipalFactory.make_identity(**kwargs)
 
 
 def make_media_buy(

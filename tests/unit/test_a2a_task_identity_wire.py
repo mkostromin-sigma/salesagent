@@ -1,9 +1,11 @@
 """In-process JSON-RPC wire grade for A2A task ownership (#1702 / #1720).
 
 live_server xfails only POST an unknown id — they never hit the owner-compare
-branch. This builds the same ``create_jsonrpc_routes(..., enable_v0_3_compat=True)``
-path production uses, seeds an owned in-memory task on the handler instance, and
-asserts sibling denial matches unknown-id on the wire (code/message shape).
+branch. This builds the same create_jsonrpc_routes(..., enable_v0_3_compat=True)
+routing/dispatch/error-shaping path production uses (auth extraction is
+hand-rolled here — no middleware; see ``_AuthHeaderContextBuilder``), seeds an
+owned in-memory task on the handler instance, and asserts sibling denial matches
+unknown-id on the wire (code/message shape).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from tests.a2a_helpers import (
     OWNED_TASK_SIBLING,
     OWNED_TASK_SIBLING_TOK,
     OWNED_TASK_TENANT,
+    TASK_METHOD_MATRIX,
     assert_wire_task_not_found,
     auth_headers_mapping,
     seeded_owned_a2a_handler,
@@ -72,7 +75,7 @@ def _post_task(client: TestClient, *, method: str, task_id: str, token: str | No
     return response.json()
 
 
-@pytest.mark.parametrize("method", ["tasks/get", "tasks/cancel"])
+@pytest.mark.parametrize("method", [row[2] for row in TASK_METHOD_MATRIX])
 def test_sibling_wire_error_matches_unknown_id(method):
     """Sibling ownership miss and unknown id share wire code/message shape.
 
@@ -107,7 +110,7 @@ def test_sibling_wire_error_matches_unknown_id(method):
     assert owner_body["result"]["id"] == OWNED_TASK_ID
 
 
-@pytest.mark.parametrize("method", ["tasks/get", "tasks/cancel"])
+@pytest.mark.parametrize("method", [row[2] for row in TASK_METHOD_MATRIX])
 def test_unauthenticated_wire_is_auth_failure_not_task_not_found(method):
     """No Authorization → auth-failure shape, distinct from not-found on the wire."""
     handler = seeded_owned_a2a_handler()
@@ -122,4 +125,3 @@ def test_unauthenticated_wire_is_auth_failure_not_task_not_found(method):
     assert err["code"] == -32603
     assert err["data"] is None
     assert err["message"] == "Missing authentication token"
-    assert "Task not found" not in err["message"]
