@@ -198,6 +198,57 @@ def _authenticate_operation_literals() -> list[str]:
     return ops
 
 
+def test_task_not_found_message_is_literal_contract():
+    """Buyer-facing formatter pinned by a hand-written literal (R5-B1)."""
+    assert _task_not_found_message("task_x") == "Task not found: task_x"
+
+
+def test_safe_task_id_for_log_escapes_and_truncates():
+    """Sanitizer oracle — allowlist + truncate (R5-C2 / R5-N1a)."""
+    assert _safe_task_id_for_log("a\nWARNING forged") == "a?WARNING?forged"
+    assert _safe_task_id_for_log("x" * 200) == "x" * 100
+    assert "\\" not in _safe_task_id_for_log("A" * 99 + "\r" + "B" * 50)
+
+
+@pytest.mark.parametrize(
+    "exc, expected_message, expected_code, expected_recovery",
+    [
+        (
+            RuntimeError("boom [SQL: SELECT x] [parameters: {'tok': 'secret'}]"),
+            "op failed",
+            "SERVICE_UNAVAILABLE",
+            "transient",
+        ),
+        (
+            AdCPValidationError("capability missing"),
+            "capability missing",
+            "VALIDATION_ERROR",
+            "correctable",
+        ),
+    ],
+)
+def test_internal_error_for_typed_and_untyped(exc, expected_message, expected_code, expected_recovery):
+    """``_internal_error_for`` branches pinned (R5-D2)."""
+    err = _internal_error_for("op", exc)
+    assert isinstance(err, InternalError)
+    assert err.message == expected_message
+    assert "[SQL:" not in err.message
+    assert "secret" not in err.message
+    assert err.data is not None
+    assert err.data["adcp_error"]["code"] == expected_code
+    assert err.data["adcp_error"]["recovery"] == expected_recovery
+
+
+def test_internal_error_for_sql_normalized_exception_stays_out_of_message():
+    """Normalized SQLAlchemy text must not reach InternalError.message (R5-D2)."""
+    sql_exc = OperationalError("SELECT principals.token WHERE tok=:tok", {"tok": "super-secret"}, None)
+    err = _internal_error_for("message processing", sql_exc)
+    assert err.message == "message processing failed"
+    blob = f"{err.message}{err.data!s}"
+    assert "super-secret" not in blob
+    assert "[SQL:" not in blob
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
@@ -225,7 +276,7 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
     assert handler._task_owners[task_id] == _TaskOwner(tenant_id=OWNED_TASK_TENANT, principal_id=OWNED_TASK_OWNER)
 
     with a2a_auth_as(handler, owner):
-        task = await getattr(handler, method_name)(request_cls(id=task_id), context=None)
+        task = await invoke_owned_task_method(handler, method_name, request_cls, task_id)
     assert task.id == task_id
     if method_name == "on_cancel_task":
         assert task.status.state == TaskState.TASK_STATE_CANCELED
@@ -237,15 +288,15 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
 
     with a2a_auth_as(handler, sibling):
         with pytest.raises(TaskNotFoundError) as sibling_exc:
-            await getattr(handler, method_name)(request_cls(id=task_id), context=None)
+            await invoke_owned_task_method(handler, method_name, request_cls, task_id)
 
     with a2a_auth_as(handler, other_tenant):
         with pytest.raises(TaskNotFoundError) as other_exc:
-            await getattr(handler, method_name)(request_cls(id=task_id), context=None)
+            await invoke_owned_task_method(handler, method_name, request_cls, task_id)
 
     with a2a_auth_as(handler, owner):
         with pytest.raises(TaskNotFoundError) as unknown_exc:
-            await getattr(handler, method_name)(request_cls(id="task_does_not_exist"), context=None)
+            await invoke_owned_task_method(handler, method_name, request_cls, "task_does_not_exist")
 
     assert_task_not_found_nondisclosure(sibling_exc.value, task_id)
     assert_task_not_found_nondisclosure(other_exc.value, task_id)
@@ -258,7 +309,7 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
-    [(GetTaskRequest, "on_get_task"), (CancelTaskRequest, "on_cancel_task")],
+    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
 )
 async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
     """Real constructor create→poll: owner allowed; sibling/other-tenant denied."""
@@ -454,13 +505,13 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_c
         ),
     ):
         with pytest.raises(InternalError) as exc_info:
-            await getattr(handler, method_name)(request_cls(id=OWNED_TASK_ID), context=None)
+            await invoke_owned_task_method(handler, method_name, request_cls, OWNED_TASK_ID)
 
     raised = exc_info.value
     assert raised.message == wire_message
     assert "_" not in raised.message
-    # Recovery envelope attached (compat may still flatten ``data`` on the wire).
-    # Spec MUST: senders populate error.recovery on every error (error-handling.mdx).
+    # Spec MUST: senders populate error.recovery on every error —
+    # by-layer/L3/error-handling.mdx § Forward-compatible decoding (normative), AdCP 3.1.1.
     assert raised.data is not None
     assert raised.data["adcp_error"]["recovery"] == "transient"
     assert raised.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
@@ -469,7 +520,7 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_c
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
-    [(GetTaskRequest, "on_get_task"), (CancelTaskRequest, "on_cancel_task")],
+    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
 )
 async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name):
     """Ownership compare with real ``_get_auth_token`` (only resolve_identity patched).

@@ -54,9 +54,12 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass explicit tenant=None for auth-error tests.
         Pass **tenant_overrides for domain fields (approval_mode, etc).
         Pass testing_context to override the default (e.g. set
-        test_session_id for harness routing). Pass ``testing_context=None``
-        explicitly for anonymous A2A discovery (production
-        ``AdCPTestContext.from_headers({})`` returns None).
+        test_session_id for harness routing).
+
+        ``testing_context`` meanings:
+        - omitted / sentinel (default): populated ``AdCPTestContext``
+        - ``testing_context=None``: explicit None (anonymous A2A discovery;
+          production ``AdCPTestContext.from_headers({})`` returns None)
 
         ``testing_context`` meanings:
         - omitted / sentinel (default): populated ``AdCPTestContext``
@@ -69,9 +72,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         that need deferred config resolution.
         """
         resolved_tenant = (
-            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides)
-            if tenant is _UNSET and tenant_id is not None
-            else (None if tenant is _UNSET else tenant)
+            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
         )
         if testing_context is _UNSET:
             testing_context = AdCPTestContext(
