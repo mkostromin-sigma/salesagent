@@ -10,12 +10,26 @@
 # indistinguishable from an unknown id (no existence oracle). Reconcile
 # upstream in adcp-req, then retire this file for the regenerated scenarios.
 #
+# Spec grounding (A2A Protocol):
+# - §3.3.2 — servers MUST NOT reveal existence of resources the client is not
+#   authorized to access (example: "attempting to access a task created by
+#   another user"); MUST return not-found when a resource "does not exist or
+#   is not accessible"; SHOULD NOT distinguish the two.
+# - §13.1 — Get/Cancel MUST verify access, and authorization MUST occur before
+#   any query that could leak existence (auth-first ordering).
+# This altitude is upstream-ungraded by design: AdCP task-lifecycle places
+# transport-native tasks/* outside AdCP polling. AdCP 3.1.1 grades the analogue
+# at get_products_async (get_products_task_status_wrong_account /
+# list_products_task_wrong_account → REFERENCE_NOT_FOUND).
+#
 # @a2a: these are protocol methods, not AdCP skills — there is no MCP or REST
-# equivalent to parametrize across. The denial oracle grades the handler-
-# exception shape mirrored to today's v0.3 JSON-RPC body (CoreInternalError /
-# -32603), not a live adapter capture and not a two-layer AdCP envelope. Live
-# JSON-RPC wire serialization is proven in tests/unit/test_a2a_task_identity_wire.py
-# (#1720).
+# equivalent to parametrize across. The denial oracle grades the live v0.3
+# compat JSON-RPC body captured through create_jsonrpc_routes
+# (enable_v0_3_compat=True). Spec TaskNotFoundError code is -32001; today's
+# compat path emits -32603 (system InternalError) — pinned here as the verified
+# live wire. The live-server strict xfail in
+# tests/e2e/test_a2a_endpoints_working.py asserts -32001 and flips when #1670
+# closes the flattening. Not a two-layer AdCP envelope.
 Feature: A2A in-memory task ownership for tasks/get and tasks/cancel (local)
 
   Background:
@@ -58,3 +72,14 @@ Feature: A2A in-memory task ownership for tasks/get and tasks/cancel (local)
     When the "owner" calls tasks/cancel for task "task-owned-1"
     Then the A2A task response should carry task "task-owned-1" in state CANCELED
     And the stored task "task-owned-1" should be in state CANCELED
+
+  @T-A2A-TASK-OWNERSHIP-no-owner-get @a2a
+  Scenario: A task present without an owner record is denied as not-found
+    Given an in-memory A2A task "task-orphan-1" with no owner record
+    When the "owner" calls tasks/get for task "task-orphan-1"
+    Then the A2A task response should be a JSON-RPC task-not-found error for "task-orphan-1"
+
+  @T-A2A-TASK-OWNERSHIP-unauth-get @a2a
+  Scenario: An unauthenticated caller gets an auth failure, not task-not-found
+    When an unauthenticated caller calls tasks/get for task "task-owned-1"
+    Then the A2A task response should be an authentication failure, not task-not-found

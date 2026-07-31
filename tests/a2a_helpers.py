@@ -20,13 +20,26 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _safe_task_id_for
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.resolved_identity import ResolvedIdentity
 
-# Shared ownership fixtures for unit + in-process wire altitudes (#1702 / #1720).
+# Shared ownership fixtures for unit + in-process wire altitudes (#1702 / #1720 / #1780).
 OWNED_TASK_TENANT = "tenant_a"
 OWNED_TASK_OWNER = "principal_owner"
 OWNED_TASK_SIBLING = "principal_sibling"
+# Cross-tenant isolation uses the SAME principal_id under a different tenant so
+# the tenant half of ``_TaskOwner`` is graded independently of the principal half.
+OWNED_TASK_OTHER_TENANT = "tenant_b"
+OWNED_TASK_OTHER_PRINCIPAL = OWNED_TASK_OWNER
 OWNED_TASK_ID = "task_owned_abc"
 OWNED_TASK_OWNER_TOK = "owner-tok"
 OWNED_TASK_SIBLING_TOK = "sibling-tok"
+
+# Default non-disclosure needles — every role id that appears at any altitude.
+OWNED_TASK_FORBIDDEN_SUBSTRINGS: tuple[str, ...] = (
+    OWNED_TASK_TENANT,
+    OWNED_TASK_OWNER,
+    OWNED_TASK_SIBLING,
+    OWNED_TASK_OTHER_TENANT,
+    "leaked_tenant",
+)
 
 # method_name / request_cls / JSON-RPC method — one vocabulary for unit + wire.
 TASK_METHOD_MATRIX: tuple[tuple[type, str, str], ...] = (
@@ -78,16 +91,30 @@ async def invoke_owned_task_method(
     return await getattr(handler, method_name)(request_cls(id=task_id), context=None)
 
 
+def record_a2a_task_owner(
+    handler: AdCPRequestHandler,
+    task_id: str,
+    *,
+    tenant_id: str | None,
+    principal_id: str | None,
+) -> None:
+    """Write the in-memory ownership record (shared by unit seed + harness seed)."""
+    handler._task_owners[task_id] = _TaskOwner(tenant_id=tenant_id, principal_id=principal_id)
+
+
 def seeded_owned_a2a_handler(
     *,
     task_id: str = OWNED_TASK_ID,
     tenant_id: str = OWNED_TASK_TENANT,
     principal_id: str = OWNED_TASK_OWNER,
+    record_owner: bool = True,
 ) -> AdCPRequestHandler:
     """Minimal owned in-memory task handler (bypasses ``__init__`` for unit/wire)."""
     handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
     handler.tasks = {task_id: Task(id=task_id, status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED))}
-    handler._task_owners = {task_id: _TaskOwner(tenant_id=tenant_id, principal_id=principal_id)}
+    handler._task_owners = {}
+    if record_owner:
+        record_a2a_task_owner(handler, task_id, tenant_id=tenant_id, principal_id=principal_id)
     return handler
 
 
@@ -114,12 +141,7 @@ def assert_task_not_found_nondisclosure(
     exc: TaskNotFoundError,
     task_id: str,
     *,
-    forbidden_substrings: tuple[str, ...] = (
-        OWNED_TASK_TENANT,
-        OWNED_TASK_OWNER,
-        OWNED_TASK_SIBLING,
-        "leaked_tenant",
-    ),
+    forbidden_substrings: tuple[str, ...] = OWNED_TASK_FORBIDDEN_SUBSTRINGS,
 ) -> None:
     """Shared non-disclosure oracle for unit-altitude TaskNotFoundError objects.
 
@@ -140,13 +162,23 @@ def assert_task_not_found_nondisclosure(
 def assert_wire_task_not_found(err: Mapping[str, object], task_id: str) -> None:
     """Exact wire-body oracle for not-found (v0.3 compat: code -32603, data null).
 
+    Both the in-process live-POST harness (#1780) and
+    ``tests/unit/test_a2a_task_identity_wire.py`` share this un-parameterized
+    oracle — do not add per-caller ``code=`` / ``message=`` knobs; a split
+    would let the harness silently drift from the buyer wire.
+
+    Expected message is a literal over the raw *task_id* (not
+    ``_task_not_found_message`` / ``_safe_task_id_for_log``) so a static identity
+    leak inside the production builder cannot move both sides together. Clean
+    task ids only — control-character sanitizer joining is graded at unit
+    altitude via ``assert_task_not_found_nondisclosure``.
+
     When #1670 removes flattening, the strict xfail sibling at
     ``tests/e2e/test_a2a_endpoints_working.py`` (TestA2AServerIntegration) XPASSes
     by design while this hard-fails — keep the pointer at the failure site.
     """
-    safe_id = _safe_task_id_for_log(task_id)
     assert err == {
         "code": -32603,
-        "message": f"Task not found: {safe_id}",
+        "message": f"Task not found: {task_id}",
         "data": None,
     }
