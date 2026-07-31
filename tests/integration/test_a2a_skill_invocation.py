@@ -718,6 +718,8 @@ class TestA2ASkillInvocation:
                     "get_media_buys",
                     "list_accounts",  # Added for account management (UC-011)
                     "sync_accounts",  # Added for account sync (UC-011)
+                    "get_task",  # Durable principal-scoped workflow lookup (#1741)
+                    "complete_task",  # Durable principal-scoped workflow completion (#1741)
                 ], f"Skill {skill_name} not in expected skill list"
             except Exception as e:
                 pytest.fail(f"Skill {skill_name} should be handled but caused error: {e}")
