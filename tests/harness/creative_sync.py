@@ -163,6 +163,21 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
 
         return {"agent_url": agent, "id": format_id}
 
+    @realize_e2e(
+        e2e_unsupported(
+            "CI / e2e stack always injects GEMINI_API_KEY into the live server process; "
+            "clearing the in-process get_config mock cannot realize a missing-key seller"
+        )
+    )
+    def clear_gemini_api_key(self) -> None:
+        """Clear GEMINI_API_KEY on the in-process config mock (impl-only).
+
+        Live e2e_rest cannot unset the server process env mid-suite — declare
+        E2EUnsupportedSetup so the BDD hook non-strict-xfails e2e only while
+        a2a/mcp/rest still grade CREATIVE_GEMINI_KEY_MISSING.
+        """
+        self.mock["config"].return_value.gemini_api_key = None
+
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.
 

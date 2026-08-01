@@ -106,6 +106,39 @@ class TestCreativeSyncEnvContract:
         # Should be a distinct method (not inherited NotImplementedError stub)
         assert callable(env.call_mcp)
 
+    def test_clear_gemini_api_key_clears_in_process_mock(self):
+        """In-process clear_gemini_api_key nulls the config mock key."""
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        class _UnitMode(CreativeSyncEnv):
+            use_real_db = False
+
+        with _UnitMode() as env:
+            env.mock["config"].return_value.gemini_api_key = "present"
+            env.clear_gemini_api_key()
+            assert env.mock["config"].return_value.gemini_api_key is None
+
+    def test_clear_gemini_api_key_e2e_unsupported(self):
+        """e2e cannot clear live-server GEMINI_API_KEY — declare unsupported."""
+        import pytest
+
+        from tests.harness._realize import E2EUnsupportedSetup
+        from tests.harness.creative_sync import CreativeSyncEnv
+        from tests.harness.transport import E2EConfig
+
+        class _UnitMode(CreativeSyncEnv):
+            use_real_db = False
+
+        e2e = E2EConfig(
+            base_url="http://proxy:8000",
+            postgres_url="postgresql://unused",
+        )
+        with _UnitMode(e2e_config=e2e) as env:
+            with pytest.raises(E2EUnsupportedSetup) as exc_info:
+                env.clear_gemini_api_key()
+        assert "GEMINI_API_KEY" in str(exc_info.value)
+        assert exc_info.value.method_name == "clear_gemini_api_key"
+
 
 class TestCreativeListEnvContract:
     """CreativeListEnv must mock only audit logger."""

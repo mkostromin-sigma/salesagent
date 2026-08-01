@@ -4514,9 +4514,9 @@ def given_creative_with_generative_format(ctx: dict) -> None:
 
 @given("the Seller Agent does not have GEMINI_API_KEY configured")
 def given_no_gemini_api_key(ctx: dict) -> None:
-    """Remove GEMINI_API_KEY from the config mock."""
+    """Remove GEMINI_API_KEY from the config mock (impl-only on e2e)."""
     env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = None
+    env.clear_gemini_api_key()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4766,9 +4766,9 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     last_creative.setdefault("assets", {}).update(
         build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
     )
-    # Remove GEMINI_API_KEY from config mock
+    # Remove GEMINI_API_KEY from config mock (impl-only on e2e)
     env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = None
+    env.clear_gemini_api_key()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4846,8 +4846,8 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
     _ensure_tenant_principal(ctx, env)
     # Set up generative format but WITHOUT gemini key
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    # Now remove the key — setup_generative_build sets it, we override
-    env.mock["config"].return_value.gemini_api_key = None
+    # Now remove the key — setup_generative_build sets it, we clear via env
+    env.clear_gemini_api_key()
     creative_payload = {
         "creative_id": "creative-gen-no-key-001",
         "name": "Generative No Key",
