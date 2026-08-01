@@ -440,6 +440,12 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
+        (
+            "tests/harness/creative_sync.py",
+            "clear_gemini_api_key",
+            "CI / e2e stack always injects GEMINI_API_KEY into the live server process; "
+            "clearing the in-process get_config mock cannot realize a missing-key seller",
+        ),
     }
 )
 
