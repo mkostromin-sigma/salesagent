@@ -26,7 +26,11 @@ from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
-from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
+from tests.helpers.creative_test_helpers import (
+    assert_gemini_key_missing_advisory,
+    assert_stored_creative_assets,
+    creative_payload,
+)
 
 
 def _error_messages(errors: list | None) -> list[str]:
@@ -1166,10 +1170,15 @@ class TestGeminiKeyMissing:
         assert creative_result.action == "failed"
         errs = creative_result.errors or []
         assert any("gemini" in e.lower() for e in _error_messages(errs))
-        assert errs[0].code == "CREATIVE_GEMINI_KEY_MISSING"
-        assert errs[0].recovery == "terminal"
-        assert errs[0].suggestion is not None
-        assert "seller" in errs[0].suggestion.lower()
+        assert_gemini_key_missing_advisory(errs)
+        # When the transport stashes success-path wire, grade nested advisory fields.
+        wire = result.wire_response
+        if isinstance(wire, dict):
+            wire_creatives = wire.get("creatives") or []
+            wire_errs = (wire_creatives[0].get("errors") or []) if wire_creatives else []
+            if wire_errs:
+                assert wire_errs[0].get("code") == "CREATIVE_GEMINI_KEY_MISSING"
+                assert wire_errs[0].get("recovery") == "terminal"
 
 
 # ---------------------------------------------------------------------------

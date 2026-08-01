@@ -22,7 +22,11 @@ from tests.factories.creative_asset import (
     text_spec,
 )
 from tests.harness import CreativeSyncEnv
-from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
+from tests.helpers.creative_test_helpers import (
+    assert_gemini_key_missing_advisory,
+    assert_stored_creative_assets,
+    creative_payload,
+)
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -366,10 +370,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
             assert creative_result.action == "failed"
             errs = creative_result.errors or []
             assert any("GEMINI_API_KEY" in e for e in _error_messages(errs))
-            assert errs[0].code == "CREATIVE_GEMINI_KEY_MISSING"
-            assert errs[0].recovery == "terminal"
-            assert errs[0].suggestion is not None
-            assert "seller" in errs[0].suggestion.lower()
+            assert_gemini_key_missing_advisory(errs)
 
 
 # ── Approval Mode UPDATE Tests (covers lines 97-139) ──────────────────────

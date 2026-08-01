@@ -2279,10 +2279,12 @@ class TestGenerativeCreativeBuild:
         """Generative creative without GEMINI_API_KEY configured fails with clear error.
 
         GAP: BR-UC-006-ext-i -- Gemini key missing for generative.
-        Production code at _processing.py lines 520-525.
+        Production early-returns ``_gemini_key_missing_result`` in
+        ``_create_new_creative`` when ``gemini_api_key`` is unset.
         Covers: UC-006-EXT-I-01
         """
         from src.core.tools.creatives._processing import _create_new_creative
+        from tests.helpers.creative_test_helpers import assert_gemini_key_missing_advisory
 
         mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
@@ -2321,11 +2323,7 @@ class TestGenerativeCreativeBuild:
             assert action_val == "failed"
             errs = result.errors or []
             assert any("GEMINI_API_KEY" in e.message for e in errs)
-            assert errs[0].code == "CREATIVE_GEMINI_KEY_MISSING"
-            assert errs[0].recovery == "terminal"
-            assert errs[0].suggestion is not None
-            assert "seller" in errs[0].suggestion.lower()
-            assert "GEMINI" in errs[0].suggestion
+            assert_gemini_key_missing_advisory(errs)
 
 
 # ============================================================================

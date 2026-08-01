@@ -16,6 +16,29 @@ from tests.bdd.steps._outcome_helpers import payload_or_none, wire_error_envelop
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
+def _nested_creative_advisory_error(ctx: dict) -> dict | None:
+    """First failed ``creatives[].errors[0]`` from a success-path ``wire_response``.
+
+    Per-creative advisories live inside a successful sync artifact (no
+    ``wire_error_envelope``). Grade buyer-visible nested wire fields when present.
+    """
+    wire = ctx.get("wire_response")
+    if not isinstance(wire, dict):
+        return None
+    creatives = wire.get("creatives") or wire.get("results") or []
+    for creative in creatives:
+        if not isinstance(creative, dict):
+            continue
+        action = creative.get("action")
+        action_str = action.get("value") if isinstance(action, dict) else action
+        if action_str != "failed":
+            continue
+        errs = creative.get("errors") or []
+        if errs and isinstance(errs[0], dict):
+            return errs[0]
+    return None
+
+
 def _wire_code(ctx: dict) -> str | None:
     """Return the authoritative wire error code when a wire envelope was captured.
 
@@ -420,14 +443,21 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
     """Assert the error recovery hint matches — wire-first, reconstructed fallback.
 
     On a wire transport the recovery is read from the real envelope via
-    ``assert_wire_error`` (the buyer-facing contract); IMPL/no-wire scenarios
-    fall back to the reconstructed ``ctx['error']``.
+    ``assert_wire_error`` (the buyer-facing contract). Success+advisory sync
+    grades nested ``creatives[].errors[0].recovery`` on ``wire_response``.
+    IMPL/no-wire scenarios fall back to the reconstructed ``ctx['error']``.
     """
     envelope = wire_error_envelope_or_none(ctx)
     if envelope is not None:
         wire_code = _wire_code(ctx)
         assert wire_code, f"Expected wire error code when asserting recovery={recovery!r}: {envelope}"
         ctx["result"].assert_wire_error(wire_code, recovery=recovery)
+        return
+    nested = _nested_creative_advisory_error(ctx)
+    if nested is not None:
+        actual = nested.get("recovery")
+        actual_str = actual.value if hasattr(actual, "value") else str(actual) if actual is not None else None
+        assert actual_str == recovery, f"Expected recovery '{recovery}', got '{actual_str}' from wire_response"
         return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
@@ -436,11 +466,11 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
     if isinstance(error, AdCPError):
         assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
         return
-    # Per-creative / per-package advisory Error models carry recovery directly.
-    actual = getattr(error, "recovery", None)
+    # Per-creative / per-package advisory Error models — reuse _get_error_dict.
+    err_dict = _get_error_dict(error)
+    actual = err_dict.get("recovery")
     if actual is not None:
-        actual_str = actual.value if hasattr(actual, "value") else str(actual)
-        assert actual_str == recovery, f"Expected recovery '{recovery}', got '{actual_str}'"
+        assert actual == recovery, f"Expected recovery '{recovery}', got '{actual}'"
         return
     raise AssertionError(f"Cannot check recovery on {type(error).__name__}: {error!r}")
 

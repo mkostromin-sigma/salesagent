@@ -1,9 +1,9 @@
-"""Guard: all wire error codes must be in WIRE_STANDARD_CODES.
+"""Guard: all wire error codes must be in ``_ALLOWED_CODES``.
 
 AST-scans Error(code=...) construction sites in src/core/tools/ and
-src/adapters/ to verify every string-literal error code is either in
-WIRE_STANDARD_CODES (SDK STANDARD_ERROR_CODES + the pinned-spec supplement)
-or in the justified INTERNAL_CODES set.
+src/adapters/ to verify every string-literal error code is in the union of
+WIRE_STANDARD_CODES (SDK STANDARD_ERROR_CODES + pinned-spec supplement),
+INTERNAL_CODES, ``_SPEC_CODES``, and ``_PLATFORM_SPECIFIC_CODES``.
 
 Also verifies that AdCPError subclass error_code class attributes are
 standard or internal (complementing test_error_code_mapping.py).
@@ -31,7 +31,7 @@ _SPEC_CODES = {
 # codes not in the standard vocabulary … agents MUST handle unknown codes
 # gracefully by falling back to the recovery classification").
 _PLATFORM_SPECIFIC_CODES = {
-    "CREATIVE_GEMINI_KEY_MISSING",  # sync_creatives GEMINI misconfig advisory (#1831)
+    "CREATIVE_GEMINI_KEY_MISSING",  # sync_creatives GEMINI misconfig advisory (platform MAY)
 }
 
 # All acceptable codes: wire-standard (SDK + spec supplement) + justified
@@ -105,18 +105,19 @@ def _collect_error_code_literals() -> list[tuple[str, int, str]]:
 
 
 class TestErrorCodeCompliance:
-    """Every Error(code=...) literal must be in STANDARD_ERROR_CODES or INTERNAL_CODES."""
+    """Every Error(code=...) literal must be in ``_ALLOWED_CODES``."""
 
     @pytest.mark.arch_guard
     def test_no_nonstandard_error_codes_in_tools_and_adapters(self):
-        """AST-scan Error(code=...) sites for non-standard codes."""
+        """AST-scan Error(code=...) sites for codes outside ``_ALLOWED_CODES``."""
         violations = _collect_error_code_literals()
         if violations:
             msg_lines = [f"  {f}:{line}: code={code!r}" for f, line, code in violations]
             raise AssertionError(
                 f"{len(violations)} Error(code=...) sites use non-standard codes:\n"
                 + "\n".join(msg_lines)
-                + "\n\nEach code must be in STANDARD_ERROR_CODES or INTERNAL_CODES."
+                + "\n\nEach code must be in _ALLOWED_CODES "
+                "(WIRE_STANDARD_CODES ∪ INTERNAL_CODES ∪ _SPEC_CODES ∪ _PLATFORM_SPECIFIC_CODES)."
             )
 
     @pytest.mark.arch_guard

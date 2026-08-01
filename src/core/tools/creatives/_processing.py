@@ -232,7 +232,7 @@ def _update_existing_creative(
                             f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
                         )
                         logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
+                        return (_gemini_key_missing_result(existing_creative.creative_id, error_msg), False)
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -439,11 +439,9 @@ def _update_existing_creative(
                     return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
 
         except AdCPConfigurationError as config_error:
-            # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
-            # and admin-fixable — not a transient creative-agent outage. Surface it
-            # honestly so the buyer does not retry a misconfiguration. Use a
-            # platform-specific code (not CONFIGURATION_ERROR) so the advisory
-            # stays inside a success artifact without inverting wire-placement MUST.
+            # Residual non-GEMINI configuration errors (GEMINI missing returns early
+            # above). Keep a generic terminal advisory — do not remap to the
+            # GEMINI-specific platform code.
             error_msg = str(config_error)
             logger.error(
                 "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
@@ -556,7 +554,7 @@ def _create_new_creative(
                     if not gemini_api_key:
                         error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
                         logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
+                        return (_gemini_key_missing_result(creative_id, error_msg), False)
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -731,11 +729,9 @@ def _create_new_creative(
                         return (_failed_sync_result(creative_id, error_msg), False)
 
         except AdCPConfigurationError as config_error:
-            # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
-            # and admin-fixable — not a transient creative-agent outage. Surface it
-            # honestly so the buyer does not retry a misconfiguration. Use a
-            # platform-specific code (not CONFIGURATION_ERROR) so the advisory
-            # stays inside a success artifact without inverting wire-placement MUST.
+            # Residual non-GEMINI configuration errors (GEMINI missing returns early
+            # above). Keep a generic terminal advisory — do not remap to the
+            # GEMINI-specific platform code.
             error_msg = str(config_error)
             logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
             return (_failed_sync_result(creative_id, error_msg, code="CONFIGURATION_ERROR"), False)

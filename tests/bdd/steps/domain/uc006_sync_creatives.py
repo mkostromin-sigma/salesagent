@@ -1497,8 +1497,11 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
     """Assert a per-creative failure with the expected error code.
 
     Prefers production ``errors[].code`` on a failed SyncCreativeResult, then
-    falls back to message inference / ``ctx["error"]``.
+    falls back to message inference / ``ctx["error"]``. Typed production codes
+    hard-assert equality (no soft-xfail on mismatch).
     """
+    from adcp.types import Error as AdCPErrorDetail
+
     from src.core.exceptions import AdCPError
 
     resp = payload_or_none(ctx)
@@ -1511,14 +1514,12 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
                 errs = getattr(r, "errors", None) or []
                 if errs:
                     first = errs[0]
-                    production_code = getattr(first, "code", None)
-                    if production_code == expected_code:
-                        return
-                    if production_code:
-                        pytest.xfail(
-                            f"SPEC-PRODUCTION GAP: expected {expected_code}, got "
-                            f"errors[0].code={production_code!r} from {first!r}"
+                    production_code = first.code if isinstance(first, AdCPErrorDetail) else getattr(first, "code", None)
+                    if production_code is not None:
+                        assert production_code == expected_code, (
+                            f"Expected errors[0].code={expected_code!r}, got {production_code!r} from {first!r}"
                         )
+                        return
                     inferred = _infer_error_code_from_message(str(first))
                     if inferred == expected_code:
                         return
@@ -2124,12 +2125,13 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
     Prefer the typed production Error (``code`` / ``suggestion`` / ``recovery``)
     when present. Older plain-string advisories fall back to message inference.
     """
+    from adcp.types import Error as AdCPErrorDetail
+
     if not errs:
         return
 
     first = errs[0]
-    production_code = getattr(first, "code", None)
-    if production_code and not isinstance(first, (str, Exception)):
+    if isinstance(first, AdCPErrorDetail):
         # Real adcp.types.Error — Then steps already understand .code/.message/.suggestion
         ctx["error"] = first
         return
@@ -2170,10 +2172,16 @@ def _infer_error_code_from_message(msg: str) -> str:
 
 
 def _infer_suggestion_from_message(msg: str) -> str | None:
-    """Extract or generate a suggestion from a production error message."""
+    """Fallback suggestion for plain-string advisories (typed Errors promote as-is).
+
+    GEMINI path: reuse the production constant so inference cannot drift from
+    ``_gemini_key_missing_result`` once typed advisories are the primary path.
+    """
+    from src.core.tools.creatives._processing import _GEMINI_KEY_MISSING_SUGGESTION
+
     lower = msg.lower()
     if "gemini_api_key" in lower:
-        return "Ask the seller to configure GEMINI_API_KEY in their agent settings"
+        return _GEMINI_KEY_MISSING_SUGGESTION
     if "preview" in lower:
         return "Provide a media_url for the creative"
     return None

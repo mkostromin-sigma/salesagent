@@ -18,7 +18,7 @@ from src.core.database.models import Creative as DBCreative
 from src.core.schemas import SyncCreativesResponse
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv
-from tests.helpers.creative_test_helpers import creative_payload
+from tests.helpers.creative_test_helpers import assert_gemini_key_missing_advisory, creative_payload
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -161,10 +161,7 @@ class TestGenerativeCreatives:
         errs = result.creatives[0].errors
         assert errs
         assert any("GEMINI_API_KEY" in str(err) for err in errs)
-        assert errs[0].code == "CREATIVE_GEMINI_KEY_MISSING"
-        assert errs[0].recovery == "terminal"
-        assert errs[0].suggestion is not None
-        assert "seller" in errs[0].suggestion.lower()
+        assert_gemini_key_missing_advisory(errs)
 
     def test_message_extraction_from_assets(self, integration_db):
         """Test that message is correctly extracted from various asset roles."""
