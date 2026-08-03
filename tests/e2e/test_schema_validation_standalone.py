@@ -102,6 +102,19 @@ async def test_get_products_request_validation():
         await validator.validate_request("get-products", url_request)
 
 
+def test_absolute_schema_reference_normalizes_to_pinned_sdk_path():
+    """The CDN's absolute latest URI maps to the installed SDK's schema tree."""
+    validator = AdCPSchemaValidator()
+
+    uri = "https://adcontextprotocol.org/schemas/latest/core/version-envelope.json"
+    assert validator._normalize_schema_ref(uri) == "core/version-envelope.json"
+
+    # Resolution must load the modular SDK schema — never the empty strict fallback.
+    resolved = validator._resolve_adcp_schema_ref(uri)
+    assert resolved.get("title") == "AdCP Version Envelope"
+    assert "adcp_version" in resolved.get("properties", {})
+
+
 @pytest.mark.asyncio
 async def test_pinned_sdk_schema_source(monkeypatch):
     """The validator grades the PINNED spec, from the installed SDK, offline.
