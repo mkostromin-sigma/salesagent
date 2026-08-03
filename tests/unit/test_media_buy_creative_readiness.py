@@ -8,6 +8,7 @@ from src.services.media_buy_creative_readiness import (
     CreativeFinalizeReadiness,
     _coerce_flight_boundary,
     apply_creative_finalize_hold,
+    apply_creative_finalize_ready,
     compute_media_buy_status_from_flight_dates,
     evaluate_creative_finalize_readiness,
     evaluate_creative_finalize_readiness_for_session,
@@ -177,6 +178,19 @@ class TestApplyCreativeFinalizeHold:
         assert any("[APPROVAL]" in r.message for r in caplog.records)
         assert any("event=creative_finalize_hold" in r.message for r in caplog.records)
         assert not any(" reason=" in r.message for r in caplog.records)
+
+
+class TestApplyCreativeFinalizeReady:
+    def test_stamps_provenance_and_flight_status(self):
+        media_buy = MagicMock()
+        media_buy.start_time = datetime.now(UTC) + timedelta(days=7)
+        media_buy.end_time = datetime.now(UTC) + timedelta(days=37)
+        media_buy.start_date = None
+        media_buy.end_date = None
+        apply_creative_finalize_ready(media_buy, approved_by="op@example.com")
+        assert media_buy.approved_by == "op@example.com"
+        assert isinstance(media_buy.approved_at, datetime)
+        assert media_buy.status == "scheduled"
 
 
 class TestStampMediaBuyApproval:

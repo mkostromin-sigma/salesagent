@@ -411,19 +411,15 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("context") is None, (
             f"approve webhook with no stored request context must not embed one, got {embedded.get('context')!r}"
         )
-        # The typed context carries the audit identifiers the webhook service logs.
-        # Compared as a whole frozen value: equality IS the field-by-field check,
-        # and a field added to the type without a value here fails rather than
-        # passing silently.
-        assert webhook_capture["task"] == WebhookTaskContext(
-            task_id=pending_reject_media_buy["step_id"],
-            task_type="create_media_buy",
-            tenant_id=tenant_id,
-            principal_id="reject_wh_principal",
-            media_buy_id=media_buy_id,
-            sequence_number=1,
-            notification_type=None,
-        )
+        # Metadata now carries the audit identifiers the webhook service logs.
+        assert webhook_capture["metadata"] == {
+            "task_type": "create_media_buy",
+            "tenant_id": tenant_id,
+            "principal_id": "reject_wh_principal",
+            "media_buy_id": media_buy_id,
+        }
+        # Ready-arm provenance: session operator email on the MediaBuy row.
+        _assert_persisted_status(pending_reject_media_buy, "scheduled", approved_by="test@example.com")
 
     def test_reject_bumps_revision_without_confirming(
         self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
@@ -669,7 +665,7 @@ class TestAdminMediaBuyApproveHold:
 
         mock_execute.assert_not_called()
         assert "payload" not in webhook_capture, f"hold arm ({expected_hold}) must not fire the approve webhook"
-        _assert_persisted_hold(ids)
+        _assert_persisted_hold(ids, approved_by="test@example.com")
 
 
 def _post_workflow_approve(admin_session, ids: dict):
@@ -718,7 +714,7 @@ class TestAdminWorkflowApproveHold:
             _post_workflow_approve(authenticated_admin_session, ids)
 
         mock_execute.assert_not_called()
-        _assert_persisted_hold(ids)
+        _assert_persisted_hold(ids, approved_by="test@example.com")
 
     def test_workflow_approve_ready_persists_flight_status_and_executes(
         self,

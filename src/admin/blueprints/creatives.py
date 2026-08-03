@@ -39,9 +39,9 @@ def discover_creative_formats_from_url(url):
     return []
 
 
-from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.admin.utils import echo_context, require_tenant_access
+from src.admin.utils import echo_context, require_tenant_access, session_operator_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
@@ -466,8 +466,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         approved_by = data.get("approved_by", "admin")
         # MediaBuy.approved_by is operator provenance — same session source as
         # operations / workflows (not the creative-approver request field).
-        user_info = session.get("user", {})
-        operator_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+        user_email = session_operator_email()
 
         # Collect data needed for post-commit side effects
         webhook_data: dict[str, Any] = {}
@@ -597,16 +596,14 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             if success:
                 # Update media buy status in a separate UoW
                 from src.services.media_buy_creative_readiness import (
-                    compute_media_buy_status_from_flight_dates,
-                    stamp_media_buy_approval,
+                    apply_creative_finalize_ready,
                 )
 
                 with AdminCreativeUoW(tenant_id) as uow2:
                     assert uow2.media_buys is not None
                     mb = uow2.media_buys.get_by_id(action["media_buy_id"])
                     if mb:
-                        stamp_media_buy_approval(mb, approved_by=operator_email)
-                        mb.status = compute_media_buy_status_from_flight_dates(mb)
+                        apply_creative_finalize_ready(mb, approved_by=user_email)
                     # auto-commits
 
                 logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")

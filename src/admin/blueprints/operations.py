@@ -12,7 +12,7 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import echo_context, require_auth, require_tenant_access
+from src.admin.utils import echo_context, require_auth, require_tenant_access, session_operator_email
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
@@ -371,10 +371,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             }
 
             # Get user info for audit
-            from flask import session as flask_session
-
-            user_info = flask_session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_operator_email()
 
             approve_repo = MediaBuyRepository(db_session, tenant_id)
             media_buy = approve_repo.get_by_id(media_buy_id)
@@ -419,9 +416,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         apply_creative_finalize_hold_for_admin,
                     )
                     from src.services.media_buy_creative_readiness import (
-                        compute_media_buy_status_from_flight_dates,
+                        apply_creative_finalize_ready,
                         evaluate_creative_finalize_readiness_for_session,
-                        stamp_media_buy_approval,
                     )
 
                     readiness = evaluate_creative_finalize_readiness_for_session(
@@ -439,8 +435,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
 
-                    stamp_media_buy_approval(media_buy, approved_by=user_email)
-                    media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
+                    apply_creative_finalize_ready(media_buy, approved_by=user_email)
                     # Capture canonical status while media_buy is still attached.
                     # execute_approved_media_buy opens its own session and leaves this
                     # instance expired/detached after commit — do not touch ORM attrs later.

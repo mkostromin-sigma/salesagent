@@ -102,6 +102,42 @@ class TestMediaBuyReadinessService:
             session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
+    def test_in_window_zero_creatives_not_live(self, test_tenant, test_principal):
+        """In-window buy with zero creatives must not report live (#1718 KM Aug3).
+
+        Grades ``creatives_total > 0`` on the live branch: without it, draft
+        (packages_total==0) satisfies ``0 == 0`` and falsely returns live
+        before the draft check. With packages, has_blockers also blocks live.
+        """
+        media_buy_id = "mb_in_window_zero_creatives"
+        now = datetime.now(UTC)
+
+        with get_db_session() as session:
+            media_buy = MediaBuy(
+                media_buy_id=media_buy_id,
+                tenant_id=test_tenant,
+                principal_id=test_principal,
+                order_name="In-window Zero Creatives",
+                advertiser_name="Test Advertiser",
+                budget=1000.0,
+                start_date=(now - timedelta(days=1)).date(),
+                end_date=(now + timedelta(days=6)).date(),
+                start_time=now - timedelta(days=1),
+                end_time=now + timedelta(days=6),
+                status="active",
+                raw_request={"packages": []},
+            )
+            session.add(media_buy)
+            session.commit()
+
+        readiness = MediaBuyReadinessService.get_readiness_state(media_buy_id, test_tenant)
+        assert readiness["state"] != "live"
+        assert readiness["creatives_total"] == 0
+
+        with get_db_session() as session:
+            session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
+            session.commit()
+
     def test_needs_creatives_state(self, test_tenant, test_principal):
         """Media buy with packages but no creatives should be 'needs_creatives'."""
         media_buy_id = "mb_needs_creatives"

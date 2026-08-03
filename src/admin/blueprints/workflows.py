@@ -3,10 +3,10 @@
 import json
 import logging
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, require_tenant_access
+from src.admin.utils import require_tenant_access, session_operator_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
@@ -159,8 +159,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_operator_email()
 
             step = workflow_repo.update_status(
                 step_id,
@@ -203,9 +202,8 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         apply_creative_finalize_hold_for_admin,
                     )
                     from src.services.media_buy_creative_readiness import (
-                        compute_media_buy_status_from_flight_dates,
+                        apply_creative_finalize_ready,
                         evaluate_creative_finalize_readiness_for_session,
-                        stamp_media_buy_approval,
                     )
 
                     readiness = evaluate_creative_finalize_readiness_for_session(
@@ -223,8 +221,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # Commit provenance + flight status before execute (same contract
                     # as operations.approve_media_buy) so a failed adapter still
                     # records who approved the buy.
-                    stamp_media_buy_approval(media_buy, approved_by=user_email)
-                    media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
+                    apply_creative_finalize_ready(media_buy, approved_by=user_email)
                     db.commit()
 
                     # Execute adapter creation
@@ -268,8 +265,7 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_operator_email()
 
             step = workflow_repo.update_status(
                 step_id,

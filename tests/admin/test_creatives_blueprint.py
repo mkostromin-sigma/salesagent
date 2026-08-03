@@ -345,6 +345,10 @@ class TestCreativeApprovalRetroactivePush:
         with (
             patch(_SIDE_EFFECTS_PATCH),
             patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+            patch(
+                "src.admin.blueprints.creatives.execute_approved_media_buy",
+                return_value=(True, None),
+            ),
         ):
             response = client.post(
                 f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
@@ -354,6 +358,39 @@ class TestCreativeApprovalRetroactivePush:
 
         assert response.status_code == 200
         mock_push.assert_not_called()
+
+    def test_approve_creative_finalize_stamps_session_operator_on_media_buy(self, client, test_tenant, factory_session):
+        """Finalize arm stamps MediaBuy.approved_by from session operator (#1718 KM Aug3)."""
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="pending_creatives")
+        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)),
+            patch(
+                "src.admin.blueprints.creatives.execute_approved_media_buy",
+                return_value=(True, None),
+            ) as mock_execute,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={"approved_by": "creative-reviewer@example.com"},
+            )
+
+        assert response.status_code == 200
+        mock_execute.assert_called_once_with(media_buy_id, test_tenant)
+
+        with MediaBuyUoW(test_tenant) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(media_buy_id)
+            assert buy is not None
+            # Session operator — not the creative-row body field.
+            assert buy.approved_by == "test@example.com"
 
     def test_push_failure_returns_200_with_warnings(self, client, test_tenant, factory_session):
         """Push failure is non-fatal: response is 200 with a warnings field."""

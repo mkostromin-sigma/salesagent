@@ -296,7 +296,10 @@ class MediaBuyReadinessService:
         # Check for blocking issues
         has_blockers = len(blocking_issues) > 0
 
-        # Live: in flight, all creatives approved, no blockers
+        # Live: in flight, all creatives approved, no blockers.
+        # creatives_total > 0 is required: packages>0 with zero creatives already
+        # sets has_blockers ("No creatives uploaded"), but draft (packages_total==0)
+        # has an empty blocker list and 0==0 would otherwise falsely report live.
         if (
             now >= start_time
             and now <= end_time

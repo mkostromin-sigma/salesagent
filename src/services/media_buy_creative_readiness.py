@@ -151,6 +151,12 @@ def apply_creative_finalize_hold(
     log_creative_finalize_hold(media_buy.media_buy_id, readiness)
 
 
+def apply_creative_finalize_ready(media_buy: MediaBuy, *, approved_by: str) -> None:
+    """Apply ready outcome: provenance + flight-window status (mirror of hold)."""
+    stamp_media_buy_approval(media_buy, approved_by=approved_by)
+    media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
+
+
 def _coerce_flight_boundary(
     dt: datetime | None,
     date_value: date | None,
