@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import Any
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
@@ -19,6 +18,7 @@ from a2a.types import CancelTaskRequest, GetTaskRequest, Task, TaskNotFoundError
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _safe_task_id_for_log, _TaskOwner
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 # Shared ownership fixtures for unit + in-process wire altitudes (#1702 / #1720 / #1780).
 OWNED_TASK_TENANT = "tenant_a"
@@ -32,6 +32,9 @@ OWNED_TASK_ID = "task_owned_abc"
 OWNED_TASK_OWNER_TOK = "owner-tok"
 OWNED_TASK_SIBLING_TOK = "sibling-tok"
 
+# Default host header for ServerCallContext builders (unit + wire altitudes).
+A2A_TEST_HOST_HEADERS: dict[str, str] = {"host": "test.example.com"}
+
 # Default non-disclosure needles — every role id that appears at any altitude.
 OWNED_TASK_FORBIDDEN_SUBSTRINGS: tuple[str, ...] = (
     OWNED_TASK_TENANT,
@@ -41,11 +44,48 @@ OWNED_TASK_FORBIDDEN_SUBSTRINGS: tuple[str, ...] = (
     "leaked_tenant",
 )
 
-# method_name / request_cls / JSON-RPC method — one vocabulary for unit + wire.
-TASK_METHOD_MATRIX: tuple[tuple[type, str, str], ...] = (
-    (GetTaskRequest, "on_get_task", "tasks/get"),
-    (CancelTaskRequest, "on_cancel_task", "tasks/cancel"),
+type TaskRequestCls = type[GetTaskRequest] | type[CancelTaskRequest]
+
+# request_cls / method_name / JSON-RPC method / _authenticate operation id —
+# one vocabulary for unit + wire. Wire phrase = ``op.replace("_", " ") + " failed"``
+# (same transform production ``_authenticate`` uses).
+TASK_METHOD_MATRIX: tuple[tuple[TaskRequestCls, str, str, str], ...] = (
+    (GetTaskRequest, "on_get_task", "tasks/get", "get_task"),
+    (CancelTaskRequest, "on_cancel_task", "tasks/cancel", "cancel_task"),
 )
+
+
+def auth_operation_wire_phrase(operation: str) -> str:
+    """Buyer-facing InternalError phrase for an ``_authenticate`` op id."""
+    return f"{operation.replace('_', ' ')} failed"
+
+
+def owned_task_owner_identity(*, tenant_id: str = OWNED_TASK_TENANT) -> ResolvedIdentity:
+    """Owner principal identity for the shared ownership fixtures."""
+    return PrincipalFactory.make_identity(
+        principal_id=OWNED_TASK_OWNER,
+        tenant_id=tenant_id,
+        protocol="a2a",
+    )
+
+
+def owned_task_sibling_identity(*, tenant_id: str = OWNED_TASK_TENANT) -> ResolvedIdentity:
+    """Same-tenant sibling identity for the shared ownership fixtures."""
+    return PrincipalFactory.make_identity(
+        principal_id=OWNED_TASK_SIBLING,
+        tenant_id=tenant_id,
+        protocol="a2a",
+    )
+
+
+def seeded_owner_sibling_resolver() -> Callable[..., ResolvedIdentity]:
+    """Token → owner/sibling identity map used by real-auth unit + wire altitudes."""
+    return token_identity_resolver(
+        {
+            OWNED_TASK_SIBLING_TOK: owned_task_sibling_identity(),
+            OWNED_TASK_OWNER_TOK: owned_task_owner_identity(),
+        }
+    )
 
 
 def make_a2a_context(
@@ -84,9 +124,9 @@ def a2a_auth_as(handler: AdCPRequestHandler, identity: ResolvedIdentity) -> Iter
 async def invoke_owned_task_method(
     handler: AdCPRequestHandler,
     method_name: str,
-    request_cls: type,
+    request_cls: TaskRequestCls,
     task_id: str,
-) -> Any:
+) -> Task:
     """Act half shared by ownership unit tests (auth already patched via ``a2a_auth_as``)."""
     return await getattr(handler, method_name)(request_cls(id=task_id), context=None)
 

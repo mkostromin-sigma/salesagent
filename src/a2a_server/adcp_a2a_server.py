@@ -235,7 +235,9 @@ def _safe_task_id_for_log(task_id: str) -> str:
     """Neutralize attacker-controlled task ids before logs / buyer-facing messages.
 
     Allowlist keeps ``task_<hex>``-shaped ids intact; everything else becomes ``?``.
-    Truncate after substitution so a trailing escape cannot leave a lone backslash.
+    Truncate after substitution so a control char near the limit cannot expand
+    past the cap (replacement is one ``?`` per char today; order still matters
+    if the substitute ever grows).
     """
     return re.sub(r"[^A-Za-z0-9_.:-]", "?", task_id)[:100]
 

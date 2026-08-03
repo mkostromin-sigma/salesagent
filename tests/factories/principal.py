@@ -12,7 +12,12 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.core import TenantFactory
 
-_UNSET = object()
+
+class _Unset:
+    """Sentinel type for omitted ``testing_context`` / ``tenant`` defaults."""
+
+
+_UNSET = _Unset()
 
 
 class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -37,7 +42,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         dry_run: bool = False,
         auth_token: str | None = None,
         tenant: Any = _UNSET,
-        testing_context: Any = _UNSET,
+        testing_context: AdCPTestContext | None | _Unset = _UNSET,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
         """Build a ResolvedIdentity without DB persistence.
@@ -57,10 +62,18 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         ``ResolvedIdentity.tenant`` field, which accepts plain dicts in
         most call sites and lazy proxies (``LazyTenantContext``) in tests
         that need deferred config resolution.
+
+        When ``tenant`` is omitted and ``tenant_id is None``, skip
+        ``make_tenant`` (would build a ``pub-None`` subdomain) and set
+        ``resolved_tenant=None``.
         """
-        resolved_tenant = (
-            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
-        )
+        if tenant is _UNSET:
+            if tenant_id is None:
+                resolved_tenant = None
+            else:
+                resolved_tenant = TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides)
+        else:
+            resolved_tenant = tenant
         if testing_context is _UNSET:
             testing_context = AdCPTestContext(
                 dry_run=dry_run,
@@ -78,7 +91,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         )
 
     @classmethod
-    def make_anonymous_a2a_identity(cls, tenant_id: str | None = None, **kwargs: Any) -> ResolvedIdentity:
+    def make_anonymous_a2a_identity(cls, tenant_id: str | None = None, **kwargs: object) -> ResolvedIdentity:
         """Anonymous A2A discovery identity — principal_id/tenant None, protocol a2a.
 
         Production always returns ResolvedIdentity (never None) for discovery.

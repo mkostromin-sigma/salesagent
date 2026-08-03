@@ -559,15 +559,15 @@ class TestFastAPIExceptionHandlers:
         assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
 
     def test_task_not_found_error_returns_404(self, exc_handler_test_app):
-        """AdCPTaskNotFoundError → 404, wire INVALID_REQUEST, correctable.
+        """AdCPTaskNotFoundError → 404, wire REFERENCE_NOT_FOUND, correctable.
 
-        TASK_NOT_FOUND translates to INVALID_REQUEST at the boundary;
-        recovery=correctable distinguishes it from the base (terminal).
+        TASK_NOT_FOUND translates to REFERENCE_NOT_FOUND at the boundary
+        (AdCP 3.1.1); recovery=correctable distinguishes it from the base (terminal).
         """
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/task-not-found")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+        assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
 
     def test_adapter_error_returns_502(self, exc_handler_test_app):
         """AdCPAdapterError raised in a route must return 502."""
