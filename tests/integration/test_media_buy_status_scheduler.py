@@ -779,9 +779,10 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
 @pytest.mark.asyncio
 async def test_status_scheduler_invalidated_error_arms_real_breaker(integration_db):
     """Real get_db_session CM must arm the breaker on escaped invalidated errors."""
-    from sqlalchemy.exc import OperationalError
-
-    import src.core.database.database_session as db_session_mod
+    from tests.helpers.scheduler_isolation import (
+        assert_escaped_invalidation_arms_breaker,
+        invalidated_operational_error,
+    )
 
     tenant_id = _create_test_tenant("tenant_isolation_breaker_1714")
     principal_id = _create_test_principal(tenant_id)
@@ -796,20 +797,16 @@ async def test_status_scheduler_invalidated_error_arms_real_breaker(integration_
         end_time=now - timedelta(hours=1),
     )
 
-    db_session_mod.reset_health_state()
-    assert db_session_mod._is_healthy is True
-
     scheduler = MediaBuyStatusScheduler()
 
     def _raise_invalidated(_media_buy, _now_arg, _session):
-        raise OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
+        raise invalidated_operational_error()
 
-    try:
+    async def _run() -> None:
         with patch.object(scheduler, "_compute_new_status", side_effect=_raise_invalidated):
             await scheduler._update_statuses()
-        assert db_session_mod._is_healthy is False
-    finally:
-        db_session_mod.reset_health_state()
+
+    await assert_escaped_invalidation_arms_breaker(_run)
 
 
 # =============================================================================

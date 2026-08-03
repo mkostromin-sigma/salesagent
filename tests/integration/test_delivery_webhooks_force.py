@@ -10,6 +10,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import WebhookDeliveryLog
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.helpers.scheduler_isolation import patch_scheduler_send_notification
 from tests.integration.test_delivery_webhooks_integration import (
     _create_basic_media_buy_with_webhook,
     _create_test_tenant_and_principal,
@@ -77,12 +78,7 @@ async def test_force_trigger_delivery_webhook_bypasses_duplicate_check(integrati
         return True
 
     with (
-        patch.object(
-            scheduler.webhook_service,
-            "send_notification",
-            new_callable=AsyncMock,
-            side_effect=fake_send_notification,
-        ) as mock_send,
+        patch_scheduler_send_notification(scheduler, fake_send_notification) as mock_send,
         patch("src.services.delivery_webhook_scheduler._get_media_buy_delivery_impl", return_value=mock_response),
     ):
         # 2. Insert a fake log entry simulating a report sent today
