@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from src.core import exceptions
+from src.core.exceptions import AdCPError, translate_error_code
 
 _PINNED_ENUM_PATH = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
 
@@ -43,6 +44,14 @@ _CANONICAL_SUGGESTION_CONSTANTS = [
     ("INVALID_REQUEST_SUGGESTION", "INVALID_REQUEST"),
     ("VALIDATION_ERROR_SUGGESTION", "VALIDATION_ERROR"),
 ]
+
+# Per-class ``_default_suggestion`` ClassVars that intentionally diverge from
+# the pinned enum (pre-existing). Shrink only — never grow without a tracker.
+_DEFAULT_SUGGESTION_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "AdCPAuthenticationError",  # pre-existing AUTH_REQUIRED wording divergence
+    }
+)
 
 
 def test_pinned_enum_suggestions_loaded() -> None:
@@ -72,3 +81,28 @@ def test_suggestion_constant_matches_pinned_enum(const_name: str, code: str) -> 
         f"that code's text, not another code's: fix the constant, or advance the pin if the spec "
         f"changed the suggestion."
     )
+
+
+def test_default_suggestion_classvars_match_pinned_enum() -> None:
+    """Each concrete subclass that declares ``_default_suggestion`` must match the
+    pinned enum suggestion for its *wire* code (after ERROR_CODE_MAPPING).
+
+    Module-level constants are graded above via getattr; ClassVars fall outside
+    that scan. Deleting ``AdCPTaskNotFoundError._default_suggestion`` must redden
+    here. Allowlisted divergences are pre-existing and must shrink only.
+    """
+    graded = [c for c in AdCPError.iter_concrete_subclasses() if "_default_suggestion" in c.__dict__]
+    assert graded, "Expected at least one AdCPError subclass to declare _default_suggestion"
+    stale = sorted(_DEFAULT_SUGGESTION_ALLOWLIST - {c.__name__ for c in graded})
+    assert not stale, f"_DEFAULT_SUGGESTION_ALLOWLIST entries no longer declare ClassVar: {stale}"
+    for cls in graded:
+        if cls.__name__ in _DEFAULT_SUGGESTION_ALLOWLIST:
+            continue
+        wire = translate_error_code(cls._default_error_code)
+        assert wire in _SUGGESTION_BY_CODE, (
+            f"{cls.__name__} wire code {wire!r} has no pinned suggestion; cannot grade ClassVar"
+        )
+        assert cls._default_suggestion == _SUGGESTION_BY_CODE[wire], (
+            f"{cls.__name__}._default_suggestion = {cls._default_suggestion!r} but pinned "
+            f"{wire} suggestion is {_SUGGESTION_BY_CODE[wire]!r}"
+        )

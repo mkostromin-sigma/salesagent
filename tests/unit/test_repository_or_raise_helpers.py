@@ -87,7 +87,7 @@ class TestWorkflowOrRaise:
         with pytest.raises(AdCPTaskNotFoundError) as exc:
             repo.get_by_step_id_or_raise("step-missing", principal_id="principal-a")
         assert exc.value.error_code == "TASK_NOT_FOUND"
-        assert "step-missing" in str(exc.value)
+        assert str(exc.value) == "Reference not found"
 
     def test_get_by_step_id_or_raise_forwards_principal_id(self):
         """Buyer or_raise always forwards principal_id into get_by_step_id.
@@ -102,8 +102,10 @@ class TestWorkflowOrRaise:
         with pytest.raises(AdCPTaskNotFoundError):
             repo.get_by_step_id_or_raise("step-1", principal_id="sibling-b")
         compiled = _compiled_last_select(session)
-        assert "principal_id" in compiled
-        assert "sibling-b" in compiled
+        assert compiled.split("WHERE", 1)[1].strip() == (
+            "workflow_steps.step_id = 'step-1' AND contexts.tenant_id = 'tenant-1' "
+            "AND contexts.principal_id = 'sibling-b'"
+        )
 
     def test_get_by_step_id_or_raise_rejects_falsy_principal_id(self):
         """Explicit None/empty must not silently tenant-scope via get_by_step_id."""
@@ -121,5 +123,7 @@ class TestWorkflowOrRaise:
         repo = WorkflowRepository(session, "tenant-1")
         repo.get_by_step_id("step-1", principal_id="principal-a")
         compiled = _compiled_last_select(session)
-        assert "principal_id" in compiled
-        assert "principal-a" in compiled
+        assert compiled.split("WHERE", 1)[1].strip() == (
+            "workflow_steps.step_id = 'step-1' AND contexts.tenant_id = 'tenant-1' "
+            "AND contexts.principal_id = 'principal-a'"
+        )

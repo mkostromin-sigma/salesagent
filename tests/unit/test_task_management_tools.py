@@ -201,6 +201,19 @@ class TestGetTaskTool:
             with pytest.raises(ToolError, match="not found"):
                 await get_task_fn(task_id="nonexistent", identity=identity)
 
+    async def test_get_task_empty_task_id_raises_validation(self, mock_uow, mock_workflow_repo, sample_tenant):
+        """Empty task_id is validated in the shared tool (uniform A2A+MCP)."""
+        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.task_management import get_task
+
+        identity = self._make_identity(sample_tenant)
+        with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
+            with pytest.raises(AdCPValidationError, match="task_id is required") as exc:
+                await get_task(task_id="", identity=identity)
+        assert exc.value.field == "task_id"
+        assert exc.value.suggestion
+        mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()
+
 
 class TestCompleteTaskTool:
     """Test the complete_task MCP tool actually works."""
@@ -292,3 +305,16 @@ class TestCompleteTaskTool:
 
         with pytest.raises(ToolError, match="Invalid status"):
             await complete_task_fn(task_id="step_123", status="invalid_status", identity=identity)
+
+    async def test_complete_task_empty_task_id_raises_validation(self, mock_uow, mock_workflow_repo, sample_tenant):
+        """Empty task_id is validated in the shared tool (uniform A2A+MCP)."""
+        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.task_management import complete_task
+
+        identity = self._make_identity(sample_tenant)
+        with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
+            with pytest.raises(AdCPValidationError, match="task_id is required") as exc:
+                await complete_task(task_id="", identity=identity)
+        assert exc.value.field == "task_id"
+        assert exc.value.suggestion
+        mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()

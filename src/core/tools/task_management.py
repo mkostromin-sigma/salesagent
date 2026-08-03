@@ -17,6 +17,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import (
+    VALIDATION_ERROR_SUGGESTION,
     AdCPConflictError,
     AdCPValidationError,
 )
@@ -141,6 +142,13 @@ async def get_task(
     tenant = require_tenant(identity)
     principal_id = require_principal_id(identity)  # F-03: authenticated principal + ownership key
 
+    if not task_id:
+        raise AdCPValidationError(
+            "task_id is required",
+            field="task_id",
+            suggestion=VALIDATION_ERROR_SUGGESTION,
+        )
+
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
@@ -205,6 +213,13 @@ async def complete_task(
     identity = require_identity(identity)
     tenant = require_tenant(identity)
     principal_id = require_principal_id(identity)  # F-03: an authenticated principal is required
+
+    if not task_id:
+        raise AdCPValidationError(
+            "task_id is required",
+            field="task_id",
+            suggestion=VALIDATION_ERROR_SUGGESTION,
+        )
 
     if status not in ["completed", "failed"]:
         raise AdCPValidationError(

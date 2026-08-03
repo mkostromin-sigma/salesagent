@@ -12,13 +12,14 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import Session as SASession
 
-from src.core.context_manager import ContextManager
 from src.core.database.database_session import get_engine
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.task_management import complete_task, get_task
-from tests.factories import ALL_FACTORIES, PrincipalFactory, TenantFactory
+from tests.factories import PrincipalFactory, TenantFactory
+from tests.utils.database_helpers import _bind_factories_to_session
+from tests.utils.workflow_task_seed import create_principal_owned_workflow_step
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -34,29 +35,23 @@ def _identity(tenant_id: str, principal_id: str) -> ResolvedIdentity:
 def _assert_same_not_found(
     sibling_exc: pytest.ExceptionInfo[AdCPTaskNotFoundError],
     missing_exc: pytest.ExceptionInfo[AdCPTaskNotFoundError],
-    *,
-    expected_id: str,
 ) -> None:
     """Sibling-principal denial must be wire-indistinguishable from unknown id.
 
     Asserts the buyer-facing wire code (REFERENCE_NOT_FOUND), not the internal
-    TASK_NOT_FOUND taxonomy, plus the uniform message shape.
+    TASK_NOT_FOUND taxonomy, plus the generic (non resource-qualified) message.
     """
     assert sibling_exc.value.wire_error_code == missing_exc.value.wire_error_code == "REFERENCE_NOT_FOUND"
     assert sibling_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
-    assert str(sibling_exc.value) == f"Task {expected_id} not found"
-    assert str(missing_exc.value) == "Task step_does_not_exist not found"
+    assert str(sibling_exc.value) == str(missing_exc.value) == "Reference not found"
 
 
 @pytest.fixture
 def principal_scoped_step(integration_db):
-    """Two principals in one tenant; one durable workflow step under principal A."""
+    """Two principals in one tenant; durable workflow steps under principal A."""
     engine = get_engine()
     session = SASession(bind=engine)
-    for factory in ALL_FACTORIES:
-        factory._meta.sqlalchemy_session = session
-
-    try:
+    with _bind_factories_to_session(session):
         tenant = TenantFactory(tenant_id="pscope_tenant_get_task")
         owner = PrincipalFactory(
             tenant=tenant,
@@ -68,26 +63,15 @@ def principal_scoped_step(integration_db):
             principal_id="pscope_sibling",
             platform_mappings={"mock": {"id": "pscope_sibling_adv"}},
         )
-        cm = ContextManager()
-        context = cm.create_context(
+        step = create_principal_owned_workflow_step(
             tenant_id=tenant.tenant_id,
             principal_id=owner.principal_id,
-        )
-        step = cm.create_workflow_step(
-            context_id=context.context_id,
-            step_type="tool_call",
-            owner="principal",
             status="completed",
-            tool_name="create_media_buy",
-            request_data={"budget": 1000},
         )
-        pending = cm.create_workflow_step(
-            context_id=context.context_id,
-            step_type="approval",
-            owner="principal",
+        pending = create_principal_owned_workflow_step(
+            tenant_id=tenant.tenant_id,
+            principal_id=owner.principal_id,
             status="requires_approval",
-            tool_name="create_media_buy",
-            request_data={"budget": 1000},
         )
         yield {
             "tenant_id": tenant.tenant_id,
@@ -97,10 +81,7 @@ def principal_scoped_step(integration_db):
             "pending_step_id": pending.step_id,
             "session": session,
         }
-    finally:
-        for factory in ALL_FACTORIES:
-            factory._meta.sqlalchemy_session = None
-        session.close()
+    session.close()
 
 
 def test_owner_can_fetch_step(principal_scoped_step):
@@ -126,7 +107,7 @@ def test_sibling_principal_same_error_as_unknown(principal_scoped_step):
             "step_does_not_exist",
             principal_id=data["owner_principal_id"],
         )
-    _assert_same_not_found(sibling_exc, missing_exc, expected_id=data["step_id"])
+    _assert_same_not_found(sibling_exc, missing_exc)
 
 
 def test_tenant_only_lookup_still_works_without_principal(principal_scoped_step):
@@ -151,7 +132,7 @@ async def test_get_task_owner_ok_sibling_same_as_unknown(principal_scoped_step):
         await get_task(task_id=data["step_id"], identity=sibling)
     with pytest.raises(AdCPTaskNotFoundError) as missing_exc:
         await get_task(task_id="step_does_not_exist", identity=owner)
-    _assert_same_not_found(sibling_exc, missing_exc, expected_id=data["step_id"])
+    _assert_same_not_found(sibling_exc, missing_exc)
 
 
 @pytest.mark.asyncio
@@ -164,8 +145,30 @@ async def test_complete_task_owner_ok_sibling_same_as_unknown(principal_scoped_s
         await complete_task(task_id=data["pending_step_id"], identity=sibling)
     with pytest.raises(AdCPTaskNotFoundError) as missing_exc:
         await complete_task(task_id="step_does_not_exist", identity=owner)
-    _assert_same_not_found(sibling_exc, missing_exc, expected_id=data["pending_step_id"])
+    _assert_same_not_found(sibling_exc, missing_exc)
 
     result = await complete_task(task_id=data["pending_step_id"], status="completed", identity=owner)
     assert result["task_id"] == data["pending_step_id"]
     assert result["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_get_task_a2a_and_mcp_success_path(integration_db):
+    """Success-path oracle: A2A + MCP return a parseable get_task payload (#1812)."""
+    from tests.harness.task_management import GetTaskWireResponse, TaskEnv
+
+    with TaskEnv(tenant_id="pscope_wire_ok", principal_id="wire_owner") as env:
+        tenant = TenantFactory(tenant_id="pscope_wire_ok")
+        PrincipalFactory(
+            tenant=tenant,
+            principal_id="wire_owner",
+            platform_mappings={"mock": {"id": "wire_owner_adv"}},
+        )
+        env._commit_factory_data()
+        step_id = env.seed_owner_task(principal_id="wire_owner", status="completed")
+        a2a = env.call_a2a(tool="get_task", task_id=step_id)
+        assert isinstance(a2a, GetTaskWireResponse)
+        assert a2a.task_id == step_id
+        mcp = env.call_mcp(tool="get_task", task_id=step_id)
+        assert isinstance(mcp, GetTaskWireResponse)
+        assert mcp.task_id == step_id

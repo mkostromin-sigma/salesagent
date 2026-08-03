@@ -61,7 +61,9 @@ class WorkflowRepository:
             WorkflowStep.step_id == step_id,
             DBContext.tenant_id == self._tenant_id,
         ]
-        if principal_id is not None:
+        # Falsy (None / "") → tenant-only; truthy → AND principal ownership.
+        # Aligns with get_by_step_id_or_raise's falsy rejection for buyer paths.
+        if principal_id:
             conditions.append(DBContext.principal_id == principal_id)
         return self._session.scalars(select(WorkflowStep).join(DBContext).where(*conditions)).first()
 
@@ -76,14 +78,17 @@ class WorkflowRepository:
         Falsy ``principal_id`` is rejected before lookup so callers cannot
         accidentally fall through to tenant-only scoping via
         ``get_by_step_id(..., principal_id=None)``.
+
+        Message is the generic REFERENCE_NOT_FOUND text (AdCP 3.1.1
+        error-handling Uniform response — no resource-qualified message).
         """
         if not principal_id:
-            raise ValueError("principal_id is required for get_by_step_id_or_raise")
+            raise ValueError("principal_id is required")
         step = self.get_by_step_id(step_id, principal_id=principal_id)
         if step is None:
             from src.core.exceptions import AdCPTaskNotFoundError
 
-            raise AdCPTaskNotFoundError(f"Task {step_id} not found")
+            raise AdCPTaskNotFoundError("Reference not found")
         return step
 
     def list_by_tenant(

@@ -13,7 +13,32 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
+
 from tests.harness._base import IntegrationEnv
+from tests.utils.workflow_task_seed import create_principal_owned_workflow_step
+
+
+class GetTaskWireResponse(BaseModel):
+    """Minimal success-path wire shape for get_task (extra fields allowed)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str
+    status: str
+    context_id: str | None = None
+
+
+class CompleteTaskWireResponse(BaseModel):
+    """Minimal success-path wire shape for complete_task."""
+
+    model_config = ConfigDict(extra="allow")
+
+    task_id: str
+    status: str
+    message: str | None = None
+    completed_at: str | None = None
+    completed_by: str | None = None
 
 
 class TaskManagementEnv(IntegrationEnv):
@@ -34,6 +59,9 @@ class TaskManagementEnv(IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         """No mocks needed -- real WorkflowUoW."""
+
+    def _response_cls(self, tool: str) -> type[BaseModel]:
+        return GetTaskWireResponse if tool == "get_task" else CompleteTaskWireResponse
 
     def call_impl(self, **kwargs: Any) -> dict[str, Any]:
         """Call list_tasks directly with real DB (no transport dispatch)."""

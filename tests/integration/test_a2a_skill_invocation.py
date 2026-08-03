@@ -686,43 +686,15 @@ class TestA2ASkillInvocation:
 
     def test_skill_handler_mapping(self, handler):
         """Test that all advertised skills have handlers."""
-        # Get skills from agent card
         from src.a2a_server.adcp_a2a_server import create_agent_card
 
-        agent_card = create_agent_card()
-
-        # Verify all skills have handlers
-        expected_skills = {skill.name for skill in agent_card.skills}
-
-        # Test that _handle_explicit_skill can handle all advertised skills
-        for skill_name in expected_skills:
-            # This should not raise an exception for any advertised skill
-            try:
-                # We can't easily test the actual execution without full setup,
-                # but we can at least verify the skill name is recognized
-                assert skill_name in [
-                    "get_adcp_capabilities",  # AdCP v3 discovery endpoint
-                    "get_products",
-                    "create_media_buy",
-                    "update_media_buy",  # Added for media buy management
-                    "get_media_buy_delivery",  # Added for delivery metrics
-                    "get_creative_delivery",  # Added for creative-level delivery metrics
-                    "update_performance_index",  # Added for performance optimization
-                    "sync_creatives",
-                    "list_creatives",
-                    "approve_creative",
-                    "get_media_buy_status",
-                    "optimize_media_buy",
-                    "list_creative_formats",  # Keep existing creative format endpoint
-                    "list_authorized_properties",  # Added for AdCP compliance
-                    "get_media_buys",
-                    "list_accounts",  # Added for account management (UC-011)
-                    "sync_accounts",  # Added for account sync (UC-011)
-                    "get_task",  # Durable principal-scoped workflow lookup (#1741)
-                    "complete_task",  # Durable principal-scoped workflow completion (#1741)
-                ], f"Skill {skill_name} not in expected skill list"
-            except Exception as e:
-                pytest.fail(f"Skill {skill_name} should be handled but caused error: {e}")
+        advertised = {skill.name for skill in create_agent_card().skills}
+        handlers = set(handler._skill_handlers)
+        # Docstring contract: every advertised skill is dispatchable. Handlers may
+        # include unadvertised internal skills (create_creative / assign_creative);
+        # equality would force advertising UnsupportedOperation stubs.
+        missing = advertised - handlers
+        assert not missing, f"Advertised skills without handlers: {sorted(missing)}"
 
     # Phase 2: Tests for previously untested skills
 

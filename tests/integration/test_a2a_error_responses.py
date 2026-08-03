@@ -680,6 +680,37 @@ class TestA2AErrorPropagation:
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="media_buy_id", recovery="correctable")
 
+    async def test_get_task_missing_task_id_wire_envelope(self, handler, test_tenant, test_principal):
+        """get_task with no task_id surfaces VALIDATION_ERROR on the A2A wire.
+
+        Input contract lives in the shared tool (not the A2A wrapper) so MCP and
+        A2A emit the same code. Pins suggestion-bearing AdCPValidationError.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        message = self.create_message_with_skill("get_task", {})
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None and len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="task_id", recovery="correctable")
+
     @pytest.fixture
     def active_media_buy(self, _seeded):
         """Persist an active media buy for the chain tenant/principal via MediaBuyFactory.

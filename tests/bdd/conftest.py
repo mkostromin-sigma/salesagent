@@ -3189,9 +3189,9 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
-# UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
-# variant would 404). get_media_buys (UC-019) and get_task/complete_task (UC-027)
-# are A2A/MCP-only.
+# UCs whose tool has no REST binding in AdCP 3.1.1 — parametrize across A2A + MCP
+# only. get_media_buys (UC-019) and get_task/complete_task (UC-027) are bound to
+# MCP+A2A in the pinned spec (docs/adcp-spec-version.md); there is no REST binding.
 _NO_REST_UC_TAG_PREFIXES = ("T-UC-019-", "T-UC-027-")
 
 
