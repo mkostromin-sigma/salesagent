@@ -597,12 +597,8 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
             session.execute(text("SELECT 1/0"))
         return real_compute(media_buy, now_arg, session)
 
-    from src.core.metrics import scheduler_isolation_errors
-
     # DataError maps through categorize_error → "db_error"
-    metric_before = scheduler_isolation_errors.labels(
-        scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
-    )._value.get()
+    metric_before = counter_value("media_buy_status", tenant_id, "db_error")
 
     with (
         patch.object(status_scheduler_mod.logger, "error") as mock_error,
@@ -624,24 +620,13 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     assert f"media_buy_id={bad_buy_id}" in err_msg
     assert mock_error.call_args.kwargs.get("exc_info") is True
 
-    info_summaries = [
-        call.args[0]
-        for call in mock_info.call_args_list
-        if call.args and "Media buy status update complete:" in str(call.args[0])
-    ]
-    warning_summaries = [
-        call.args[0]
-        for call in mock_warning.call_args_list
-        if call.args and "Media buy status update complete:" in str(call.args[0])
-    ]
+    info_summaries = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX)
+    warning_summaries = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
     assert len(info_summaries) == 1
     assert "2 updated, 1 errors" in info_summaries[0]
     assert warning_summaries == []
 
-    metric_after = scheduler_isolation_errors.labels(
-        scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
-    )._value.get()
-    assert metric_after == metric_before + 1
+    assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
 
 
 @pytest.mark.requires_db
@@ -681,11 +666,7 @@ async def test_operational_error_class_is_isolated_without_invalidated(integrati
             raise OperationalError("SELECT …", {}, Exception("QueryCanceled"))
         return real_compute(media_buy, now_arg, session)
 
-    from src.core.metrics import scheduler_isolation_errors
-
-    metric_before = scheduler_isolation_errors.labels(
-        scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
-    )._value.get()
+    metric_before = counter_value("media_buy_status", tenant_id, "db_error")
 
     with patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_oe):
         await scheduler._update_statuses()
@@ -695,10 +676,7 @@ async def test_operational_error_class_is_isolated_without_invalidated(integrati
     assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
     assert _get_media_buy_status(tenant_id, "mb_oe_c") == "completed"
 
-    metric_after = scheduler_isolation_errors.labels(
-        scheduler="media_buy_status", tenant_id=tenant_id, error_type="db_error"
-    )._value.get()
-    assert metric_after == metric_before + 1
+    assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
 
 
 @pytest.mark.requires_db
@@ -735,16 +713,8 @@ async def test_all_failing_flips_emit_warning_summary(integration_db):
     ):
         await scheduler._update_statuses()
 
-    warning_msgs = [
-        call.args[0]
-        for call in mock_warning.call_args_list
-        if call.args and "Media buy status update complete:" in str(call.args[0])
-    ]
-    info_msgs = [
-        call.args[0]
-        for call in mock_info.call_args_list
-        if call.args and "Media buy status update complete:" in str(call.args[0])
-    ]
+    warning_msgs = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    info_msgs = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX)
     assert len(warning_msgs) == 1
     assert "0 updated, 3 errors" in warning_msgs[0]
     assert info_msgs == []
@@ -757,6 +727,7 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
 
     All three flips "succeed" inside the body but SAVEPOINT release raises;
     summary must WARNING ``0 updated, 3 errors`` (not INFO ``3 updated, 3 errors``).
+    Success INFO must not fire for rolled-back flips either.
     """
     tenant_id = _create_test_tenant("tenant_isolation_release_fail_1714")
     principal_id = _create_test_principal(tenant_id)
@@ -792,19 +763,16 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     for mid in buy_ids:
         assert _get_media_buy_status(tenant_id, mid) == "active"
 
-    warning_msgs = [
-        call.args[0]
-        for call in mock_warning.call_args_list
-        if call.args and "Media buy status update complete:" in str(call.args[0])
-    ]
-    info_msgs = [
-        call.args[0]
-        for call in mock_info.call_args_list
-        if call.args and "Media buy status update complete:" in str(call.args[0])
-    ]
+    warning_msgs = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    info_msgs = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX)
     assert len(warning_msgs) == 1
     assert "0 updated, 3 errors" in warning_msgs[0]
     assert info_msgs == []
+    # on_success must not claim flips that rolled back at SAVEPOINT release.
+    updated_lines = [
+        call.args[0] for call in mock_info.call_args_list if call.args and "Updated media buy " in str(call.args[0])
+    ]
+    assert updated_lines == []
 
 
 @pytest.mark.requires_db

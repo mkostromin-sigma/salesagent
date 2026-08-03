@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 # Configurable via env var - default 60 seconds
 STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
 
+# Batch summary prefix — shared with tests via this constant (not a string literal).
+STATUS_BATCH_SUMMARY_PREFIX = "Media buy status update complete"
+
 
 _ACTIVATABLE_STATUSES = frozenset(
     {
@@ -159,7 +162,7 @@ class MediaBuyStatusScheduler:
                     # Emit even if commit raises — otherwise the tally is lost.
                     log_batch_summary(
                         logger,
-                        "Media buy status update complete",
+                        STATUS_BATCH_SUMMARY_PREFIX,
                         outcome.processed,
                         outcome.errors,
                         seen=outcome.seen,

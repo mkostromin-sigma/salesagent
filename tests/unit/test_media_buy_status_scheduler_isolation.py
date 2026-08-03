@@ -10,7 +10,8 @@ from sqlalchemy.exc import OperationalError
 
 import src.services.media_buy_status_scheduler as status_mod
 from src.core.metrics import scheduler_isolation_errors
-from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX, MediaBuyStatusScheduler
+from tests.helpers.scheduler_isolation import counter_value, summary_lines
 
 
 @pytest.mark.asyncio
@@ -18,7 +19,8 @@ async def test_status_scheduler_connection_invalidated_reraises():
     """Adoption oracle: invalidated OperationalError re-raises out of the batch.
 
     Breaker arming against the real ``get_db_session`` CM is graded by the
-    integration twin; this unit test pins the re-raise half of the seam.
+    integration twin; this unit test pins the re-raise half of the seam via
+    the branch-distinguishing outer log (not the per-item isolate log).
     """
     buy = MagicMock()
     buy.tenant_id = "t-breaker"
@@ -45,6 +47,9 @@ async def test_status_scheduler_connection_invalidated_reraises():
     def _raise_invalidated(_media_buy, _now, _session):
         raise OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
 
+    scheduler_isolation_errors.clear()
+    metric_before = counter_value("media_buy_status", "t-breaker", "db_error")
+
     with (
         patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
         patch(
@@ -56,8 +61,10 @@ async def test_status_scheduler_connection_invalidated_reraises():
     ):
         await scheduler._update_statuses()
 
-    # Escaped error is logged by the outer _update_statuses handler, not isolated.
-    assert mock_error.call_count >= 1
+    error_msgs = [str(c.args[0]) for c in mock_error.call_args_list if c.args]
+    assert any("Failed to update media buy statuses" in msg for msg in error_msgs)
+    assert not any("Error updating media buy status" in msg for msg in error_msgs)
+    assert counter_value("media_buy_status", "t-breaker", "db_error") == metric_before
 
 
 @pytest.mark.asyncio
@@ -96,11 +103,7 @@ async def test_status_send_isolates_one_failure_and_meters_once():
         return "completed"
 
     scheduler_isolation_errors.clear()
-    fail_before = scheduler_isolation_errors.labels(
-        scheduler="media_buy_status",
-        tenant_id="tenant-fail",
-        error_type="db_error",
-    )._value.get()
+    fail_before = counter_value("media_buy_status", "tenant-fail", "db_error")
 
     with (
         patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
@@ -119,26 +122,10 @@ async def test_status_send_isolates_one_failure_and_meters_once():
     assert mock_error.call_args.kwargs.get("exc_info") is True
     assert "tenant_id=tenant-fail" in mock_error.call_args.args[0]
 
-    info_summaries = [
-        c.args[0] for c in mock_info.call_args_list if c.args and "Media buy status update complete:" in str(c.args[0])
-    ]
+    info_summaries = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX)
     assert len(info_summaries) == 1
     assert "2 updated, 1 errors" in info_summaries[0]
 
-    assert (
-        scheduler_isolation_errors.labels(
-            scheduler="media_buy_status",
-            tenant_id="tenant-fail",
-            error_type="db_error",
-        )._value.get()
-        == fail_before + 1
-    )
+    assert counter_value("media_buy_status", "tenant-fail", "db_error") == fail_before + 1
     # Siblings must not be metered.
-    assert (
-        scheduler_isolation_errors.labels(
-            scheduler="media_buy_status",
-            tenant_id="tenant-ok-a",
-            error_type="db_error",
-        )._value.get()
-        == 0
-    )
+    assert counter_value("media_buy_status", "tenant-ok-a", "db_error") == 0

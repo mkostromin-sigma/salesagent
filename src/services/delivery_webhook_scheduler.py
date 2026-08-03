@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 # Configurable via env var for testing
 SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
 
+# Batch summary prefix — shared with tests via this constant (not a string literal).
+DELIVERY_BATCH_SUMMARY_PREFIX = "Daily delivery report batch complete"
+
 
 class DeliveryWebhookScheduler:
     """Scheduler for sending delivery reports via webhooks."""
@@ -136,7 +139,7 @@ class DeliveryWebhookScheduler:
 
                 log_batch_summary(
                     logger,
-                    "Daily delivery report batch complete",
+                    DELIVERY_BATCH_SUMMARY_PREFIX,
                     outcome.processed,
                     outcome.errors,
                     seen=outcome.seen,

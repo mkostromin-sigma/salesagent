@@ -33,14 +33,13 @@ _is_healthy = True
 
 #: Exception *classes* that :func:`get_db_session` treats as circuit-breaker
 #: keys (arms ``_is_healthy = False``). This is the breaker's class set — not
-#: the per-item isolation escape predicate.
+#: the per-item isolation escape predicate (:func:`is_connection_dead`).
 #:
-#: Schedulers isolate per-item failures via ``default_escape_isolation`` in
-#: ``isolated_batch``, which keys on connection *state*
-#: (``connection_invalidated`` / ``DisconnectionError``), not on membership
-#: in this tuple. A plain ``OperationalError`` (e.g. statement timeout) is
-#: deliberately isolated and must NOT be re-raised by callers. When escape
-#: *does* re-raise a dead connection, the exception class must be in this
+#: Schedulers isolate per-item failures via ``is_connection_dead``, which keys
+#: on connection *state* (``connection_invalidated`` / ``DisconnectionError``),
+#: not on membership in this tuple. A plain ``OperationalError`` (e.g. statement
+#: timeout) is deliberately isolated and must NOT be re-raised by callers. When
+#: escape *does* re-raise a dead connection, the exception class must be in this
 #: tuple so the breaker actually arms — hence ``InterfaceError`` is included
 #: alongside ``OperationalError`` / ``DisconnectionError``.
 CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
@@ -48,6 +47,16 @@ CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
     DisconnectionError,
     InterfaceError,
 )
+
+
+def is_connection_dead(exc: BaseException) -> bool:
+    """Return True when ``exc`` indicates a dead/unusable DB connection.
+
+    Owned here next to :data:`CONNECTION_ERROR_TYPES` so the breaker arm-set and
+    the per-item isolation escape predicate cannot drift across layers.
+    Scheduler batch runners import this as their default ``escape_isolation``.
+    """
+    return bool(getattr(exc, "connection_invalidated", False)) or isinstance(exc, DisconnectionError)
 
 
 def _pydantic_json_serializer(obj: Any) -> str:

@@ -113,16 +113,59 @@ def test_run_isolated_batch_reraises_interface_error_when_connection_invalidated
 
 
 def test_default_escape_isolation_predicate():
+    from src.core.database.database_session import is_connection_dead
+
     plain = OperationalError("SELECT 1", {}, Exception("timeout"))
     invalidated = OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
     iface_dead = InterfaceError("closed", {}, Exception("gone"), connection_invalidated=True)
     iface_plain = InterfaceError("x", {}, Exception("x"))
+    assert default_escape_isolation is is_connection_dead
     assert default_escape_isolation(plain) is False
     assert default_escape_isolation(invalidated) is True
     assert default_escape_isolation(DisconnectionError("gone")) is True
     assert default_escape_isolation(iface_dead) is True
     assert default_escape_isolation(iface_plain) is False
     assert default_escape_isolation(ValueError("x")) is False
+
+
+def test_on_success_fires_only_after_clean_release():
+    """on_success must not run when SAVEPOINT release fails after a truthy body."""
+    session = MagicMock()
+    nested = MagicMock()
+    session.begin_nested.return_value = nested
+    nested.__enter__ = MagicMock(return_value=nested)
+    nested.__exit__ = MagicMock(
+        side_effect=OperationalError("UPDATE …", {}, Exception("QueryCanceled")),
+    )
+    successes: list[str] = []
+
+    outcome = run_isolated_batch(
+        [1],
+        handle_item=lambda _i: True,
+        item_context=_ctx,
+        on_error=lambda _c, _e: None,
+        on_success=lambda ctx: successes.append(ctx.media_buy_id),
+        session=session,
+    )
+
+    assert outcome.processed == 0
+    assert outcome.errors == 1
+    assert successes == []
+
+
+def test_on_success_fires_for_tallied_item():
+    successes: list[str] = []
+
+    outcome = run_isolated_batch(
+        [1, 2],
+        handle_item=lambda i: i == 1,
+        item_context=_ctx,
+        on_error=lambda _c, _e: None,
+        on_success=lambda ctx: successes.append(ctx.media_buy_id),
+    )
+
+    assert outcome.processed == 1
+    assert successes == ["mb1"]
 
 
 def test_raising_on_error_still_visits_all_items():

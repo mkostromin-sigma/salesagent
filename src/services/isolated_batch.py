@@ -5,7 +5,8 @@ loop that must (a) keep going when one item fails and (b) still let a *dead*
 connection escape so ``get_db_session`` can trip the process-global circuit
 breaker.
 
-Escape is gated on connection *state*
+Escape is gated on connection *state* via
+:func:`src.core.database.database_session.is_connection_dead`
 (``connection_invalidated`` / ``DisconnectionError``), not on broad
 ``OperationalError`` membership — statement timeouts and similar per-row DB
 failures inherit ``OperationalError`` but leave the connection usable after
@@ -32,6 +33,10 @@ failure expires ORM attributes, so reading them inside ``on_error`` can raise
 inside the per-item isolation scope so a raising ``item_context`` is metered
 rather than aborting the batch; ``item_context`` must not touch deferred
 columns or relationships that need a live flush.
+
+Success logging that must reflect a durable outcome belongs in ``on_success``,
+which runs only after the transaction scope (if any) releases cleanly and the
+item is counted — not inside ``handle_item`` while a SAVEPOINT is still open.
 """
 
 from __future__ import annotations
@@ -39,15 +44,18 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import contextmanager
-from types import SimpleNamespace
+from dataclasses import dataclass
 from typing import NamedTuple, Protocol, runtime_checkable
 
-from sqlalchemy.exc import DisconnectionError
 from sqlalchemy.orm import Session
 
+from src.core.database.database_session import is_connection_dead
 from src.core.metrics import record_scheduler_isolation_error
 
 logger = logging.getLogger(__name__)
+
+# Re-export under the historical name so callers/tests keep a stable import.
+default_escape_isolation = is_connection_dead
 
 
 class BatchOutcome(NamedTuple):
@@ -82,6 +90,14 @@ class _HasTenantId(Protocol):
     tenant_id: str
 
 
+@dataclass
+class _ErrorBox:
+    """Mutable, typed carrier for the isolation catch + processed tally."""
+
+    error: Exception | None = None
+    tallied: bool = False
+
+
 def media_buy_context(media_buy: _HasMediaBuyIds) -> SchedulerItemContext:
     """Build :class:`SchedulerItemContext` with keyword fields (swap-safe)."""
     return SchedulerItemContext(
@@ -89,11 +105,6 @@ def media_buy_context(media_buy: _HasMediaBuyIds) -> SchedulerItemContext:
         principal_id=media_buy.principal_id,
         media_buy_id=media_buy.media_buy_id,
     )
-
-
-def default_escape_isolation(exc: Exception) -> bool:
-    """Return True when ``exc`` must escape isolation (dead connection)."""
-    return bool(getattr(exc, "connection_invalidated", False)) or isinstance(exc, DisconnectionError)
 
 
 def log_batch_summary(
@@ -163,6 +174,16 @@ def _safe_on_error[C](on_error: Callable[[C, Exception], None], ctx: C, exc: Exc
         logger.exception("on_error handler failed while handling %s", type(exc).__name__)
 
 
+def _safe_on_success[C](on_success: Callable[[C], None] | None, ctx: C) -> None:
+    """Invoke ``on_success`` without letting a raising handler abort the batch."""
+    if on_success is None:
+        return
+    try:
+        on_success(ctx)
+    except Exception:
+        logger.exception("on_success handler failed")
+
+
 def _should_escape(escape_isolation: Callable[[Exception], bool], exc: Exception) -> bool:
     """Evaluate the escape predicate; a raising predicate does not escape.
 
@@ -192,6 +213,31 @@ def _tally_isolated_failure[C](
         record_scheduler_isolation_error(scheduler=scheduler, tenant_id=ctx.tenant_id, error=exc)
 
 
+def _finalize_item[C](
+    box: _ErrorBox,
+    ctx: C | None,
+    *,
+    on_error: Callable[[C, Exception], None],
+    scheduler: str | None,
+    on_success: Callable[[C], None] | None = None,
+) -> tuple[int, int]:
+    """Apply post-item bookkeeping; return ``(processed_delta, error_delta)``."""
+    if box.error is not None:
+        if ctx is None:
+            logger.exception(
+                "item_context failed before handle_item; isolating without typed ctx (%s)",
+                type(box.error).__name__,
+            )
+        else:
+            _tally_isolated_failure(ctx=ctx, exc=box.error, on_error=on_error, scheduler=scheduler)
+        return (0, 1)
+    if box.tallied:
+        if ctx is not None:
+            _safe_on_success(on_success, ctx)
+        return (1, 0)
+    return (0, 0)
+
+
 @contextmanager
 def _catch_isolated(escape_isolation: Callable[[Exception], bool]):
     """Swallow isolatable errors into ``box.error``; re-raise escapes.
@@ -199,7 +245,7 @@ def _catch_isolated(escape_isolation: Callable[[Exception], bool]):
     Sync and async runners share this policy so the escape decision lives in
     one place (a plain ``with`` is legal around ``await`` inside ``async def``).
     """
-    box = SimpleNamespace(error=None)
+    box = _ErrorBox()
     try:
         yield box
     except Exception as exc:
@@ -217,6 +263,7 @@ def run_isolated_batch[T, C](
     escape_isolation: Callable[[Exception], bool] = default_escape_isolation,
     session: Session | None = None,
     scheduler: str | None = None,
+    on_success: Callable[[C], None] | None = None,
 ) -> BatchOutcome:
     """Run ``handle_item`` per item with isolation.
 
@@ -227,8 +274,9 @@ def run_isolated_batch[T, C](
     When ``session`` is provided, each item runs inside ``session.begin_nested()``
     so a DB error rolls back only that item. The processed tally is applied
     *after* the savepoint releases successfully — a release-time flush failure
-    counts as an error, not a success. When ``scheduler`` is set, isolated
-    failures are recorded on ``scheduler_isolation_errors_total``.
+    counts as an error, not a success. ``on_success`` (if provided) runs only
+    for tallied items after that clean release. When ``scheduler`` is set,
+    isolated failures are recorded on ``scheduler_isolation_errors_total``.
     """
     processed = 0
     errors = 0
@@ -240,19 +288,10 @@ def run_isolated_batch[T, C](
         with _catch_isolated(escape_isolation) as box:
             ctx = item_context(item)
             with _item_transaction_scope(session):
-                tallied = bool(handle_item(item))
-            # Only reached when the savepoint (if any) released cleanly.
-            if tallied:
-                processed += 1
-        if box.error is not None:
-            errors += 1
-            if ctx is None:
-                logger.exception(
-                    "item_context failed before handle_item; isolating without typed ctx (%s)",
-                    type(box.error).__name__,
-                )
-            else:
-                _tally_isolated_failure(ctx=ctx, exc=box.error, on_error=on_error, scheduler=scheduler)
+                box.tallied = bool(handle_item(item))
+        proc_delta, err_delta = _finalize_item(box, ctx, on_error=on_error, scheduler=scheduler, on_success=on_success)
+        processed += proc_delta
+        errors += err_delta
 
     return BatchOutcome(processed=processed, errors=errors, seen=seen)
 
@@ -266,6 +305,7 @@ async def run_isolated_batch_async[T, C](
     escape_isolation: Callable[[Exception], bool] = default_escape_isolation,
     session: Session | None = None,
     scheduler: str | None = None,
+    on_success: Callable[[C], None] | None = None,
 ) -> BatchOutcome:
     """Async variant of :func:`run_isolated_batch`."""
     processed = 0
@@ -278,17 +318,9 @@ async def run_isolated_batch_async[T, C](
         with _catch_isolated(escape_isolation) as box:
             ctx = item_context(item)
             with _item_transaction_scope(session):
-                tallied = bool(await handle_item(item))
-            if tallied:
-                processed += 1
-        if box.error is not None:
-            errors += 1
-            if ctx is None:
-                logger.exception(
-                    "item_context failed before handle_item; isolating without typed ctx (%s)",
-                    type(box.error).__name__,
-                )
-            else:
-                _tally_isolated_failure(ctx=ctx, exc=box.error, on_error=on_error, scheduler=scheduler)
+                box.tallied = bool(await handle_item(item))
+        proc_delta, err_delta = _finalize_item(box, ctx, on_error=on_error, scheduler=scheduler, on_success=on_success)
+        processed += proc_delta
+        errors += err_delta
 
     return BatchOutcome(processed=processed, errors=errors, seen=seen)
