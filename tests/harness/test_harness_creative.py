@@ -139,8 +139,112 @@ class TestCreativeSyncEnvContract:
         assert "GEMINI_API_KEY" in str(exc_info.value)
         assert exc_info.value.method_name == "clear_gemini_api_key"
 
+    def test_call_a2a_stashes_wire_response(self, monkeypatch):
+        """_raw() A2A path must stash model_dump wire for nested-advisory grading."""
+        from unittest.mock import MagicMock
 
-class TestCreativeListEnvContract:
+        from tests.harness.creative_sync import CreativeSyncEnv
+
+        class _UnitMode(CreativeSyncEnv):
+            use_real_db = False
+
+        fake = MagicMock()
+        fake.model_dump.return_value = {
+            "creatives": [
+                {"creative_id": "c1", "action": "failed", "errors": [{"code": "CREATIVE_GEMINI_KEY_MISSING"}]}
+            ],
+        }
+        monkeypatch.setattr(
+            "src.core.tools.creatives.sync_wrappers.sync_creatives_raw",
+            lambda **_kwargs: fake,
+        )
+        with _UnitMode() as env:
+            env._commit_factory_data = lambda: None  # noqa: E731 — unit stub
+            out = env.call_a2a(creatives=[])
+        assert out is fake
+        assert env._last_wire_response == fake.model_dump.return_value
+        fake.model_dump.assert_called_once_with(mode="json")
+
+
+class TestNestedCreativeAdvisoryAccessor:
+    """first_failed_creative_advisory / assert_wire_advisory contracts."""
+
+    def test_loud_when_wire_missing_on_wire_transport(self):
+        import pytest
+
+        from tests.harness.transport import Transport, first_failed_creative_advisory
+
+        with pytest.raises(AssertionError, match="wire_response missing"):
+            first_failed_creative_advisory(None, transport=Transport.A2A)
+
+    def test_soft_none_on_impl(self):
+        from tests.harness.transport import Transport, first_failed_creative_advisory
+
+        assert first_failed_creative_advisory(None, transport=Transport.IMPL) is None
+
+    def test_returns_first_failed_advisory(self):
+        from tests.harness.transport import Transport, first_failed_creative_advisory
+
+        wire = {
+            "creatives": [
+                {"creative_id": "ok", "action": "created", "errors": []},
+                {
+                    "creative_id": "bad",
+                    "action": "failed",
+                    "errors": [{"code": "CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}],
+                },
+            ]
+        }
+        advisory = first_failed_creative_advisory(wire, transport=Transport.MCP)
+        assert advisory == {"code": "CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}
+
+    def test_assert_wire_advisory_grades_code_and_recovery(self):
+        from tests.harness.transport import Transport, assert_wire_advisory
+
+        wire = {
+            "creatives": [
+                {
+                    "creative_id": "bad",
+                    "action": "failed",
+                    "errors": [{"code": "CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}],
+                }
+            ]
+        }
+        advisory = assert_wire_advisory(
+            wire,
+            "CREATIVE_GEMINI_KEY_MISSING",
+            recovery="terminal",
+            transport=Transport.REST,
+        )
+        assert advisory is not None
+        assert advisory["code"] == "CREATIVE_GEMINI_KEY_MISSING"
+
+    def test_nested_bdd_helper_soft_on_envelope_less_error_path(self):
+        """UC003/UC019-style: wire transport, no wire_response, no failed creative → soft None."""
+        from tests.bdd.steps.generic.then_error import _nested_creative_advisory_error
+        from tests.harness.transport import Transport
+
+        assert (
+            _nested_creative_advisory_error({"transport": Transport.MCP, "wire_response": None, "response": None})
+            is None
+        )
+
+    def test_nested_bdd_helper_loud_when_failed_creative_without_wire(self):
+        """Success+advisory without stashed wire must not soft-fallback."""
+        from types import SimpleNamespace
+
+        import pytest
+
+        from tests.bdd.steps.generic.then_error import _nested_creative_advisory_error
+        from tests.harness.transport import Transport
+
+        resp = SimpleNamespace(
+            creatives=[SimpleNamespace(action="failed", errors=[{"code": "X"}])],
+            results=None,
+        )
+        with pytest.raises(AssertionError, match="wire_response missing"):
+            _nested_creative_advisory_error({"transport": Transport.A2A, "wire_response": None, "response": resp})
+
     """CreativeListEnv must mock only audit logger."""
 
     def test_import_succeeds(self):

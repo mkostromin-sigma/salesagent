@@ -16,21 +16,55 @@ from tests.bdd.steps._outcome_helpers import payload_or_none, wire_error_envelop
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
+def _response_has_failed_creative(ctx: dict) -> bool:
+    """True when ``ctx['response']`` carries a per-creative ``action == "failed"``.
+
+    Used to decide whether a missing ``wire_response`` on a wire-stashing
+    transport is a nested-advisory grading bug (loud) vs an envelope-less
+    error path that should soft-fall back to the reconstructed exception
+    (UC003 / UC019 validation failures).
+    """
+    resp = ctx.get("response")
+    if resp is None:
+        return False
+    creatives = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
+    for creative in creatives:
+        if isinstance(creative, dict):
+            action = creative.get("action")
+            action_str = action.get("value") if isinstance(action, dict) else action
+        else:
+            action = getattr(creative, "action", None)
+            action_str = action.value if hasattr(action, "value") else action
+        if action_str == "failed":
+            return True
+    return False
+
+
 def _nested_creative_advisory_error(ctx: dict) -> dict | None:
     """First failed ``creatives[].errors[0]`` from a success-path ``wire_response``.
 
     Per-creative advisories live inside a successful sync artifact (no
     ``wire_error_envelope``). Delegates to the harness accessor so BDD steps and
-    integration tests share one guarded traversal (loud when a wire-stashing
-    transport omitted ``wire_response``).
+    integration tests share one guarded traversal.
+
+    Loud when a wire-stashing transport omitted ``wire_response`` **and** the
+    typed response already shows a failed creative (success+advisory path).
+    Soft ``None`` otherwise so envelope-less error Then steps (UC003/UC019)
+    keep reconstructed fallback — they never stash success-path wire.
     """
-    from tests.harness.transport import first_failed_creative_advisory
+    from tests.harness.transport import Transport, first_failed_creative_advisory
 
     wire = ctx.get("wire_response")
-    return first_failed_creative_advisory(
-        wire if isinstance(wire, dict) else None,
-        transport=ctx.get("transport"),
-    )
+    transport = ctx.get("transport")
+    if isinstance(wire, dict):
+        return first_failed_creative_advisory(wire, transport=transport)
+    # IMPL / unset: no success-path wire to require.
+    if transport is None or transport is Transport.IMPL or getattr(transport, "value", transport) == "impl":
+        return None
+    if _response_has_failed_creative(ctx):
+        # Success+advisory on a wire transport without a stashed body — loud.
+        return first_failed_creative_advisory(None, transport=transport)
+    return None
 
 
 def _wire_code(ctx: dict) -> str | None:
