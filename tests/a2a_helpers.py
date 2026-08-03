@@ -7,10 +7,10 @@ a Starlette request object.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypedDict
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
@@ -19,6 +19,15 @@ from a2a.types import CancelTaskRequest, GetTaskRequest, Task, TaskNotFoundError
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _safe_task_id_for_log, _TaskOwner
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.resolved_identity import ResolvedIdentity
+
+
+class JsonRpcError(TypedDict):
+    """Fixed JSON-RPC error body shape (v0.3 compat task-method denials)."""
+
+    code: int
+    message: str
+    data: object | None
+
 
 # Shared ownership fixtures for unit + in-process wire altitudes (#1702 / #1720 / #1780).
 OWNED_TASK_TENANT = "tenant_a"
@@ -137,6 +146,17 @@ def auth_headers_mapping(headers: Mapping[str, str]) -> MappingProxyType[str, st
     return MappingProxyType({k.lower(): v for k, v in headers.items()})
 
 
+def assert_no_identity_leak(message: str, data: object, needles: Iterable[str]) -> None:
+    """Shape-agnostic forbidden-substring scan over a not-found message + data.
+
+    Shared by the unit-altitude ``TaskNotFoundError`` oracle and the BDD wire
+    step (JSON-RPC dict) so one needle set covers both altitudes.
+    """
+    blob = f"{message}{data!s}"
+    for needle in needles:
+        assert needle not in blob, f"identity leak {needle!r} in not-found body: message={message!r} data={data!r}"
+
+
 def assert_task_not_found_nondisclosure(
     exc: TaskNotFoundError,
     task_id: str,
@@ -154,12 +174,10 @@ def assert_task_not_found_nondisclosure(
     assert isinstance(exc.data, dict)
     assert exc.data.get("task_id") == safe_id
     assert "adcp_error" in exc.data
-    blob = f"{exc.message}{exc.data!s}"
-    for needle in forbidden_substrings:
-        assert needle not in blob
+    assert_no_identity_leak(exc.message, exc.data, forbidden_substrings)
 
 
-def assert_wire_task_not_found(err: Mapping[str, object], task_id: str) -> None:
+def assert_wire_task_not_found(err: JsonRpcError | Mapping[str, object], task_id: str) -> None:
     """Exact wire-body oracle for not-found (v0.3 compat: code -32603, data null).
 
     Both the in-process live-POST harness (#1780) and

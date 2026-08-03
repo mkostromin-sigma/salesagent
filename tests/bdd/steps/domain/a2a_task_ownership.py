@@ -14,23 +14,43 @@ production auth chain before the ownership gate decides.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.a2a_helpers import assert_wire_task_not_found
+from tests.a2a_helpers import (
+    OWNED_TASK_FORBIDDEN_SUBSTRINGS,
+    assert_no_identity_leak,
+    assert_wire_task_not_found,
+)
+
+if TYPE_CHECKING:
+    from a2a.types import TaskState
 
 _OWNED_TASK_STATE_BY_NAME = {
     "WORKING": "TASK_STATE_WORKING",
     "CANCELED": "TASK_STATE_CANCELED",
 }
 
+# v0.3 compat wire uses lowercase TaskState values (``working`` / ``canceled``).
+_WIRE_TASK_STATE_BY_NAME = {
+    "WORKING": "working",
+    "CANCELED": "canceled",
+}
 
-def _task_state(name: str) -> Any:
-    """Resolve a Gherkin state word to the a2a ``TaskState`` enum member."""
+
+def _task_state(name: str) -> TaskState:
+    """Resolve a Gherkin state word to the protobuf ``TaskState`` enum member."""
     from a2a.types import TaskState
 
     return getattr(TaskState, _OWNED_TASK_STATE_BY_NAME[name])
+
+
+def _wire_task_state(name: str):
+    """Resolve a Gherkin state word to the v0.3 wire ``TaskState`` enum member."""
+    from a2a.compat.v0_3.types import TaskState as WireTaskState
+
+    return WireTaskState(_WIRE_TASK_STATE_BY_NAME[name])
 
 
 @given(parsers.parse('an in-memory A2A task "{task_id}" owned by the owning principal'))
@@ -67,7 +87,12 @@ def when_unauth_calls_task_method(ctx: dict, method: str, task_id: str) -> None:
 
 @then(parsers.parse('the A2A task response should carry task "{task_id}" in state {state}'))
 def then_task_served(ctx: dict, task_id: str, state: str) -> None:
-    """Assert the caller was served the Task itself — id and state both graded."""
+    """Assert the caller was served the Task from the live wire result.
+
+    Grades ``body["result"]`` (v0.3 compat serialization) — not the handler's
+    in-memory store — so a success-path adapter regression reddens owner-get
+    and owner-cancel. Store mutation is graded separately by the stored-task Then.
+    """
     env = ctx["env"]
     assert env.last_a2a_task_error is None, (
         f"Expected task {task_id} to be served, got error: {env.last_a2a_task_error}"
@@ -75,7 +100,7 @@ def then_task_served(ctx: dict, task_id: str, state: str) -> None:
     task = env.last_a2a_task
     assert task is not None, f"No Task returned for {task_id}"
     assert task.id == task_id
-    assert task.status.state == _task_state(state)
+    assert task.status.state == _wire_task_state(state)
 
 
 @then(parsers.parse('the A2A task response should be a JSON-RPC task-not-found error for "{task_id}"'))
@@ -85,24 +110,19 @@ def then_task_not_found(ctx: dict, task_id: str) -> None:
     ``assert_wire_task_not_found`` pins code/message/data literally on the
     captured JSON-RPC error (independent of ``_task_not_found_message``). An
     ownership denial that leaked "you may not touch this" would fail the exact
-    equality. A static identity leak inside the shared message builder is
-    caught by the forbidden-substring check over this env's role ids (not the
-    unit-fixture defaults, which BDD bodies never contain).
+    equality. Identity leaks are graded via ``assert_no_identity_leak`` with the
+    shared ``OWNED_TASK_FORBIDDEN_SUBSTRINGS`` needle set.
     """
     env = ctx["env"]
     assert env.last_a2a_task is None, f"Denied call still returned a Task: {env.last_a2a_task}"
     error = env.last_a2a_task_error
     assert error is not None, f"Expected a task-not-found error for {task_id}, got none"
     assert_wire_task_not_found(error, task_id)
-    blob = f"{error.get('message', '')}{error.get('data')!s}"
-    for needle in (
-        env.OWNER_TENANT_ID,
-        env.OWNER_PRINCIPAL_ID,
-        env.SIBLING_PRINCIPAL_ID,
-        env.OTHER_TENANT_ID,
-        env.OTHER_PRINCIPAL_ID,
-    ):
-        assert needle not in blob, f"identity leak {needle!r} in not-found body: {error!r}"
+    assert_no_identity_leak(
+        error.get("message", ""),
+        error.get("data"),
+        OWNED_TASK_FORBIDDEN_SUBSTRINGS,
+    )
 
 
 @then("the A2A task response should be an authentication failure, not task-not-found")

@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
     from src.core.resolved_identity import ResolvedIdentity
+    from tests.a2a_helpers import JsonRpcError
     from tests.harness.transport import E2EConfig, Transport, TransportResult
 
 
@@ -347,6 +348,16 @@ def _a2a_send_message_configuration(spec: dict[str, Any]) -> Any:
     return SendMessageConfiguration(task_push_notification_config=TaskPushNotificationConfig(**fields))
 
 
+def _clear_injected_identity(handler: Any) -> None:
+    """Drop unit-mode identity lambdas so a later token dispatch cannot reuse them.
+
+    Security-critical: the set of neutralized attributes has one definition.
+    Graded by ``test_a2a_harness_identity_cleanup.py::test_token_mode_prepare_clears_unit_mode_identity_lambdas``.
+    """
+    handler.__dict__.pop("_resolve_a2a_identity", None)
+    handler.__dict__.pop("_get_auth_token", None)
+
+
 class _TestClock:
     """Minimal clock for BDD relative date-token resolution.
 
@@ -521,6 +532,14 @@ class BaseTestEnv:
             )
         return self._identity_cache[protocol]
 
+    def _resolve_dispatch_identity(self, transport: Transport, identity: Any = _NO_OVERRIDE) -> Any:
+        """Override-or-default identity for a dispatcher.
+
+        ``_NO_OVERRIDE`` → ``identity_for(transport)``; any other value
+        (including explicit ``None`` for unauthenticated) is returned as-is.
+        """
+        return self.identity_for(transport) if identity is _NO_OVERRIDE else identity
+
     def _resolve_auth_token(self) -> str | None:
         """Look up the real access_token from the session-bound Principal.
 
@@ -664,13 +683,12 @@ class BaseTestEnv:
         return self.deliver_a2a(**kwargs).payload
 
     @property
-    def last_a2a_task(self) -> Task | None:
-        """Raw A2A Task from the last ``_run_a2a_handler`` / ``run_a2a_task_method``.
+    def last_a2a_task(self) -> Any:
+        """Task from the last ``_run_a2a_handler`` / ``run_a2a_task_method``.
 
-        Public accessor for Task-level contract assertions — e.g. the submitted
-        (manual-approval) contract, where state=TASK_STATE_SUBMITTED with NO
-        artifacts IS the wire and the parsed response is a harness synthesis
-        that cannot prove artifact absence.
+        Skills path stores the protobuf ``Task``; ``run_a2a_task_method`` stores
+        the v0.3 wire ``Task`` parsed from ``body["result"]`` so success grading
+        proves adapter serialization.
         """
         return self._last_a2a_task
 
@@ -896,12 +914,9 @@ class BaseTestEnv:
             # call may have left identity lambdas on this instance. Drop them —
             # a real token must resolve through the real auth chain, otherwise a
             # denial scenario would silently reuse the previous caller's identity.
-            handler.__dict__.pop("_resolve_a2a_identity", None)
-            handler.__dict__.pop("_get_auth_token", None)
-            # Oracle: deleting the two pops above leaves unit-mode lambdas in
-            # place and a subsequent token-mode sibling tasks/get is served.
-            assert "_resolve_a2a_identity" not in handler.__dict__
-            assert "_get_auth_token" not in handler.__dict__
+            # Oracle: tests/unit/test_a2a_harness_identity_cleanup.py::
+            # test_token_mode_prepare_clears_unit_mode_identity_lambdas
+            _clear_injected_identity(handler)
 
             headers = auth_headers_mapping(
                 {
@@ -951,7 +966,7 @@ class BaseTestEnv:
         task_id: str,
         *,
         identity: Any = _NO_OVERRIDE,
-    ) -> Task | None:
+    ) -> Any:
         """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
 
         Runs against the SAME handler ``_run_a2a_handler`` uses, so the task a
@@ -975,6 +990,7 @@ class BaseTestEnv:
 
         Returns the served Task, or None when the call errored.
         """
+        from a2a.compat.v0_3.types import Task as WireTask
         from a2a.server.routes.common import ServerCallContext, ServerCallContextBuilder
         from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
         from starlette.applications import Starlette
@@ -984,7 +1000,7 @@ class BaseTestEnv:
         from tests.harness.transport import Transport
 
         self._commit_factory_data()
-        a2a_identity = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
+        a2a_identity = self._resolve_dispatch_identity(Transport.A2A, identity)
         if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
             self._ensure_tenant_for_audit(a2a_identity.tenant_id)
 
@@ -994,8 +1010,7 @@ class BaseTestEnv:
             # Explicit unauthenticated dispatch — do not inject anonymous
             # identity lambdas (skill-dispatch compensating path). Clear any
             # leftover unit-mode mocks so the real auth chain denies.
-            handler.__dict__.pop("_resolve_a2a_identity", None)
-            handler.__dict__.pop("_get_auth_token", None)
+            _clear_injected_identity(handler)
             server_context = ServerCallContext()
         else:
             server_context = self._prepare_a2a_server_context(handler, a2a_identity)
@@ -1010,23 +1025,27 @@ class BaseTestEnv:
             context_builder=_PreparedContextBuilder(),
             enable_v0_3_compat=True,
         )
-        client = TestClient(Starlette(routes=routes))
 
         self._last_a2a_task = None
         self._last_a2a_task_error = None
-        response = client.post(
-            "/a2a",
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
-        )
-        assert response.status_code == 200, f"JSON-RPC {method} returned HTTP {response.status_code}: {response.text}"
-        body = response.json()
+        with TestClient(Starlette(routes=routes)) as client:
+            response = client.post(
+                "/a2a",
+                json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
+            )
+            assert response.status_code == 200, (
+                f"JSON-RPC {method} returned HTTP {response.status_code}: {response.text}"
+            )
+            body = response.json()
         if "error" in body:
             self._last_a2a_task_error = body["error"]
             return None
 
-        # Success: prefer the handler's stored Task (cancel mutates it in place)
-        # over re-parsing body["result"] — same instance the gate authorized.
-        task = handler.tasks.get(task_id)
+        # Success: grade the served Task from the live wire result (v0.3 compat
+        # serialization), not handler.tasks — a success-path adapter regression
+        # must redden owner-get / owner-cancel. Store mutation is graded via
+        # a2a_task_state (handler.tasks) on the denied-cancel Then.
+        task = WireTask.model_validate(body["result"])
         self._last_a2a_task = task
         return task
 
@@ -1058,7 +1077,7 @@ class BaseTestEnv:
         from tests.a2a_helpers import record_a2a_task_owner
         from tests.harness.transport import Transport
 
-        owner = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
+        owner = self._resolve_dispatch_identity(Transport.A2A, identity)
         handler = self.a2a_handler
         task = Task(id=task_id, status=TaskStatus(state=state or TaskState.TASK_STATE_WORKING))
         handler.tasks[task_id] = task
@@ -1071,7 +1090,7 @@ class BaseTestEnv:
             )
         return task
 
-    def a2a_task_state(self, task_id: str) -> Any:
+    def a2a_task_state(self, task_id: str) -> TaskState | None:
         """State of the seeded in-memory task, or None if the handler has no such id.
 
         Public read-back accessor: a denied ``tasks/cancel`` must leave the stored

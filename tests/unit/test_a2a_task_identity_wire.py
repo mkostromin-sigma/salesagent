@@ -10,6 +10,8 @@ unknown-id on the wire (code/message shape).
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
@@ -54,14 +56,16 @@ class _AuthHeaderContextBuilder(ServerCallContextBuilder):
         )
 
 
-def _client_for(handler: AdCPRequestHandler) -> TestClient:
+@contextmanager
+def _client_for(handler: AdCPRequestHandler) -> Iterator[TestClient]:
     routes = create_jsonrpc_routes(
         request_handler=handler,
         rpc_url="/a2a",
         context_builder=_AuthHeaderContextBuilder(),
         enable_v0_3_compat=True,
     )
-    return TestClient(Starlette(routes=routes))
+    with TestClient(Starlette(routes=routes)) as client:
+        yield client
 
 
 def _post_task(client: TestClient, *, method: str, task_id: str, token: str | None) -> dict:
@@ -89,8 +93,8 @@ def test_sibling_wire_error_matches_unknown_id(method):
     )
     resolve = token_identity_resolver({OWNED_TASK_SIBLING_TOK: sibling, OWNED_TASK_OWNER_TOK: owner})
 
-    client = _client_for(handler)
     with (
+        _client_for(handler) as client,
         patch("src.core.resolved_identity.resolve_identity", side_effect=resolve),
         patch.object(handler, "_log_a2a_operation"),
     ):
@@ -114,8 +118,7 @@ def test_sibling_wire_error_matches_unknown_id(method):
 def test_unauthenticated_wire_is_auth_failure_not_task_not_found(method):
     """No Authorization → auth-failure shape, distinct from not-found on the wire."""
     handler = seeded_owned_a2a_handler()
-    client = _client_for(handler)
-    with patch.object(handler, "_log_a2a_operation"):
+    with _client_for(handler) as client, patch.object(handler, "_log_a2a_operation"):
         body = _post_task(client, method=method, task_id=OWNED_TASK_ID, token=None)
 
     assert "error" in body
