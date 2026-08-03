@@ -79,6 +79,27 @@ def _failed_sync_result(
     )
 
 
+def _check_gemini_key_or_advisory(
+    creative_id: str,
+    *,
+    action_verb: str,
+    creative_format: Any,
+) -> str | SyncCreativeResult:
+    """Return the GEMINI API key, or a missing-key advisory result.
+
+    Shared by the update and create generative branches so config lookup,
+    message assembly, and logging stay in one place.
+    """
+    from src.core.config import get_config
+
+    gemini_api_key = get_config().gemini_api_key
+    if gemini_api_key:
+        return gemini_api_key
+    error_msg = f"Cannot {action_verb} generative creative {creative_format}: GEMINI_API_KEY not configured"
+    logger.error(f"[sync_creatives] {error_msg}")
+    return _gemini_key_missing_result(creative_id, error_msg)
+
+
 def _update_existing_creative(
     creative: CreativeAsset,
     existing_creative: Any,
@@ -221,18 +242,14 @@ def _update_existing_creative(
                         f"checking for Gemini API key"
                     )
 
-                    # Get Gemini API key from config
-                    from src.core.config import get_config
-
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
-
-                    if not gemini_api_key:
-                        error_msg = (
-                            f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
-                        )
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        return (_gemini_key_missing_result(existing_creative.creative_id, error_msg), False)
+                    gemini_or_advisory = _check_gemini_key_or_advisory(
+                        existing_creative.creative_id,
+                        action_verb="update",
+                        creative_format=creative_format,
+                    )
+                    if isinstance(gemini_or_advisory, SyncCreativeResult):
+                        return (gemini_or_advisory, False)
+                    gemini_api_key = gemini_or_advisory
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -545,16 +562,14 @@ def _create_new_creative(
                         f"[sync_creatives] Detected generative format: {creative_format}, checking for Gemini API key"
                     )
 
-                    # Get Gemini API key from config
-                    from src.core.config import get_config
-
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
-
-                    if not gemini_api_key:
-                        error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        return (_gemini_key_missing_result(creative_id, error_msg), False)
+                    gemini_or_advisory = _check_gemini_key_or_advisory(
+                        creative_id,
+                        action_verb="build",
+                        creative_format=creative_format,
+                    )
+                    if isinstance(gemini_or_advisory, SyncCreativeResult):
+                        return (gemini_or_advisory, False)
+                    gemini_api_key = gemini_or_advisory
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)

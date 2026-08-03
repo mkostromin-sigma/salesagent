@@ -143,7 +143,7 @@ class TestGenerativeCreatives:
                 gemini_api_key=None,  # No API key
             )
             # Override to remove gemini key (setup_generative_build sets it)
-            env.mock["config"].return_value.gemini_api_key = None
+            env.clear_gemini_api_key()
 
             result = env.call_impl(
                 creatives=[

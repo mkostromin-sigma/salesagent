@@ -354,7 +354,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
             )
 
             # Remove gemini key for update
-            env.mock["config"].return_value.gemini_api_key = None
+            env.clear_gemini_api_key()
 
             result = env.call_impl(
                 creatives=[

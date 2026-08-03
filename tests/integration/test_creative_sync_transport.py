@@ -26,6 +26,7 @@ from src.core.database.models import Creative as DBCreative
 from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
+from tests.harness.transport import assert_wire_advisory
 from tests.helpers.creative_test_helpers import (
     assert_gemini_key_missing_advisory,
     assert_stored_creative_assets,
@@ -1149,7 +1150,7 @@ class TestGeminiKeyMissing:
             fmt = env.setup_generative_build(gemini_api_key="")
 
             # Override: remove the gemini key after setup
-            env.mock["config"].return_value.gemini_api_key = None
+            env.clear_gemini_api_key()
 
             result = env.call_via(
                 transport,
@@ -1171,14 +1172,13 @@ class TestGeminiKeyMissing:
         errs = creative_result.errors or []
         assert any("gemini" in e.lower() for e in _error_messages(errs))
         assert_gemini_key_missing_advisory(errs)
-        # When the transport stashes success-path wire, grade nested advisory fields.
-        wire = result.wire_response
-        if isinstance(wire, dict):
-            wire_creatives = wire.get("creatives") or []
-            wire_errs = (wire_creatives[0].get("errors") or []) if wire_creatives else []
-            if wire_errs:
-                assert wire_errs[0].get("code") == "CREATIVE_GEMINI_KEY_MISSING"
-                assert wire_errs[0].get("recovery") == "terminal"
+        # Wire transports must expose the nested advisory on the success-path body.
+        assert_wire_advisory(
+            result.wire_response,
+            "CREATIVE_GEMINI_KEY_MISSING",
+            recovery="terminal",
+            transport=transport,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -20,23 +20,17 @@ def _nested_creative_advisory_error(ctx: dict) -> dict | None:
     """First failed ``creatives[].errors[0]`` from a success-path ``wire_response``.
 
     Per-creative advisories live inside a successful sync artifact (no
-    ``wire_error_envelope``). Grade buyer-visible nested wire fields when present.
+    ``wire_error_envelope``). Delegates to the harness accessor so BDD steps and
+    integration tests share one guarded traversal (loud when a wire-stashing
+    transport omitted ``wire_response``).
     """
+    from tests.harness.transport import first_failed_creative_advisory
+
     wire = ctx.get("wire_response")
-    if not isinstance(wire, dict):
-        return None
-    creatives = wire.get("creatives") or wire.get("results") or []
-    for creative in creatives:
-        if not isinstance(creative, dict):
-            continue
-        action = creative.get("action")
-        action_str = action.get("value") if isinstance(action, dict) else action
-        if action_str != "failed":
-            continue
-        errs = creative.get("errors") or []
-        if errs and isinstance(errs[0], dict):
-            return errs[0]
-    return None
+    return first_failed_creative_advisory(
+        wire if isinstance(wire, dict) else None,
+        transport=ctx.get("transport"),
+    )
 
 
 def _wire_code(ctx: dict) -> str | None:

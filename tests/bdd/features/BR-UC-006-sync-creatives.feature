@@ -282,7 +282,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F2, POST-F3
     # --- ext-i: CREATIVE_GEMINI_KEY_MISSING ---
 
-  @T-UC-006-ext-i @extension @ext-i @error @account
+  @T-UC-006-ext-i @extension @ext-i @error @gemini-advisory
   Scenario: Gemini key missing — generative creative without config
     Given the Buyer is authenticated with a valid principal_id
     And a creative with a generative format (output_format_ids present)
