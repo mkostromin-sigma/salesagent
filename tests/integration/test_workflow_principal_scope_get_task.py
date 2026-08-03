@@ -152,9 +152,12 @@ async def test_complete_task_owner_ok_sibling_same_as_unknown(principal_scoped_s
     assert result["status"] == "completed"
 
 
-@pytest.mark.asyncio
-async def test_get_task_a2a_and_mcp_success_path(integration_db):
-    """Success-path oracle: A2A + MCP return a parseable get_task payload (#1812)."""
+def test_get_task_a2a_and_mcp_success_path(integration_db):
+    """Success-path oracle: A2A + MCP return a parseable get_task payload (#1812).
+
+    Sync test: TaskEnv.call_a2a / call_mcp drive ``asyncio.run`` internally —
+    must not nest under ``@pytest.mark.asyncio``.
+    """
     from tests.harness.task_management import GetTaskWireResponse, TaskEnv
 
     with TaskEnv(tenant_id="pscope_wire_ok", principal_id="wire_owner") as env:

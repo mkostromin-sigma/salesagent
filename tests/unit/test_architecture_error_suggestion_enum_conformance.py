@@ -23,6 +23,7 @@ import pytest
 
 from src.core import exceptions
 from src.core.exceptions import AdCPError, translate_error_code
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 _PINNED_ENUM_PATH = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
 
@@ -93,16 +94,21 @@ def test_default_suggestion_classvars_match_pinned_enum() -> None:
     """
     graded = [c for c in AdCPError.iter_concrete_subclasses() if "_default_suggestion" in c.__dict__]
     assert graded, "Expected at least one AdCPError subclass to declare _default_suggestion"
-    stale = sorted(_DEFAULT_SUGGESTION_ALLOWLIST - {c.__name__ for c in graded})
-    assert not stale, f"_DEFAULT_SUGGESTION_ALLOWLIST entries no longer declare ClassVar: {stale}"
+    declaring_names = {c.__name__ for c in graded}
+    assert "AdCPTaskNotFoundError" in declaring_names, (
+        "AdCPTaskNotFoundError must declare _default_suggestion (wire REFERENCE_NOT_FOUND oracle)"
+    )
+    mismatched: set[str] = set()
     for cls in graded:
-        if cls.__name__ in _DEFAULT_SUGGESTION_ALLOWLIST:
-            continue
         wire = translate_error_code(cls._default_error_code)
-        assert wire in _SUGGESTION_BY_CODE, (
-            f"{cls.__name__} wire code {wire!r} has no pinned suggestion; cannot grade ClassVar"
-        )
-        assert cls._default_suggestion == _SUGGESTION_BY_CODE[wire], (
-            f"{cls.__name__}._default_suggestion = {cls._default_suggestion!r} but pinned "
-            f"{wire} suggestion is {_SUGGESTION_BY_CODE[wire]!r}"
-        )
+        if wire not in _SUGGESTION_BY_CODE or cls._default_suggestion != _SUGGESTION_BY_CODE[wire]:
+            mismatched.add(cls.__name__)
+    assert_violations_match_allowlist(
+        mismatched,
+        set(_DEFAULT_SUGGESTION_ALLOWLIST),
+        fix_hint=(
+            "ClassVar _default_suggestion must match the pinned enum suggestion for the "
+            "class's wire code (after ERROR_CODE_MAPPING). Fix the ClassVar, or shrink "
+            "_DEFAULT_SUGGESTION_ALLOWLIST only when a divergence is intentional/tracked."
+        ),
+    )
