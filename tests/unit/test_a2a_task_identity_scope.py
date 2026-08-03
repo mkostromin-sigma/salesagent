@@ -17,8 +17,6 @@ from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from a2a.types import (
-    CancelTaskRequest,
-    GetTaskRequest,
     InternalError,
     InvalidRequestError,
     SendMessageRequest,
@@ -43,13 +41,13 @@ from tests.a2a_helpers import (
     OWNED_TASK_OTHER_TENANT,
     OWNED_TASK_OWNER,
     OWNED_TASK_OWNER_TOK,
-    OWNED_TASK_SIBLING,
     OWNED_TASK_SIBLING_TOK,
     OWNED_TASK_TENANT,
     TASK_METHOD_MATRIX,
     a2a_auth_as,
     assert_no_identity_leak,
     assert_task_not_found_nondisclosure,
+    auth_operation_wire_phrase,
     invoke_owned_task_method,
     make_a2a_context,
     message_send_with_push,
@@ -57,7 +55,7 @@ from tests.a2a_helpers import (
     owned_task_owner_identity,
     owned_task_sibling_identity,
     seeded_owned_a2a_handler,
-    token_identity_resolver,
+    seeded_owner_sibling_resolver,
 )
 from tests.factories import PrincipalFactory
 from tests.utils.a2a_helpers import create_a2a_text_message
@@ -205,10 +203,14 @@ def test_task_not_found_message_is_literal_contract():
 
 
 def test_safe_task_id_for_log_escapes_and_truncates():
-    """Sanitizer oracle — allowlist + truncate (R5-C2 / R5-N1a)."""
+    """Sanitizer oracle — allowlist + truncate-after-substitute (R5-C2 / R5-N1a)."""
     assert _safe_task_id_for_log("a\nWARNING forged") == "a?WARNING?forged"
     assert _safe_task_id_for_log("x" * 200) == "x" * 100
-    assert "\\" not in _safe_task_id_for_log("A" * 99 + "\r" + "B" * 50)
+    # Exact 100-char prefix with a non-allowlisted char in the truncate window.
+    raw = "A" * 99 + "\r" + "B" * 50
+    sanitized = _safe_task_id_for_log(raw)
+    assert sanitized == "A" * 99 + "?"
+    assert len(sanitized) == 100
 
 
 @pytest.mark.parametrize(
@@ -253,19 +255,15 @@ def test_internal_error_for_sql_normalized_exception_stays_out_of_message():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
-    [(GetTaskRequest, "on_get_task"), (CancelTaskRequest, "on_cancel_task")],
+    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
 )
 async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
     """Real constructor create→poll: owner allowed; sibling/other-tenant denied."""
     handler = AdCPRequestHandler()
-    owner = PrincipalFactory.make_identity(principal_id=OWNED_TASK_OWNER, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
-    sibling = PrincipalFactory.make_identity(
-        principal_id=OWNED_TASK_SIBLING, tenant_id=OWNED_TASK_TENANT, protocol="a2a"
-    )
-    other_tenant = PrincipalFactory.make_identity(
-        principal_id=OWNED_TASK_OWNER, tenant_id=OWNED_TASK_OTHER_TENANT, protocol="a2a"
-    )
-    ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
+    owner = owned_task_owner_identity()
+    sibling = owned_task_sibling_identity()
+    other_tenant = owned_task_owner_identity(tenant_id=OWNED_TASK_OTHER_TENANT)
+    ctx = make_a2a_context(auth_token="test-token", headers=A2A_TEST_HOST_HEADERS)
     params = SendMessageRequest(message=create_a2a_text_message("Show me available products in the catalog"))
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=owner):
@@ -383,10 +381,7 @@ async def test_owner_can_access_owned_in_memory_task(request_cls, method_name):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name, operation",
-    [
-        (GetTaskRequest, "on_get_task", "get_task"),
-        (CancelTaskRequest, "on_cancel_task", "cancel_task"),
-    ],
+    [(row[0], row[1], row[3]) for row in TASK_METHOD_MATRIX],
 )
 async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name, operation, caplog):
     """Same-tenant sibling must not read or cancel — identical to unknown id."""
@@ -484,10 +479,7 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(method_na
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name, wire_message",
-    [
-        (GetTaskRequest, "on_get_task", "get task failed"),
-        (CancelTaskRequest, "on_cancel_task", "cancel task failed"),
-    ],
+    [(row[0], row[1], auth_operation_wire_phrase(row[3])) for row in TASK_METHOD_MATRIX],
 )
 async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_cls, method_name, wire_message):
     """DB/infra failure during identity resolve must not collapse to TaskNotFoundError.
@@ -531,23 +523,14 @@ async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name)
     alone would stay green.
     """
     handler = seeded_owned_a2a_handler()
-    owner = PrincipalFactory.make_identity(principal_id=OWNED_TASK_OWNER, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
-    sibling = PrincipalFactory.make_identity(
-        principal_id=OWNED_TASK_SIBLING, tenant_id=OWNED_TASK_TENANT, protocol="a2a"
-    )
-    resolve = token_identity_resolver(
-        {
-            OWNED_TASK_SIBLING_TOK: sibling,
-            OWNED_TASK_OWNER_TOK: owner,
-        }
-    )
+    resolve = seeded_owner_sibling_resolver()
 
     with patch("src.core.resolved_identity.resolve_identity", side_effect=resolve):
-        sibling_ctx = make_a2a_context(auth_token=OWNED_TASK_SIBLING_TOK, headers={"host": "test.example.com"})
+        sibling_ctx = make_a2a_context(auth_token=OWNED_TASK_SIBLING_TOK, headers=A2A_TEST_HOST_HEADERS)
         with pytest.raises(TaskNotFoundError) as deny_exc:
             await getattr(handler, method_name)(request_cls(id=OWNED_TASK_ID), context=sibling_ctx)
 
-        owner_ctx = make_a2a_context(auth_token=OWNED_TASK_OWNER_TOK, headers={"host": "test.example.com"})
+        owner_ctx = make_a2a_context(auth_token=OWNED_TASK_OWNER_TOK, headers=A2A_TEST_HOST_HEADERS)
         with pytest.raises(TaskNotFoundError) as unknown_exc:
             await getattr(handler, method_name)(request_cls(id="task_does_not_exist"), context=owner_ctx)
 
@@ -716,7 +699,7 @@ def test_resolve_identity_without_principal_id_raises_invalid_request():
     """Authenticated resolve with no principal_id hits the no-principal guard."""
     handler = AdCPRequestHandler()
     no_principal = PrincipalFactory.make_identity(principal_id=None, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
-    ctx = make_a2a_context(auth_token="tok", headers={"host": "test.example.com"})
+    ctx = make_a2a_context(auth_token="tok", headers=A2A_TEST_HOST_HEADERS)
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=no_principal):
         with pytest.raises(InvalidRequestError, match="invalid or expired"):

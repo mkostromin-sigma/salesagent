@@ -31,7 +31,7 @@ from tests.a2a_helpers import (
     owned_task_sibling_identity,
     post_a2a_task_method,
     seeded_owned_a2a_handler,
-    token_identity_resolver,
+    seeded_owner_sibling_resolver,
 )
 
 

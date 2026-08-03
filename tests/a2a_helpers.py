@@ -23,6 +23,7 @@ from starlette.testclient import TestClient
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _safe_id_for_log, _TaskOwner
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 if TYPE_CHECKING:
     from a2a.compat.v0_3.types import Task as WireTask
@@ -58,6 +59,9 @@ OWNED_TASK_ID = "task_owned_abc"
 OWNED_TASK_OWNER_TOK = "owner-tok"
 OWNED_TASK_SIBLING_TOK = "sibling-tok"
 
+# Default host header for ServerCallContext builders (unit + wire altitudes).
+A2A_TEST_HOST_HEADERS: dict[str, str] = {"host": "test.example.com"}
+
 # Default non-disclosure needles — every role id that appears at any altitude.
 OWNED_TASK_FORBIDDEN_SUBSTRINGS: tuple[str, ...] = (
     OWNED_TASK_TENANT,
@@ -67,10 +71,14 @@ OWNED_TASK_FORBIDDEN_SUBSTRINGS: tuple[str, ...] = (
     "leaked_tenant",
 )
 
-# method_name / request_cls / JSON-RPC method — one vocabulary for unit + wire.
-TASK_METHOD_MATRIX: tuple[tuple[type, str, str], ...] = (
-    (GetTaskRequest, "on_get_task", "tasks/get"),
-    (CancelTaskRequest, "on_cancel_task", "tasks/cancel"),
+type TaskRequestCls = type[GetTaskRequest] | type[CancelTaskRequest]
+
+# request_cls / method_name / JSON-RPC method / _authenticate operation id —
+# one vocabulary for unit + wire. Wire phrase = ``op.replace("_", " ") + " failed"``
+# (same transform production ``_authenticate`` uses).
+TASK_METHOD_MATRIX: tuple[tuple[TaskRequestCls, str, str, str], ...] = (
+    (GetTaskRequest, "on_get_task", "tasks/get", "get_task"),
+    (CancelTaskRequest, "on_cancel_task", "tasks/cancel", "cancel_task"),
 )
 
 
@@ -149,7 +157,7 @@ def a2a_auth_as(handler: AdCPRequestHandler, identity: ResolvedIdentity) -> Iter
 async def invoke_owned_task_method(
     handler: AdCPRequestHandler,
     method_name: str,
-    request_cls: type,
+    request_cls: TaskRequestCls,
     task_id: str,
 ) -> Task:
     """Act half shared by ownership unit tests (auth already patched via ``a2a_auth_as``).
