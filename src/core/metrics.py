@@ -12,15 +12,21 @@ long-running multi-tenant process:
   attacker-influenceable).
 - **``policy_triggered``** is validated against :data:`POLICY_TRIGGERED_ALLOWLIST`
   via :func:`sanitize_policy_triggered`; unknown values collapse to ``"other"``.
+- **``scheduler``** (isolation-error metering) is validated against
+  :data:`SCHEDULER_ALLOWLIST` via :func:`sanitize_scheduler`.
 
 Call sites must record AI-review metrics through :func:`record_ai_review` and
-:func:`record_ai_review_error` so the bounding logic lives in exactly one place.
+:func:`record_ai_review_error` so the bounding logic lives in exactly one
+place. :func:`record_scheduler_isolation_error` is the ``scheduler=``
+equivalent, but takes an already-bounded ``error_type: str`` rather than a raw
+exception: the services layer (schedulers) owns classification of its own
+exception population (e.g. ``SQLAlchemyError`` -> ``"db_error"``) and this
+module does not import ``sqlalchemy``/``requests`` to interpret exceptions it
+does not own — one classifier cannot serve two subsystems with disjoint
+exception populations without changing behavior for one of them.
 """
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
-from requests.exceptions import RequestException
-from requests.exceptions import Timeout as RequestsTimeout
-from sqlalchemy.exc import SQLAlchemyError
 
 from src.core.exceptions import (
     AdCPRateLimitError,
@@ -32,8 +38,14 @@ from src.core.exceptions import (
 # Bounded label vocabularies
 # ---------------------------------------------------------------------------
 
-#: Fixed enum for the ``error_type`` label. Keep <= 5 values.
-ERROR_TYPE_VALUES = ("validation", "timeout", "transport", "db_error", "other")
+#: Fixed enum for the AI-review ``error_type`` label. Keep <= 5 values.
+ERROR_TYPE_VALUES = ("validation", "timeout", "model_error", "other")
+
+#: Fixed enum for the scheduler-isolation ``error_type`` label. Classification
+#: happens at the services layer (see e.g.
+#: ``media_buy_status_scheduler._classify_scheduler_error``); this module only
+#: bounds the already-classified string.
+SCHEDULER_ERROR_TYPE_VALUES = ("db_error", "other")
 
 #: Closed set of ``policy_triggered`` values emitted by the AI review flow.
 #: Anything outside this set (e.g. an AI-generated free-form reason) collapses
@@ -55,7 +67,6 @@ POLICY_TRIGGERED_ALLOWLIST = frozenset(
 SCHEDULER_ALLOWLIST = frozenset(
     {
         "media_buy_status",
-        "delivery_webhook",
         "other",
     }
 )
@@ -66,24 +77,18 @@ def categorize_error(error: BaseException) -> str:
 
     The mapping is intentionally coarse — its only job is to keep Prometheus
     series count constant regardless of how many exception classes exist.
+    Owned by the AI-review flow only; other subsystems classify their own
+    exception population at their own layer (see module docstring).
     """
     # Timeouts first: a TimeoutError may also subclass OSError, and project
     # AdCP errors that mean "service unavailable" are timeout-ish operationally.
-    # requests.Timeout is checked before RequestException (its parent).
-    if isinstance(
-        error,
-        TimeoutError | RequestsTimeout | AdCPServiceUnavailableError | AdCPRateLimitError,
-    ):
+    if isinstance(error, TimeoutError | AdCPServiceUnavailableError | AdCPRateLimitError):
         return "timeout"
-    # SQLAlchemy before builtin KeyError: NoSuchColumnError subclasses both
-    # SQLAlchemyError and KeyError; it is a DB failure, not validation.
-    if isinstance(error, SQLAlchemyError):
-        return "db_error"
     if isinstance(error, ValueError | TypeError | KeyError | AdCPValidationError):
         return "validation"
-    # Transport: builtin ConnectionError + requests/httpx-style RequestException.
-    if isinstance(error, ConnectionError | RequestException):
-        return "transport"
+    # AI/model layer surfaces failures as RuntimeError or connection errors.
+    if isinstance(error, RuntimeError | ConnectionError):
+        return "model_error"
     return "other"
 
 
@@ -97,6 +102,13 @@ def sanitize_policy_triggered(value: str | None) -> str:
 def sanitize_scheduler(value: str | None) -> str:
     """Return ``value`` if it is in the scheduler allowlist, else ``"other"``."""
     if value in SCHEDULER_ALLOWLIST:
+        return value
+    return "other"
+
+
+def sanitize_scheduler_error_type(value: str) -> str:
+    """Return ``value`` if it is in :data:`SCHEDULER_ERROR_TYPE_VALUES`, else ``"other"``."""
+    if value in SCHEDULER_ERROR_TYPE_VALUES:
         return value
     return "other"
 
@@ -170,7 +182,7 @@ webhook_queue_size = Gauge(
 )
 
 # ---------------------------------------------------------------------------
-# Scheduler isolation-error metrics (status + delivery + future adopters)
+# Scheduler isolation-error metrics (media_buy_status + future adopters)
 # ---------------------------------------------------------------------------
 scheduler_isolation_errors = Counter(
     "scheduler_isolation_errors_total",
@@ -196,12 +208,17 @@ def record_ai_review_error(tenant_id: str, error: BaseException) -> None:
     ai_review_errors.labels(tenant_id=tenant_id, error_type=categorize_error(error)).inc()
 
 
-def record_scheduler_isolation_error(scheduler: str, tenant_id: str, error: BaseException) -> None:
-    """Increment :data:`scheduler_isolation_errors` with bounded labels."""
+def record_scheduler_isolation_error(scheduler: str, tenant_id: str, error_type: str) -> None:
+    """Increment :data:`scheduler_isolation_errors` with bounded labels.
+
+    ``error_type`` must already be bounded by the caller (see module
+    docstring) — this recorder only sanitizes against
+    :data:`SCHEDULER_ERROR_TYPE_VALUES`, it does not classify a raw exception.
+    """
     scheduler_isolation_errors.labels(
         scheduler=sanitize_scheduler(scheduler),
         tenant_id=tenant_id,
-        error_type=categorize_error(error),
+        error_type=sanitize_scheduler_error_type(error_type),
     ).inc()
 
 

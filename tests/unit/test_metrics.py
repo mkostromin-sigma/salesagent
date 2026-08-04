@@ -1,8 +1,5 @@
 """Tests for Prometheus metrics module."""
 
-import pytest
-from sqlalchemy.exc import DataError, OperationalError
-
 
 def test_metrics_are_registered():
     """Test that all metrics are registered with Prometheus."""
@@ -95,53 +92,26 @@ def test_ai_review_errors_increments():
     assert new_value == initial_value + 1
 
 
-@pytest.mark.parametrize(
-    ("scheduler", "error", "error_type"),
-    [
-        ("media_buy_status", OperationalError("SELECT 1", {}, Exception("timeout")), "db_error"),
-        ("delivery_webhook", DataError("SELECT 1/0", {}, Exception("div0")), "db_error"),
-    ],
-)
-def test_scheduler_isolation_errors_increments(scheduler, error, error_type):
-    """Unified scheduler isolation counter increments with a loop-reachable class."""
+def test_scheduler_isolation_errors_increments():
+    """Scheduler isolation counter increments via the bounded recording helper.
+
+    ``error_type`` is passed pre-bounded by the caller (the services layer
+    classifies its own exception population — see
+    ``media_buy_status_scheduler._classify_scheduler_error``); the recorder
+    only sanitizes against :data:`SCHEDULER_ERROR_TYPE_VALUES`.
+    """
     from src.core.metrics import record_scheduler_isolation_error, scheduler_isolation_errors
 
     initial_value = scheduler_isolation_errors.labels(
-        scheduler=scheduler, tenant_id="test_tenant", error_type=error_type
+        scheduler="media_buy_status", tenant_id="test_tenant", error_type="db_error"
     )._value.get()
 
-    record_scheduler_isolation_error(scheduler=scheduler, tenant_id="test_tenant", error=error)
+    record_scheduler_isolation_error(scheduler="media_buy_status", tenant_id="test_tenant", error_type="db_error")
 
     new_value = scheduler_isolation_errors.labels(
-        scheduler=scheduler, tenant_id="test_tenant", error_type=error_type
+        scheduler="media_buy_status", tenant_id="test_tenant", error_type="db_error"
     )._value.get()
     assert new_value == initial_value + 1
-
-
-def test_categorize_error_maps_sqlalchemy_to_db_error():
-    from sqlalchemy.exc import DataError, NoSuchColumnError, OperationalError
-
-    from src.core.metrics import categorize_error
-
-    assert categorize_error(OperationalError("SELECT 1", {}, Exception("x"))) == "db_error"
-    assert categorize_error(DataError("SELECT 1/0", {}, Exception("x"))) == "db_error"
-    # NoSuchColumnError subclasses KeyError — must still be db_error (branch order).
-    assert categorize_error(NoSuchColumnError("missing")) == "db_error"
-    assert categorize_error(ValueError("bad")) == "validation"
-
-
-def test_categorize_error_maps_requests_to_transport():
-    from requests.exceptions import ConnectionError as RequestsConnectionError
-    from requests.exceptions import HTTPError
-    from requests.exceptions import Timeout as RequestsTimeout
-
-    from src.core.metrics import categorize_error
-
-    assert categorize_error(RequestsConnectionError("down")) == "transport"
-    assert categorize_error(HTTPError("500")) == "transport"
-    assert categorize_error(RequestsTimeout("slow")) == "timeout"
-    assert categorize_error(ConnectionError("builtin")) == "transport"
-    assert categorize_error(RuntimeError("code bug")) == "other"
 
 
 def test_active_ai_reviews_gauge():

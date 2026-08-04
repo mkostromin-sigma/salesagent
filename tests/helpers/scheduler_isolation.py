@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 from sqlalchemy.exc import OperationalError
 
@@ -13,16 +11,16 @@ from sqlalchemy.exc import OperationalError
 def summary_lines(mock_logger: MagicMock, prefix: str) -> list[str]:
     """Extract batch-summary log lines that start with ``{prefix}:``.
 
-    Matches the production ``log_batch_summary`` format
-    (``f"{prefix}: {processed} …"``). Prefer the production prefix constants
-    (``STATUS_BATCH_SUMMARY_PREFIX`` / ``DELIVERY_BATCH_SUMMARY_PREFIX``).
+    Matches the production batch-summary log format
+    (``f"{prefix}: {processed} …"``). Prefer the production prefix constant
+    (``STATUS_BATCH_SUMMARY_PREFIX``).
     """
     needle = f"{prefix}:"
     return [call.args[0] for call in mock_logger.call_args_list if call.args and needle in str(call.args[0])]
 
 
 def counter_value(scheduler: str, tenant_id: str, error_type: str) -> float:
-    """Read ``scheduler_isolation_errors`` gauge for one label triple."""
+    """Read ``scheduler_isolation_errors`` counter for one label triple."""
     from src.core.metrics import scheduler_isolation_errors
 
     return scheduler_isolation_errors.labels(
@@ -37,11 +35,11 @@ def invalidated_operational_error() -> OperationalError:
     return OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
 
 
-async def assert_escaped_invalidation_arms_breaker(run: Callable[[], Awaitable[None]]) -> None:
+async def assert_escaped_invalidation_arms_breaker(run) -> None:
     """Run ``run`` and assert a real ``get_db_session`` CM arms the DB breaker.
 
-    Shared by status and delivery scheduler integration oracles so the
-    reset / assert / finally pattern is not duplicated (R0801).
+    Shared by scheduler integration oracles so the reset / assert / finally
+    pattern is not duplicated (R0801).
     """
     import src.core.database.database_session as db_session_mod
 
@@ -54,17 +52,52 @@ async def assert_escaped_invalidation_arms_breaker(run: Callable[[], Awaitable[N
         db_session_mod.reset_health_state()
 
 
-@contextmanager
-def patch_scheduler_send_notification(scheduler: Any, side_effect: Any) -> Iterator[AsyncMock]:
-    """Patch ``scheduler.webhook_service.send_notification`` as an AsyncMock.
+def mock_savepoint_session(*, release_exc: Exception | None = None) -> MagicMock:
+    """Build a ``MagicMock`` session whose ``begin_nested()`` behaves like a SAVEPOINT.
 
-    Shared by delivery scheduler integration tests so the patch boilerplate
-    is not duplicated across isolation / force-trigger modules (R0801).
+    ``release_exc`` (if given) is raised from ``__exit__`` — simulating a
+    flush failure at SAVEPOINT release time, distinct from a failure inside
+    the per-item body. Collapses the session/nested mock graph that was
+    hand-built at every isolation-adoption call site.
     """
-    with patch.object(
-        scheduler.webhook_service,
-        "send_notification",
-        new_callable=AsyncMock,
-        side_effect=side_effect,
-    ) as mock_send:
-        yield mock_send
+    session = MagicMock()
+    nested = MagicMock()
+    session.begin_nested.return_value = nested
+    nested.__enter__ = MagicMock(return_value=nested)
+    if release_exc is not None:
+        nested.__exit__ = MagicMock(side_effect=release_exc)
+    else:
+        nested.__exit__ = MagicMock(return_value=False)
+    return session
+
+
+def mock_get_db_session_cm(session: MagicMock) -> MagicMock:
+    """Build the ``with get_db_session() as session:`` context manager mock."""
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=session)
+    cm.__exit__ = MagicMock(return_value=False)
+    return cm
+
+
+def mock_media_buy(
+    *,
+    media_buy_id: str,
+    tenant_id: str,
+    principal_id: str = "p1",
+    status: str = "active",
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+) -> MagicMock:
+    """Build a ``MagicMock`` media buy with the id/flight-date fields the
+    status scheduler reads, collapsing the copy-pasted construction at every
+    isolation-adoption unit test call site."""
+    buy = MagicMock()
+    buy.tenant_id = tenant_id
+    buy.principal_id = principal_id
+    buy.media_buy_id = media_buy_id
+    buy.status = status
+    buy.start_time = start_time or datetime(2020, 1, 1, tzinfo=UTC)
+    buy.end_time = end_time or datetime(2020, 1, 2, tzinfo=UTC)
+    buy.start_date = None
+    buy.end_date = None
+    return buy

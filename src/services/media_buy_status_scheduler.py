@@ -16,6 +16,7 @@ import os
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, PersistedMediaBuyStatus
@@ -90,13 +91,21 @@ class MediaBuyStatusScheduler:
     async def _update_statuses(self) -> None:
         """Check and update media buy statuses based on flight dates.
 
-        Per-buy work runs inside a SAVEPOINT opened by
-        :func:`run_isolated_batch` (``session=``) so a DB error on one buy
-        rolls back only that buy; siblings still reach the terminal
-        ``session.commit``. Dead-connection errors
-        (``connection_invalidated`` / ``DisconnectionError``) are *not*
+        Per-buy work runs inside a status-local ``with session.begin_nested():``
+        SAVEPOINT (precedent: ``src/core/tools/creatives/_sync.py``) so a DB
+        error on one buy rolls back only that buy; siblings still reach the
+        terminal ``session.commit()``. Ids are captured into plain locals
+        *before* the SAVEPOINT opens — under production ``autoflush=True`` a
+        flush failure expires ORM attributes, so reading ``media_buy.tenant_id``
+        after the fact can raise ``PendingRollbackError`` and hide the original
+        exception. The ``updated_count``/``errors`` tally and the success INFO
+        log are applied only *after* the SAVEPOINT releases cleanly — a
+        release-time flush failure (e.g. an over-length status value) counts
+        as an error, not a success, even though the in-body assignment
+        "succeeded". Dead-connection errors (``connection_invalidated`` /
+        ``DisconnectionError``, see :func:`is_connection_dead`) are *not*
         isolated — they re-raise so ``get_db_session`` can trip the
-        process-global breaker.
+        process-global circuit breaker.
         """
         now = datetime.now(UTC)
 
@@ -154,21 +163,19 @@ class MediaBuyStatusScheduler:
                         logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
 
                 try:
-                    if outcome.processed > 0:
+                    if updated_count > 0:
                         session.commit()
                 finally:
-                    # Suppress all-quiet ticks (60s cadence); WARNING when every
-                    # visited item failed so the error tally stays visible.
+                    # Suppress all-quiet ticks (60s cadence); WARNING only when
+                    # every visited buy failed (legitimate no-op flips do not
+                    # count as failures) so the error tally stays visible.
                     # Emit even if commit raises — otherwise the tally is lost.
-                    log_batch_summary(
-                        logger,
-                        STATUS_BATCH_SUMMARY_PREFIX,
-                        outcome.processed,
-                        outcome.errors,
-                        seen=outcome.seen,
-                        suppress_when_quiet=True,
-                        success_label="updated",
-                    )
+                    if updated_count or errors:
+                        summary = f"{STATUS_BATCH_SUMMARY_PREFIX}: {updated_count} updated, {errors} errors"
+                        if seen and errors == seen:
+                            logger.warning(summary)
+                        else:
+                            logger.info(summary)
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)

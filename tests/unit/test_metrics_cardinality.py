@@ -7,9 +7,7 @@ Prometheus series accumulating without bound, plus unbounded ``error_type`` (fro
 
 """
 
-import pytest
 from prometheus_client import Counter, Histogram
-from sqlalchemy.exc import OperationalError
 
 
 def _series_count(collector) -> int:
@@ -61,48 +59,47 @@ def _error_type_counters():
     return found
 
 
-@pytest.mark.parametrize(
-    ("name", "recorder_kwargs"),
-    [
-        ("ai_review_errors", {"via": "ai_review"}),
-        ("scheduler_isolation_errors", {"via": "scheduler", "scheduler": "media_buy_status"}),
-        ("scheduler_isolation_errors", {"via": "scheduler", "scheduler": "delivery_webhook"}),
-    ],
-)
-def test_error_type_counter_cardinality_bounded(name, recorder_kwargs):
+def test_ai_review_errors_cardinality_bounded():
     """Recording 1000 unique error types for one tenant must stay bounded."""
     from src.core import metrics
 
     assert {n for n, _ in _error_type_counters()} == {"ai_review_errors", "scheduler_isolation_errors"}
-    collector = getattr(metrics, name)
-    collector.clear()
-
-    if recorder_kwargs["via"] == "ai_review":
-        for i in range(1000):
-            exc_cls = type(f"FakeError{i}", (Exception,), {})
-            metrics.record_ai_review_error(tenant_id="t1", error=exc_cls("boom"))
-    else:
-        for i in range(1000):
-            exc_cls = type(f"FakeSchedError{i}", (Exception,), {})
-            metrics.record_scheduler_isolation_error(
-                scheduler=recorder_kwargs["scheduler"],
-                tenant_id="t1",
-                error=exc_cls("boom"),
-            )
+    metrics.ai_review_errors.clear()
+    for i in range(1000):
+        exc_cls = type(f"FakeError{i}", (Exception,), {})
+        metrics.record_ai_review_error(tenant_id="t1", error=exc_cls("boom"))
 
     # prometheus emits _total + _created per label set.
-    assert _series_count(collector) <= len(metrics.ERROR_TYPE_VALUES) * 2
+    assert _series_count(metrics.ai_review_errors) <= len(metrics.ERROR_TYPE_VALUES) * 2
+
+
+def test_scheduler_isolation_errors_cardinality_bounded():
+    """``record_scheduler_isolation_error`` takes an already-bounded ``error_type``,
+    but a mis-wired caller passing a free-form string must still collapse to
+    ``"other"`` — this recorder is the last line of defense, not the classifier."""
+    from src.core import metrics
+
+    metrics.scheduler_isolation_errors.clear()
+    for i in range(1000):
+        metrics.record_scheduler_isolation_error(
+            scheduler="media_buy_status",
+            tenant_id="t1",
+            error_type=f"free_form_error_{i}",
+        )
+
+    # prometheus emits _total + _created per label set.
+    assert _series_count(metrics.scheduler_isolation_errors) <= len(metrics.SCHEDULER_ERROR_TYPE_VALUES) * 2
 
 
 def test_scheduler_isolation_oracle_uses_db_error_class():
-    """Unit oracle must exercise a class the scheduler loop can raise."""
+    """Unit oracle must pin the bounded label the scheduler loop actually records."""
     from src.core import metrics
 
     metrics.scheduler_isolation_errors.clear()
     metrics.record_scheduler_isolation_error(
         scheduler="media_buy_status",
         tenant_id="t1",
-        error=OperationalError("SELECT 1", {}, Exception("timeout")),
+        error_type="db_error",
     )
     assert (
         metrics.scheduler_isolation_errors.labels(
@@ -163,14 +160,12 @@ def test_scheduler_isolation_cardinality_bounded_under_freeform_scheduler():
         metrics.record_scheduler_isolation_error(
             scheduler=f"free_form_scheduler_{i}",
             tenant_id="t1",
-            error=ValueError("x"),
+            error_type="other",
         )
 
-    # All free-form names collapse to scheduler="other" x error_type in enum.
-    assert _series_count(metrics.scheduler_isolation_errors) <= len(metrics.ERROR_TYPE_VALUES) * 2
+    # All free-form names collapse to scheduler="other" x error_type="other".
+    assert _series_count(metrics.scheduler_isolation_errors) <= len(metrics.SCHEDULER_ERROR_TYPE_VALUES) * 2
     assert (
-        metrics.scheduler_isolation_errors.labels(
-            scheduler="other", tenant_id="t1", error_type="validation"
-        )._value.get()
+        metrics.scheduler_isolation_errors.labels(scheduler="other", tenant_id="t1", error_type="other")._value.get()
         == 1000
     )
