@@ -361,6 +361,25 @@ def _clear_injected_identity(handler: AdCPRequestHandler) -> None:
             handler.__dict__.pop(key, None)
 
 
+def _clear_unit_mode_identity(handler: AdCPRequestHandler) -> None:
+    """Drop any unit-mode identity lambdas the handler outlives a dispatch with.
+
+    The handler instance is shared across dispatches within one scenario, so an
+    earlier unit-mode call (``_prepare_a2a_server_context``'s token-less branch)
+    may have left ``_resolve_a2a_identity`` / ``_get_auth_token`` lambdas bound
+    on the instance. A subsequent real-token or explicit-unauth dispatch must
+    clear them first, otherwise it silently reuses the previous caller's
+    identity — the exact denial-scenario bug this guards against.
+
+    Oracle: skipping either pop leaves a unit-mode lambda in place and a
+    subsequent dispatch is served (or denied) as the wrong caller.
+    """
+    handler.__dict__.pop("_resolve_a2a_identity", None)
+    handler.__dict__.pop("_get_auth_token", None)
+    assert "_resolve_a2a_identity" not in handler.__dict__
+    assert "_get_auth_token" not in handler.__dict__
+
+
 class _TestClock:
     """Minimal clock for BDD relative date-token resolution.
 
@@ -1124,16 +1143,9 @@ class BaseTestEnv:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
             from tests.a2a_helpers import auth_headers_mapping
 
-            # The handler outlives a single dispatch, so an earlier unit-mode
-            # call may have left identity lambdas on this instance. Drop them —
-            # a real token must resolve through the real auth chain, otherwise a
+            # A real token must resolve through the real auth chain, otherwise a
             # denial scenario would silently reuse the previous caller's identity.
-            handler.__dict__.pop("_resolve_a2a_identity", None)
-            handler.__dict__.pop("_get_auth_token", None)
-            # Oracle: deleting the two pops above leaves unit-mode lambdas in
-            # place and a subsequent token-mode sibling tasks/get is served.
-            assert "_resolve_a2a_identity" not in handler.__dict__
-            assert "_get_auth_token" not in handler.__dict__
+            _clear_unit_mode_identity(handler)
 
             headers = auth_headers_mapping(
                 {
@@ -1226,8 +1238,7 @@ class BaseTestEnv:
             # Explicit unauthenticated dispatch — do not inject anonymous
             # identity lambdas (skill-dispatch compensating path). Clear any
             # leftover unit-mode mocks so the real auth chain denies.
-            handler.__dict__.pop("_resolve_a2a_identity", None)
-            handler.__dict__.pop("_get_auth_token", None)
+            _clear_unit_mode_identity(handler)
             server_context = ServerCallContext()
         else:
             server_context = self._prepare_a2a_server_context(handler, a2a_identity)
@@ -1256,9 +1267,16 @@ class BaseTestEnv:
             self._last_a2a_task_error = body["error"]
             return None
 
-        # Success: prefer the handler's stored Task (cancel mutates it in place)
-        # over re-parsing body["result"] — same instance the gate authorized.
-        task = handler.tasks.get(task_id)
+        # Success: rebuild the Task from body["result"] — the actual buyer-facing
+        # wire payload — rather than trusting handler.tasks.get(task_id), the
+        # in-process object the gate just authorized. A v0.3-compat serializer
+        # regression that emits the wrong status.state on the wire must redden
+        # this, even while the in-process object stays correct (#1720 review).
+        from a2a.types import Task, TaskState, TaskStatus
+
+        result = body["result"]
+        wire_state_name = "TASK_STATE_" + result["status"]["state"].upper()
+        task = Task(id=result["id"], status=TaskStatus(state=TaskState.Value(wire_state_name)))
         self._last_a2a_task = task
         return task
 
@@ -1303,7 +1321,7 @@ class BaseTestEnv:
             )
         return task
 
-    def a2a_task_state(self, task_id: str) -> Any:
+    def a2a_task_state(self, task_id: str) -> TaskState | None:
         """State of the seeded in-memory task, or None if the handler has no such id.
 
         Public read-back accessor: a denied ``tasks/cancel`` must leave the stored

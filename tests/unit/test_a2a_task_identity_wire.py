@@ -1,11 +1,12 @@
 """In-process JSON-RPC wire grade for A2A task ownership (#1702 / #1720).
 
 live_server xfails only POST an unknown id — they never hit the owner-compare
-branch. This builds the same create_jsonrpc_routes(..., enable_v0_3_compat=True)
-routing/dispatch/error-shaping path production uses (auth extraction is
-hand-rolled here — no middleware; see ``_AuthHeaderContextBuilder``), seeds an
-owned in-memory task on the handler instance, and asserts sibling denial matches
-unknown-id on the wire (code/message shape).
+branch. Routes through the shared ``build_a2a_jsonrpc_client`` (``tests/a2a_helpers.py``),
+which drives the same ``create_jsonrpc_routes(..., enable_v0_3_compat=True)``
+routing/dispatch/error-shaping path production uses over the harness's
+``x-adcp-auth`` header contract (no middleware — the builder extracts the
+token directly), seeds an owned in-memory task on the handler instance, and
+asserts sibling denial matches unknown-id on the wire (code/message shape).
 """
 
 from __future__ import annotations
@@ -17,8 +18,6 @@ from a2a.server.context import ServerCallContext
 from a2a.server.routes.common import ServerCallContextBuilder
 from starlette.requests import Request
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from tests.a2a_helpers import (
     OWNED_TASK_ID,
     OWNED_TASK_OWNER_TOK,
