@@ -29,6 +29,7 @@ from ._assets import _build_creative_data, _extract_message_from_assets, _extrac
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
+    from src.core.schemas import FormatId
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def _check_gemini_key_or_advisory(
     creative_id: str,
     *,
     action_verb: str,
-    creative_format: Any,
+    creative_format: FormatId,
 ) -> str | SyncCreativeResult:
     """Return the GEMINI API key, or a missing-key advisory result.
 
@@ -95,7 +96,7 @@ def _check_gemini_key_or_advisory(
     gemini_api_key = get_config().gemini_api_key
     if gemini_api_key:
         return gemini_api_key
-    error_msg = f"Cannot {action_verb} generative creative {creative_format}: GEMINI_API_KEY not configured"
+    error_msg = f"Cannot {action_verb} generative creative {creative_format.id}: GEMINI_API_KEY not configured"
     logger.error(f"[sync_creatives] {error_msg}")
     return _gemini_key_missing_result(creative_id, error_msg)
 
@@ -453,7 +454,7 @@ def _update_existing_creative(
                     # Creative agent should have generated previews but didn't
                     error_msg = f"Preview generation failed for {existing_creative.creative_id}: no previews returned and no media_url provided"
                     logger.error(f"[sync_creatives] {error_msg}")
-                    return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
+                    return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="transient"), False)
 
         except AdCPConfigurationError as config_error:
             # Residual non-GEMINI configuration errors (GEMINI missing returns early
@@ -741,7 +742,7 @@ def _create_new_creative(
                         # Creative agent should have generated previews but didn't
                         error_msg = f"Preview generation failed for {creative_id}: no previews returned and no media_url provided"
                         logger.error(f"[sync_creatives] {error_msg}")
-                        return (_failed_sync_result(creative_id, error_msg), False)
+                        return (_failed_sync_result(creative_id, error_msg, recovery="transient"), False)
 
         except AdCPConfigurationError as config_error:
             # Residual non-GEMINI configuration errors (GEMINI missing returns early

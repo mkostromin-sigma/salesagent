@@ -28,6 +28,7 @@ from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 from tests.harness.transport import assert_wire_advisory
 from tests.helpers.creative_test_helpers import (
+    _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION,
     assert_gemini_key_missing_advisory,
     assert_stored_creative_assets,
     creative_payload,
@@ -1175,9 +1176,11 @@ class TestGeminiKeyMissing:
         # Wire transports must expose the nested advisory on the success-path body.
         assert_wire_advisory(
             result.wire_response,
-            "CREATIVE_GEMINI_KEY_MISSING",
+            "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
             recovery="terminal",
+            suggestion=_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION,
             transport=transport,
+            response=result.payload,
         )
 
 

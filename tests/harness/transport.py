@@ -298,9 +298,14 @@ class TransportResult:
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
         wire_response: Serialized success-path response body as a dict, captured
             from the real wire (REST HTTP JSON body, MCP structured_content, A2A
-            artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
-            the typed ``payload`` instead). Lets success-path tests assert the
-            actual serialized shape (e.g. the v3.1 format_id federation contract).
+            artifact DataPart) for most envs. Some envs blocked on a documented
+            real-dispatch bug (e.g. ``CreativeSyncEnv``'s A2A path) instead stash
+            a re-serialized ``model_dump()`` proxy and flag
+            ``envelope["wire_response_is_proxy"] = True`` — that field is NOT the
+            real Task/Artifact framing for those envs. ``None`` on error and on
+            IMPL (no wire — serialize the typed ``payload`` instead). Lets
+            success-path tests assert the actual serialized shape (e.g. the v3.1
+            format_id federation contract).
         wire_error_envelope: Raw two-layer error envelope dict captured from
             the actual wire bytes (REST HTTP body, MCP ToolError content text,
             A2A failed-Task artifact DataPart). ``None`` on success or on the

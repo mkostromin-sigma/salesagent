@@ -16,52 +16,38 @@ from tests.bdd.steps._outcome_helpers import payload_or_none, wire_error_envelop
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
-def _response_has_failed_creative(ctx: dict) -> bool:
-    """True when ``ctx['response']`` carries a per-creative ``action == "failed"``.
-
-    Used to decide whether a missing ``wire_response`` on a wire-stashing
-    transport is a nested-advisory grading bug (loud) vs an envelope-less
-    error path that should soft-fall back to the reconstructed exception
-    (UC003 / UC019 validation failures).
-    """
-    resp = ctx.get("response")
-    if resp is None:
-        return False
-    creatives = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    for creative in creatives:
-        if isinstance(creative, dict):
-            action = creative.get("action")
-            action_str = action.get("value") if isinstance(action, dict) else action
-        else:
-            action = getattr(creative, "action", None)
-            action_str = action.value if hasattr(action, "value") else action
-        if action_str == "failed":
-            return True
-    return False
-
-
 def _nested_creative_advisory_error(ctx: dict) -> dict | None:
     """First failed ``creatives[].errors[0]`` from a success-path ``wire_response``.
 
     Per-creative advisories live inside a successful sync artifact (no
-    ``wire_error_envelope``). Delegates to the harness accessor so BDD steps and
-    integration tests share one guarded traversal.
+    ``wire_error_envelope``). Delegates entirely to the single guarded harness
+    oracle (``tests.harness.transport.first_failed_creative_advisory``) so BDD
+    steps and integration tests share one traversal — including the "wire
+    present but the failed creative dropped errors[]" regression check.
 
     Loud when a wire-stashing transport omitted ``wire_response`` **and** the
-    typed response already shows a failed creative (success+advisory path).
-    Soft ``None`` otherwise so envelope-less error Then steps (UC003/UC019)
-    keep reconstructed fallback — they never stash success-path wire.
+    typed response already shows a failed creative (success+advisory path) —
+    the ``_response_has_failed_creative`` discriminator, shared from the
+    harness rather than reimplemented here. Soft ``None`` otherwise so
+    envelope-less error Then steps (UC003/UC019) keep the reconstructed
+    fallback — they never stash success-path wire.
     """
-    from tests.harness.transport import Transport, first_failed_creative_advisory
+    from tests.harness.transport import (
+        Transport,
+        _response_has_failed_creative,
+        _transport_has_no_wire,
+        first_failed_creative_advisory,
+    )
 
     wire = ctx.get("wire_response")
     transport = ctx.get("transport")
+    response = ctx.get("response")
     if isinstance(wire, dict):
-        return first_failed_creative_advisory(wire, transport=transport)
+        return first_failed_creative_advisory(wire, transport=transport or Transport.IMPL, response=response)
     # IMPL / unset: no success-path wire to require.
-    if transport is None or transport is Transport.IMPL or getattr(transport, "value", transport) == "impl":
+    if transport is None or _transport_has_no_wire(transport):
         return None
-    if _response_has_failed_creative(ctx):
+    if _response_has_failed_creative(response):
         # Success+advisory on a wire transport without a stashed body — loud.
         return first_failed_creative_advisory(None, transport=transport)
     return None

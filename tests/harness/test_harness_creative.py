@@ -8,6 +8,16 @@ mock dict populated, identity lazy, _configure_mocks called.
 from __future__ import annotations
 
 
+def _unit_mode(env_cls: type) -> type:
+    """Return a ``use_real_db = False`` subclass of *env_cls* for unit-mode smoke tests.
+
+    Single home for the unit-mode stamp — avoids ``class _UnitMode(<Env>):
+    use_real_db = False`` copy-pasted at every call site that wants to exercise
+    an IntegrationEnv's patches without needing the ``integration_db`` fixture.
+    """
+    return type("_UnitMode", (env_cls,), {"use_real_db": False})
+
+
 class TestCreativeSyncEnvContract:
     """CreativeSyncEnv must mock only external services, not DB."""
 
@@ -35,10 +45,7 @@ class TestCreativeSyncEnvContract:
         from tests.harness.creative_sync import CreativeSyncEnv
 
         # Override use_real_db to avoid needing integration_db fixture
-        class _UnitMode(CreativeSyncEnv):
-            use_real_db = False
-
-        with _UnitMode() as env:
+        with _unit_mode(CreativeSyncEnv)() as env:
             assert "registry" in env.mock
             assert "run_async" in env.mock
             assert "send_notifications" in env.mock
@@ -58,10 +65,7 @@ class TestCreativeSyncEnvContract:
         """_configure_mocks sets up happy-path registry return values."""
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        class _UnitMode(CreativeSyncEnv):
-            use_real_db = False
-
-        with _UnitMode() as env:
+        with _unit_mode(CreativeSyncEnv)() as env:
             # Registry mock should have a return value configured
             assert env.mock["registry"].return_value is not None
 
@@ -110,10 +114,7 @@ class TestCreativeSyncEnvContract:
         """In-process clear_gemini_api_key nulls the config mock key."""
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        class _UnitMode(CreativeSyncEnv):
-            use_real_db = False
-
-        with _UnitMode() as env:
+        with _unit_mode(CreativeSyncEnv)() as env:
             env.mock["config"].return_value.gemini_api_key = "present"
             env.clear_gemini_api_key()
             assert env.mock["config"].return_value.gemini_api_key is None
@@ -126,14 +127,11 @@ class TestCreativeSyncEnvContract:
         from tests.harness.creative_sync import CreativeSyncEnv
         from tests.harness.transport import E2EConfig
 
-        class _UnitMode(CreativeSyncEnv):
-            use_real_db = False
-
         e2e = E2EConfig(
             base_url="http://proxy:8000",
             postgres_url="postgresql://unused",
         )
-        with _UnitMode(e2e_config=e2e) as env:
+        with _unit_mode(CreativeSyncEnv)(e2e_config=e2e) as env:
             with pytest.raises(E2EUnsupportedSetup) as exc_info:
                 env.clear_gemini_api_key()
         assert "GEMINI_API_KEY" in str(exc_info.value)
@@ -145,24 +143,24 @@ class TestCreativeSyncEnvContract:
 
         from tests.harness.creative_sync import CreativeSyncEnv
 
-        class _UnitMode(CreativeSyncEnv):
-            use_real_db = False
-
         fake = MagicMock()
         fake.model_dump.return_value = {
             "creatives": [
-                {"creative_id": "c1", "action": "failed", "errors": [{"code": "CREATIVE_GEMINI_KEY_MISSING"}]}
+                {"creative_id": "c1", "action": "failed", "errors": [{"code": "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"}]}
             ],
         }
         monkeypatch.setattr(
             "src.core.tools.creatives.sync_wrappers.sync_creatives_raw",
             lambda **_kwargs: fake,
         )
-        with _UnitMode() as env:
+        with _unit_mode(CreativeSyncEnv)() as env:
             env._commit_factory_data = lambda: None  # noqa: E731 — unit stub
             out = env.call_a2a(creatives=[])
         assert out is fake
         assert env._last_wire_response == fake.model_dump.return_value
+        assert env._wire_response_is_proxy is True, (
+            "stashed wire must be flagged as a model_dump proxy, not real A2A framing"
+        )
         fake.model_dump.assert_called_once_with(mode="json")
 
 
@@ -191,12 +189,12 @@ class TestNestedCreativeAdvisoryAccessor:
                 {
                     "creative_id": "bad",
                     "action": "failed",
-                    "errors": [{"code": "CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}],
+                    "errors": [{"code": "X_PREBID_CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}],
                 },
             ]
         }
         advisory = first_failed_creative_advisory(wire, transport=Transport.MCP)
-        assert advisory == {"code": "CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}
+        assert advisory == {"code": "X_PREBID_CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}
 
     def test_assert_wire_advisory_grades_code_and_recovery(self):
         from tests.harness.transport import Transport, assert_wire_advisory
@@ -206,18 +204,18 @@ class TestNestedCreativeAdvisoryAccessor:
                 {
                     "creative_id": "bad",
                     "action": "failed",
-                    "errors": [{"code": "CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}],
+                    "errors": [{"code": "X_PREBID_CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}],
                 }
             ]
         }
         advisory = assert_wire_advisory(
             wire,
-            "CREATIVE_GEMINI_KEY_MISSING",
+            "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
             recovery="terminal",
             transport=Transport.REST,
         )
         assert advisory is not None
-        assert advisory["code"] == "CREATIVE_GEMINI_KEY_MISSING"
+        assert advisory["code"] == "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"
 
     def test_nested_bdd_helper_soft_on_envelope_less_error_path(self):
         """UC003/UC019-style: wire transport, no wire_response, no failed creative → soft None."""
@@ -270,10 +268,7 @@ class TestNestedCreativeAdvisoryAccessor:
         """Verify patches activate correctly."""
         from tests.harness.creative_list import CreativeListEnv
 
-        class _UnitMode(CreativeListEnv):
-            use_real_db = False
-
-        with _UnitMode() as env:
+        with _unit_mode(CreativeListEnv)() as env:
             assert "audit_logger" in env.mock
             assert len(env.mock) == 1
 
@@ -304,10 +299,7 @@ class TestCreativeFormatsEnvContract:
         """Verify patches activate correctly."""
         from tests.harness.creative_formats import CreativeFormatsEnv
 
-        class _UnitMode(CreativeFormatsEnv):
-            use_real_db = False
-
-        with _UnitMode() as env:
+        with _unit_mode(CreativeFormatsEnv)() as env:
             assert "registry" in env.mock
             assert "audit_logger" in env.mock
             assert len(env.mock) == 2

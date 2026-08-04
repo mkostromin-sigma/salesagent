@@ -174,7 +174,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
 
         Live e2e_rest cannot unset the server process env mid-suite — declare
         E2EUnsupportedSetup so the BDD hook non-strict-xfails e2e only while
-        a2a/mcp/rest still grade CREATIVE_GEMINI_KEY_MISSING.
+        a2a/mcp/rest still grade X_PREBID_CREATIVE_GEMINI_KEY_MISSING.
         """
         self.mock["config"].return_value.gemini_api_key = None
 

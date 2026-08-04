@@ -1598,7 +1598,7 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
         "CREATIVE_FORMAT_UNKNOWN",
         "CREATIVE_AGENT_UNREACHABLE",
         "CREATIVE_NAME_EMPTY",
-        "CREATIVE_GEMINI_KEY_MISSING",
+        "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
     ):
         _assert_per_creative_failure(ctx, outcome)
     elif outcome == "assignment updated":
@@ -2161,7 +2161,7 @@ def _infer_error_code_from_message(msg: str) -> str:
     """Map production error strings to spec error codes."""
     lower = msg.lower()
     if "gemini_api_key" in lower and "not configured" in lower:
-        return "CREATIVE_GEMINI_KEY_MISSING"
+        return "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"
     if "preview" in lower and ("failed" in lower or "no preview" in lower):
         return "CREATIVE_PREVIEW_FAILED"
     if "format" in lower and "required" in lower:

@@ -37,10 +37,10 @@ _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION = "Ask the seller to configure GEMINI_AP
 
 
 def assert_gemini_key_missing_advisory(errs: list) -> None:
-    """Pin platform ``CREATIVE_GEMINI_KEY_MISSING`` + ``terminal`` + suggestion."""
+    """Pin platform ``X_PREBID_CREATIVE_GEMINI_KEY_MISSING`` + ``terminal`` + suggestion."""
     assert errs, "expected non-empty errors[] for GEMINI key missing advisory"
     err = errs[0]
-    assert err.code == "CREATIVE_GEMINI_KEY_MISSING", f"unexpected code: {err.code!r}"
+    assert err.code == "X_PREBID_CREATIVE_GEMINI_KEY_MISSING", f"unexpected code: {err.code!r}"
     assert err.recovery == "terminal", f"unexpected recovery: {err.recovery!r}"
     assert err.suggestion == _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION, f"unexpected suggestion: {err.suggestion!r}"
 

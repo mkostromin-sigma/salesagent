@@ -193,7 +193,7 @@ def _sync_creatives_impl(
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
                     failed_count += 1
-                    results.append(_failed_sync_result(creative_id, error_msg))
+                    results.append(_failed_sync_result(creative_id, error_msg, recovery="correctable"))
                     continue  # Skip to next creative
 
                 # Check provenance requirement (EU AI Act Article 50)
@@ -397,7 +397,7 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(_failed_sync_result(creative_id, error_msg))
+                results.append(_failed_sync_result(creative_id, error_msg, recovery="transient"))
 
         # Archive creatives not in the sync payload when delete_missing=True
         if delete_missing:
