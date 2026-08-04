@@ -88,24 +88,63 @@ class MediaBuyStatusScheduler:
                 # Wait before next check
                 await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
 
+    def _process_one_media_buy(self, media_buy: MediaBuy, now: datetime, session) -> bool | None:
+        """Run one buy's status check inside its own SAVEPOINT; isolate DB errors.
+
+        Ids are captured into plain locals *before* the SAVEPOINT opens — under
+        production ``autoflush=True`` a flush failure expires ORM attributes, so
+        reading ``media_buy.tenant_id`` after the fact can raise
+        ``PendingRollbackError`` and hide the original exception. A release-time
+        flush failure (e.g. an over-length status value) counts as an error, not
+        a success, even though the in-body assignment "succeeded". Dead-connection
+        errors (``connection_invalidated`` / ``DisconnectionError``, see
+        :func:`is_connection_dead`) are *not* isolated — they re-raise so
+        ``get_db_session`` can trip the process-global circuit breaker.
+
+        Returns ``True`` if the buy's status flipped, ``False`` if the error was
+        isolated, or ``None`` if no status change was needed.
+        """
+        tenant_id = media_buy.tenant_id
+        principal_id = media_buy.principal_id
+        media_buy_id = media_buy.media_buy_id
+
+        try:
+            with session.begin_nested():
+                new_status = self._compute_new_status(media_buy, now, session)
+                if new_status:
+                    old_status = media_buy.status
+                    media_buy.status = new_status
+        except Exception as exc:
+            if is_connection_dead(exc):
+                raise
+            logger.error(
+                f"Error updating media buy status "
+                f"(tenant_id={tenant_id}, principal_id={principal_id}, "
+                f"media_buy_id={media_buy_id}): {exc}",
+                exc_info=True,
+            )
+            record_scheduler_isolation_error(
+                scheduler="media_buy_status",
+                tenant_id=tenant_id,
+                error_type=_classify_scheduler_error(exc),
+            )
+            return False
+
+        if not new_status:
+            return None
+        logger.info(f"Updated media buy {media_buy_id} status: {old_status} -> {new_status}")
+        return True
+
     async def _update_statuses(self) -> None:
         """Check and update media buy statuses based on flight dates.
 
         Per-buy work runs inside a status-local ``with session.begin_nested():``
         SAVEPOINT (precedent: ``src/core/tools/creatives/_sync.py``) so a DB
         error on one buy rolls back only that buy; siblings still reach the
-        terminal ``session.commit()``. Ids are captured into plain locals
-        *before* the SAVEPOINT opens — under production ``autoflush=True`` a
-        flush failure expires ORM attributes, so reading ``media_buy.tenant_id``
-        after the fact can raise ``PendingRollbackError`` and hide the original
-        exception. The ``updated_count``/``errors`` tally and the success INFO
-        log are applied only *after* the SAVEPOINT releases cleanly — a
-        release-time flush failure (e.g. an over-length status value) counts
-        as an error, not a success, even though the in-body assignment
-        "succeeded". Dead-connection errors (``connection_invalidated`` /
-        ``DisconnectionError``, see :func:`is_connection_dead`) are *not*
-        isolated — they re-raise so ``get_db_session`` can trip the
-        process-global circuit breaker.
+        terminal ``session.commit()`` — see :meth:`_process_one_media_buy` for
+        the pre-capture / isolation / dead-connection contract. The
+        ``updated_count``/``errors`` tally is applied only *after* the SAVEPOINT
+        releases cleanly.
         """
         now = datetime.now(UTC)
 
@@ -166,16 +205,7 @@ class MediaBuyStatusScheduler:
                     if updated_count > 0:
                         session.commit()
                 finally:
-                    # Suppress all-quiet ticks (60s cadence); WARNING only when
-                    # every visited buy failed (legitimate no-op flips do not
-                    # count as failures) so the error tally stays visible.
-                    # Emit even if commit raises — otherwise the tally is lost.
-                    if updated_count or errors:
-                        summary = f"{STATUS_BATCH_SUMMARY_PREFIX}: {updated_count} updated, {errors} errors"
-                        if seen and errors == seen:
-                            logger.warning(summary)
-                        else:
-                            logger.info(summary)
+                    self._log_batch_summary(seen=seen, updated_count=updated_count, errors=errors)
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
