@@ -41,6 +41,7 @@ os.environ.setdefault("ADCP_RUN_BACKGROUND_SCHEDULERS", "false")
 from tests.harness.transport import DeliverResult, strip_a2a_protocol_fields
 
 if TYPE_CHECKING:
+    from a2a.compat.v0_3.types import Task as WireTask
     from a2a.server.routes.common import ServerCallContext
     from a2a.types import Task, TaskState
     from pydantic import BaseModel
@@ -348,7 +349,7 @@ def _a2a_send_message_configuration(spec: dict[str, Any]) -> Any:
     return SendMessageConfiguration(task_push_notification_config=TaskPushNotificationConfig(**fields))
 
 
-def _clear_injected_identity(handler: Any) -> None:
+def _clear_injected_identity(handler: AdCPRequestHandler) -> None:
     """Drop unit-mode identity lambdas so a later token dispatch cannot reuse them.
 
     Security-critical: the set of neutralized attributes has one definition.
@@ -683,12 +684,12 @@ class BaseTestEnv:
         return self.deliver_a2a(**kwargs).payload
 
     @property
-    def last_a2a_task(self) -> Any:
-        """Task from the last ``_run_a2a_handler`` / ``run_a2a_task_method``.
+    def last_a2a_task(self) -> Task | None:
+        """Protobuf ``a2a.types.Task`` from the last ``_run_a2a_handler`` skills-path call.
 
-        Skills path stores the protobuf ``Task``; ``run_a2a_task_method`` stores
-        the v0.3 wire ``Task`` parsed from ``body["result"]`` so success grading
-        proves adapter serialization.
+        Distinct slot from ``last_a2a_wire_task`` — the ownership-gate protocol
+        methods (``tasks/get`` / ``tasks/cancel``) return a different, v0.3
+        compat wire ``Task`` class with its own ``.status.state`` enum.
         """
         return self._last_a2a_task
 
@@ -966,7 +967,7 @@ class BaseTestEnv:
         task_id: str,
         *,
         identity: Any = _NO_OVERRIDE,
-    ) -> Any:
+    ) -> WireTask | None:
         """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
 
         Runs against the SAME handler ``_run_a2a_handler`` uses, so the task a
@@ -988,15 +989,13 @@ class BaseTestEnv:
         no unit-mode identity lambdas, so the handler's real auth failure
         surfaces on the wire (must not collapse to task-not-found).
 
-        Returns the served Task, or None when the call errored.
+        Returns the served wire Task, or None when the call errored.
         """
         from a2a.compat.v0_3.types import Task as WireTask
         from a2a.server.routes.common import ServerCallContext, ServerCallContextBuilder
-        from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
-        from starlette.applications import Starlette
         from starlette.requests import Request
-        from starlette.testclient import TestClient
 
+        from tests.a2a_helpers import post_a2a_task_method
         from tests.harness.transport import Transport
 
         self._commit_factory_data()
@@ -1019,24 +1018,14 @@ class BaseTestEnv:
             def build(self, request: Request) -> ServerCallContext:
                 return server_context
 
-        routes = create_jsonrpc_routes(
-            request_handler=handler,
-            rpc_url="/a2a",
-            context_builder=_PreparedContextBuilder(),
-            enable_v0_3_compat=True,
-        )
-
-        self._last_a2a_task = None
+        self._last_a2a_wire_task = None
         self._last_a2a_task_error = None
-        with TestClient(Starlette(routes=routes)) as client:
-            response = client.post(
-                "/a2a",
-                json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
-            )
-            assert response.status_code == 200, (
-                f"JSON-RPC {method} returned HTTP {response.status_code}: {response.text}"
-            )
-            body = response.json()
+        body = post_a2a_task_method(
+            handler,
+            method=method,
+            task_id=task_id,
+            context_builder=_PreparedContextBuilder(),
+        )
         if "error" in body:
             self._last_a2a_task_error = body["error"]
             return None
@@ -1046,7 +1035,7 @@ class BaseTestEnv:
         # must redden owner-get / owner-cancel. Store mutation is graded via
         # a2a_task_state (handler.tasks) on the denied-cancel Then.
         task = WireTask.model_validate(body["result"])
-        self._last_a2a_task = task
+        self._last_a2a_wire_task = task
         return task
 
     def seed_a2a_task(

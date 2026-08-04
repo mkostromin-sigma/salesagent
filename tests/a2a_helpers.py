@@ -10,15 +10,23 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
+from a2a.server.routes.common import ServerCallContextBuilder
+from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 from a2a.types import CancelTaskRequest, GetTaskRequest, Task, TaskNotFoundError, TaskState, TaskStatus
+from starlette.applications import Starlette
+from starlette.testclient import TestClient
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _safe_task_id_for_log, _TaskOwner
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _safe_id_for_log, _TaskOwner
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.resolved_identity import ResolvedIdentity
+
+if TYPE_CHECKING:
+    from a2a.compat.v0_3.types import Task as WireTask
+    from a2a.compat.v0_3.types import TaskState as WireTaskState
 
 
 class JsonRpcError(TypedDict):
@@ -55,6 +63,44 @@ TASK_METHOD_MATRIX: tuple[tuple[type, str, str], ...] = (
     (GetTaskRequest, "on_get_task", "tasks/get"),
     (CancelTaskRequest, "on_cancel_task", "tasks/cancel"),
 )
+
+
+def post_a2a_task_method(
+    handler: AdCPRequestHandler,
+    *,
+    method: str,
+    task_id: str,
+    context_builder: ServerCallContextBuilder,
+    headers: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """One production JSON-RPC POST for ``tasks/get`` / ``tasks/cancel``.
+
+    Shared boundary for the harness (``tests.harness._base.run_a2a_task_method``)
+    and the in-process wire unit test (``tests/unit/test_a2a_task_identity_wire.py``):
+    both build ``create_jsonrpc_routes(..., enable_v0_3_compat=True)``, open a
+    ``TestClient(Starlette(...))``, POST the same ``{jsonrpc, id, method,
+    params: {id}}`` body, assert HTTP 200, and return the parsed JSON-RPC
+    envelope. Only ``context_builder`` differs between callers — the harness
+    passes a fixed prepared context (auth already resolved), the wire test
+    passes a header-parsing builder (bearer token in ``headers``). Hand-rolling
+    this sequence twice let the harness's captured wire silently drift from
+    what the unit test posts — the exact failure this boundary exists to
+    prevent.
+    """
+    routes = create_jsonrpc_routes(
+        request_handler=handler,
+        rpc_url="/a2a",
+        context_builder=context_builder,
+        enable_v0_3_compat=True,
+    )
+    with TestClient(Starlette(routes=routes)) as client:
+        response = client.post(
+            "/a2a",
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
+            headers=dict(headers) if headers else {},
+        )
+        assert response.status_code == 200, f"JSON-RPC {method} returned HTTP {response.status_code}: {response.text}"
+        return response.json()
 
 
 def make_a2a_context(
@@ -95,8 +141,12 @@ async def invoke_owned_task_method(
     method_name: str,
     request_cls: type,
     task_id: str,
-) -> Any:
-    """Act half shared by ownership unit tests (auth already patched via ``a2a_auth_as``)."""
+) -> Task:
+    """Act half shared by ownership unit tests (auth already patched via ``a2a_auth_as``).
+
+    Returns the protobuf ``a2a.types.Task`` on success; denial paths raise
+    ``TaskNotFoundError`` rather than returning a value.
+    """
     return await getattr(handler, method_name)(request_cls(id=task_id), context=None)
 
 
@@ -169,7 +219,7 @@ def assert_task_not_found_nondisclosure(
     ``_task_not_found_message`` — both sides would move together). Sanitizer
     treatment matches ``_task_not_found`` so control-character ids stay joined.
     """
-    safe_id = _safe_task_id_for_log(task_id)
+    safe_id = _safe_id_for_log(task_id)
     assert exc.message == f"Task not found: {safe_id}"
     assert isinstance(exc.data, dict)
     assert exc.data.get("task_id") == safe_id
@@ -186,7 +236,7 @@ def assert_wire_task_not_found(err: JsonRpcError | Mapping[str, object], task_id
     would let the harness silently drift from the buyer wire.
 
     Expected message is a literal over the raw *task_id* (not
-    ``_task_not_found_message`` / ``_safe_task_id_for_log``) so a static identity
+    ``_task_not_found_message`` / ``_safe_id_for_log``) so a static identity
     leak inside the production builder cannot move both sides together. Clean
     task ids only — control-character sanitizer joining is graded at unit
     altitude via ``assert_task_not_found_nondisclosure``.
@@ -198,5 +248,37 @@ def assert_wire_task_not_found(err: JsonRpcError | Mapping[str, object], task_id
     assert err == {
         "code": -32603,
         "message": f"Task not found: {task_id}",
+        "data": None,
+    }
+
+
+def assert_wire_task_served(task: WireTask | None, task_id: str, state: WireTaskState) -> None:
+    """Exact oracle for a served v0.3 compat wire Task (the success-path sibling of denial).
+
+    Reads the typed wire slot (``env.last_a2a_wire_task`` /
+    ``run_a2a_task_method``'s return value) rather than ``handler.tasks`` — a
+    success-path adapter serialization regression must redden owner-get /
+    owner-cancel, not just an in-memory-store check. Sibling to
+    ``assert_wire_task_not_found`` / ``assert_wire_auth_failure`` so every
+    Then in ``a2a_task_ownership.py`` asserts through one oracle per outcome
+    instead of grading the served case inline.
+    """
+    assert task is not None, f"No Task returned for {task_id}"
+    assert task.id == task_id
+    assert task.status.state == state
+
+
+def assert_wire_auth_failure(err: JsonRpcError | Mapping[str, object]) -> None:
+    """Exact wire-body oracle for missing-auth (v0.3 compat: code -32603, data null).
+
+    Same JSON-RPC shape as ``assert_wire_task_not_found`` (compat flattens both
+    to -32603 until #1670) but a distinct ``message`` literal, so this proves
+    auth failure never collapses into the ownership-denial not-found body.
+    Shared by the wire unit test and the BDD auth-failure Then so both altitudes
+    move together.
+    """
+    assert err == {
+        "code": -32603,
+        "message": "Missing authentication token",
         "data": None,
     }

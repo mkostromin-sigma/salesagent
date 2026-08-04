@@ -92,3 +92,12 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
             testing_context=None,
             **kwargs,
         )
+
+
+# Public alias for ``_UNSET``, assigned after class creation (not in the class
+# body) so factory_boy's metaclass never sees it as a declared Principal
+# field. Lets callers that wrap ``make_identity`` (e.g. a test module's own
+# ``make_identity(testing_context=...)`` helper) default-forward "caller
+# didn't pass this" without minting a second private sentinel object for the
+# same omitted-vs-explicit-None concept.
+PrincipalFactory.UNSET = _UNSET

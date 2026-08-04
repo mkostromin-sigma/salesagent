@@ -10,17 +10,23 @@
 # indistinguishable from an unknown id (no existence oracle). Reconcile
 # upstream in adcp-req, then retire this file for the regenerated scenarios.
 #
-# Spec grounding (A2A Protocol):
-# - §3.3.2 — servers MUST NOT reveal existence of resources the client is not
-#   authorized to access (example: "attempting to access a task created by
+# Spec grounding (A2A Protocol v1.0 — this server builds routes with
+# enable_v0_3_compat=True, so v0.3 is the natural misreading; v0.3's §3.3.2 is
+# "gRPC Streaming" and it has no §13, so the version pin below matters):
+# - v1.0 §3.3.2 — servers MUST NOT reveal existence of resources the client is
+#   not authorized to access (example: "attempting to access a task created by
 #   another user"); MUST return not-found when a resource "does not exist or
 #   is not accessible"; SHOULD NOT distinguish the two.
-# - §13.1 — Get/Cancel MUST verify access, and authorization MUST occur before
-#   any query that could leak existence (auth-first ordering).
+# - v1.0 §13.1 — Get/Cancel MUST verify access, and authorization MUST occur
+#   before any query that could leak existence (auth-first ordering).
 # This altitude is upstream-ungraded by design: AdCP task-lifecycle places
-# transport-native tasks/* outside AdCP polling. AdCP 3.1.1 grades the analogue
-# at get_products_async (get_products_task_status_wrong_account /
-# list_products_task_wrong_account → REFERENCE_NOT_FOUND).
+# transport-native tasks/* outside AdCP polling. AdCP 3.1.1's get_products_async
+# storyboard grades the analogue: get_products_task_status_wrong_account is the
+# scenario that asserts REFERENCE_NOT_FOUND (verified in
+# dist/compliance/3.1.1/domains/media-buy/scenarios/get_products_async.yaml).
+# list_products_task_wrong_account is a related scenario in the same file but
+# grades an empty task list (no expect_error) — not the REFERENCE_NOT_FOUND
+# analogue; do not cite it as one.
 #
 # @a2a: these are protocol methods, not AdCP skills — there is no MCP or REST
 # equivalent to parametrize across. The denial oracle grades the live v0.3
@@ -78,6 +84,13 @@ Feature: A2A in-memory task ownership for tasks/get and tasks/cancel (local)
     Given an in-memory A2A task "task-orphan-1" with no owner record
     When the "owner" calls tasks/get for task "task-orphan-1"
     Then the A2A task response should be a JSON-RPC task-not-found error for "task-orphan-1"
+
+  @T-A2A-TASK-OWNERSHIP-no-owner-cancel @a2a
+  Scenario: A task present without an owner record is denied and not mutated via tasks/cancel
+    Given an in-memory A2A task "task-orphan-2" with no owner record
+    When the "owner" calls tasks/cancel for task "task-orphan-2"
+    Then the A2A task response should be a JSON-RPC task-not-found error for "task-orphan-2"
+    And the stored task "task-orphan-2" should be in state WORKING
 
   @T-A2A-TASK-OWNERSHIP-unauth-get @a2a
   Scenario: An unauthenticated caller gets an auth failure, not task-not-found

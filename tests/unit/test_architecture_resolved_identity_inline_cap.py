@@ -28,7 +28,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import (
+    assert_inline_resolved_identity_matcher_self_test,
+    find_inline_resolved_identity_calls,
+)
 
 # Per-file caps for inline ``ResolvedIdentity(...)`` constructions in
 # ``tests/`` (excluding ``test_a2a*.py`` files — those are zero-tolerance
@@ -130,11 +133,10 @@ def _is_a2a_test_file(path: Path) -> bool:
 def _count_inline_resolved_identity(filepath: Path) -> list[int]:
     """Return line numbers of inline ``ResolvedIdentity(...)`` calls.
 
-    Catches both direct (``ResolvedIdentity(...)``) and attribute
-    (``mod.ResolvedIdentity(...)``) call shapes. Aliased imports
-    (``from ... import ResolvedIdentity as RI; RI(...)``) are not caught —
-    matching the precedent of the existing A2A guard. In practice the test
-    surface uses direct or module-attribute construction.
+    A2A test files are excluded here — the sister zero-tolerance guard
+    (``test_architecture_a2a_test_uses_factory``) owns them. The AST matcher
+    itself is shared via ``find_inline_resolved_identity_calls`` so both
+    guards agree on what counts as an inline construction.
     """
     if _is_a2a_test_file(filepath):
         return []
@@ -142,14 +144,7 @@ def _count_inline_resolved_identity(filepath: Path) -> list[int]:
         tree = ast.parse(filepath.read_text(), filename=str(filepath))
     except (OSError, SyntaxError):
         return []
-    lines: list[int] = []
-    for node in iter_call_expressions(tree):
-        func = node.func
-        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
-            lines.append(node.lineno)
-        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
-            lines.append(node.lineno)
-    return lines
+    return find_inline_resolved_identity_calls(tree)
 
 
 from tests.unit._per_file_cap_guard import (
@@ -205,24 +200,13 @@ def test_is_a2a_test_file_anchored_rel_not_ancestor_name() -> None:
 
 
 @pytest.mark.arch_guard
-def test_count_inline_resolved_identity_self_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Matcher self-test: detects direct + attribute calls; factory yields 0 (R5-N5b)."""
-    # Point scan helper's a2a predicate off so tmp files are counted.
-    monkeypatch.setattr(
-        "tests.unit.test_architecture_resolved_identity_inline_cap._is_a2a_test_file",
-        lambda _p: False,
-    )
-    positive = tmp_path / "probe.py"
-    positive.write_text(
-        "from src.core.resolved_identity import ResolvedIdentity\n"
-        "import src.core.resolved_identity as mod\n"
-        "ResolvedIdentity(principal_id='a')\n"
-        "mod.ResolvedIdentity(principal_id='b')\n"
-    )
-    assert _count_inline_resolved_identity(positive) == [3, 4]
+def test_count_inline_resolved_identity_self_test() -> None:
+    """Matcher self-test: detects direct + attribute calls; factory yields 0 (R5-N5b).
 
-    negative = tmp_path / "factory_probe.py"
-    negative.write_text(
-        "from tests.factories.principal import PrincipalFactory\nPrincipalFactory.make_identity(principal_id='a')\n"
-    )
-    assert _count_inline_resolved_identity(negative) == []
+    Body hoisted to ``tests.unit._architecture_helpers`` — shared with the
+    sister A2A factory guard's self-test so the detector's coverage isn't
+    duplicated byte-for-byte across both guard files. The a2a-file exclusion
+    wrapped around ``find_inline_resolved_identity_calls`` in this module is
+    covered separately by ``test_is_a2a_test_file_anchored_rel_not_ancestor_name``.
+    """
+    assert_inline_resolved_identity_matcher_self_test()

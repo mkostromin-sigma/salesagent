@@ -13,7 +13,7 @@ import ast
 import logging
 import re
 from pathlib import Path
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from a2a.types import (
@@ -31,7 +31,7 @@ from sqlalchemy.exc import OperationalError
 from src.a2a_server.adcp_a2a_server import (
     AdCPRequestHandler,
     _internal_error_for,
-    _safe_task_id_for_log,
+    _safe_id_for_log,
     _task_not_found_message,
     _TaskOwner,
 )
@@ -98,11 +98,11 @@ def test_task_not_found_message_is_literal_contract():
     assert _task_not_found_message("task_x") == "Task not found: task_x"
 
 
-def test_safe_task_id_for_log_escapes_and_truncates():
+def test_safe_id_for_log_escapes_and_truncates():
     """Sanitizer oracle — allowlist + truncate (R5-C2 / R5-N1a)."""
-    assert _safe_task_id_for_log("a\nWARNING forged") == "a?WARNING?forged"
-    assert _safe_task_id_for_log("x" * 200) == "x" * 100
-    assert "\\" not in _safe_task_id_for_log("A" * 99 + "\r" + "B" * 50)
+    assert _safe_id_for_log("a\nWARNING forged") == "a?WARNING?forged"
+    assert _safe_id_for_log("x" * 200) == "x" * 100
+    assert "\\" not in _safe_id_for_log("A" * 99 + "\r" + "B" * 50)
 
 
 @pytest.mark.parametrize(
@@ -252,9 +252,12 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
     assert "principal_id" not in record_error.call_args.kwargs
     telem = record_error.call_args.args[2]
     assert type(telem) is AdCPTaskNotFoundError
-    assert telem.message == f"Task not found: {_safe_task_id_for_log(forged_id)}"
+    assert telem.message == f"Task not found: {_safe_id_for_log(forged_id)}"
     assert any("Task access denied on" in r.getMessage() for r in caplog.records)
     assert all("\n" not in r.getMessage() for r in caplog.records)
+    # Sibling attempt: task exists and principal is set → ownership_miss=True
+    # (distinguishes this branch from unknown-id for whoever is on call).
+    assert any("ownership_miss=True" in r.getMessage() for r in caplog.records)
 
     caplog.clear()
     with a2a_auth_as(handler, owner):
@@ -269,8 +272,11 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
     assert "principal_id" not in record_unknown.call_args.kwargs
     unknown_telem = record_unknown.call_args.args[2]
     assert type(unknown_telem) is AdCPTaskNotFoundError
-    assert unknown_telem.message == f"Task not found: {_safe_task_id_for_log('task_does_not_exist')}"
+    assert unknown_telem.message == f"Task not found: {_safe_id_for_log('task_does_not_exist')}"
     assert any("Task access denied on" in r.getMessage() for r in caplog.records)
+    # Unknown id: no task record → ownership_miss=False (distinct from the
+    # sibling-attempt branch above).
+    assert any("ownership_miss=False" in r.getMessage() for r in caplog.records)
 
     assert_task_not_found_nondisclosure(deny_exc.value, forged_id)
     assert_task_not_found_nondisclosure(unknown_exc.value, "task_does_not_exist")
@@ -419,6 +425,78 @@ async def test_auth_resolve_failure_leaves_no_orphan_push_config():
     # Thread request-scoped config (no orphan map write) — assert_called_once_with
     # so the weak-mock guard does not flag a split call_args inspection.
     webhook.assert_called_once_with(ANY, status="failed", config=push)
+
+
+class _HasUrl:
+    """``==`` matcher: object has the expected ``.url`` (real config carries a fresh uuid ``.id``)."""
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+
+    def __eq__(self, other: object) -> bool:
+        return getattr(other, "url", None) == self._url
+
+    def __repr__(self) -> str:
+        return f"_HasUrl({self._url!r})"
+
+
+class _HasFailedState:
+    """``==`` matcher: webhook payload's ``.status.state`` is ``TASK_STATE_FAILED``."""
+
+    def __eq__(self, other: object) -> bool:
+        return getattr(getattr(other, "status", None), "state", None) == TaskState.TASK_STATE_FAILED
+
+    def __repr__(self) -> str:
+        return "_HasFailedState()"
+
+
+@pytest.mark.asyncio
+async def test_auth_resolve_failure_still_sends_real_webhook():
+    """The ``config=`` operand actually drives a real send, not just a mock call shape (R5-A1 / #1720 R3-14).
+
+    Companion to ``test_auth_resolve_failure_leaves_no_orphan_push_config``,
+    which patches ``_send_protocol_webhook`` out and can never detect a
+    regression to the early-map-write shape or to dropping the ``config=``
+    operand entirely. This test leaves ``_send_protocol_webhook`` real and
+    patches only the webhook service it calls, so it reddens on either
+    reversion.
+    """
+    from a2a.types import SendMessageConfiguration, TaskPushNotificationConfig
+
+    from tests.utils.a2a_helpers import create_a2a_message_with_skill
+
+    handler = AdCPRequestHandler()
+    push = TaskPushNotificationConfig(url="https://example.com/hook")
+    params = SendMessageRequest(
+        message=create_a2a_message_with_skill("get_products", {"brief": "test"}),
+        configuration=SendMessageConfiguration(task_push_notification_config=push),
+    )
+    ctx = make_a2a_context(auth_token="tok", headers={"host": "test.example.com"})
+
+    mock_service = AsyncMock()
+    mock_service.send_notification.return_value = True
+
+    with (
+        patch.object(handler, "_get_auth_token", return_value="tok"),
+        patch.object(handler, "_resolve_a2a_identity", side_effect=RuntimeError("resolve exploded")),
+        patch(
+            "src.a2a_server.adcp_a2a_server.get_protocol_webhook_service",
+            return_value=mock_service,
+        ),
+    ):
+        with pytest.raises(InternalError):
+            await handler.on_message_send(params, context=ctx)
+
+    # Equality matchers (not exact objects — push_notification_config carries a
+    # freshly minted uuid; payload is a real create_a2a_webhook_payload() build)
+    # so the single assert_called_once_with() stays atomic per
+    # test_architecture_weak_mock_assertions.py instead of splitting count and
+    # argument checks across two statements.
+    mock_service.send_notification.assert_called_once_with(
+        push_notification_config=_HasUrl(push.url),
+        payload=_HasFailedState(),
+        metadata=ANY,
+    )
 
 
 def test_resolve_identity_without_principal_id_raises_invalid_request():

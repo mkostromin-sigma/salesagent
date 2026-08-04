@@ -225,19 +225,24 @@ DISCOVERY_SKILLS = frozenset(
 def _task_not_found_message(task_id: str) -> str:
     """Buyer-facing not-found message (wire raise + deny telemetry when ids match).
 
-    Callers that sanitize for logs (``_safe_task_id_for_log``) may pass a different
+    Callers that sanitize for logs (``_safe_id_for_log``) may pass a different
     id than the raw wire raise — both still use this formatter.
     """
     return f"Task not found: {task_id}"
 
 
-def _safe_task_id_for_log(task_id: str) -> str:
-    """Neutralize attacker-controlled task ids before logs / buyer-facing messages.
+def _safe_id_for_log(client_id: str) -> str:
+    """Neutralize attacker-controlled ids before logs / buyer-facing messages.
 
-    Allowlist keeps ``task_<hex>``-shaped ids intact; everything else becomes ``?``.
-    Truncate after substitution so a trailing escape cannot leave a lone backslash.
+    Covers any client-supplied identifier interpolated into a message that
+    reaches the compat-adapter ``logger.exception`` frame — task ids, push
+    notification config ids, and skill names alike; a raw newline in any of
+    them can forge a standalone log record. Allowlist keeps
+    ``[A-Za-z0-9_.:-]``-shaped ids intact; everything else becomes ``?``.
+    Truncate after substitution so a trailing escape cannot leave a lone
+    backslash.
     """
-    return re.sub(r"[^A-Za-z0-9_.:-]", "?", task_id)[:100]
+    return re.sub(r"[^A-Za-z0-9_.:-]", "?", client_id)[:100]
 
 
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
@@ -1165,15 +1170,21 @@ class AdCPRequestHandler(RequestHandler):
         live-server test pins the current reality.
 
         The requested id is put on both the message and structured ``data``
-        (sanitized via ``_safe_task_id_for_log`` so control characters cannot
+        (sanitized via ``_safe_id_for_log`` so control characters cannot
         forge log lines one frame away in the compat adapter). Only the message
         reaches a client today: the same compat adapter that flattens the code
         to ``-32603`` rebuilds the error as ``CoreInternalError(message=str(e))``,
         which drops ``data`` — driving the real route returns ``data: null``.
-        Populating it is still correct and becomes readable when #1670 closes,
-        the same as the code.
+
+        Populating ``data`` here does NOT yet conform to either spec's target
+        shape for this field: A2A v1.0 §3.3.2/§9.5 requires ``error.data`` to be
+        an array of objects each carrying a ``@type`` key, and AdCP 3.1.1 places
+        the two-layer envelope in an artifact DataPart on a failed Task, not in
+        the transport error object — this two-layer dict is neither. It becomes
+        reachable (and worth reshaping to a real target) only when #1670 lifts
+        v0.3 flattening; until then it is inert and this is a placeholder.
         """
-        safe_id = _safe_task_id_for_log(task_id)
+        safe_id = _safe_id_for_log(task_id)
         adcp_err = AdCPTaskNotFoundError(message=_task_not_found_message(safe_id))
         data = build_two_layer_error_envelope(adcp_err)
         data["task_id"] = safe_id
@@ -1200,14 +1211,17 @@ class AdCPRequestHandler(RequestHandler):
 
         task = self.tasks.get(task_id)
         expected_owner = _TaskOwner(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
-        # Fail closed on null principal (must not match a null-owner row) and
-        # evaluate ownership unconditionally (error-handling.mdx § Side effects).
-        if task is None or not identity.principal_id or self._task_owners.get(task_id) != expected_owner:
+        # Bind the ownership compare before the ``if`` so it runs on every
+        # call, not only when ``or`` short-circuits past it (error-handling.mdx
+        # § Side effects: resolve-then-authorize MUST be unconditional). Fail
+        # closed on null principal too (must not match a null-owner row).
+        owner_ok = self._task_owners.get(task_id) == expected_owner
+        if task is None or not identity.principal_id or not owner_ok:
             # Wire must stay indistinguishable (existence oracle). Stdlib log may
             # branch for operators; side-effect sinks MUST stay symmetric
             # (error-handling.mdx:206-207) — both omit tenant/principal so feeds
             # self-skip (no asymmetric audit flood).
-            log_task_id = _safe_task_id_for_log(task_id)
+            log_task_id = _safe_id_for_log(task_id)
             ownership_miss = task is not None and bool(identity.principal_id)
             # Structurally identical traces on both branches (error-handling.mdx:207).
             logger.warning(
@@ -1287,10 +1301,11 @@ class AdCPRequestHandler(RequestHandler):
 
         Retrieves the push notification configuration for a specific config ID.
         """
+        operation = "get_push_notification_config"
         tool_context = None
         try:
-            identity = self._authenticate(context, operation="get_push_notification_config")
-            tool_context = self._make_tool_context(identity, "get_push_notification_config")
+            identity = self._authenticate(context, operation=operation)
+            tool_context = self._make_tool_context(identity, operation)
 
             config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
             if not config_id:
@@ -1304,7 +1319,9 @@ class AdCPRequestHandler(RequestHandler):
                 )
 
                 if not config:
-                    raise TaskNotFoundError(message=f"Push notification config not found: {config_id}")
+                    raise TaskNotFoundError(
+                        message=f"Push notification config not found: {_safe_id_for_log(config_id)}"
+                    )
 
                 response_id = config.id
                 response_url = config.url
@@ -1336,12 +1353,12 @@ class AdCPRequestHandler(RequestHandler):
         except Exception as e:
             record_boundary_error(
                 "a2a",
-                "get_push_notification_config",
+                operation,
                 e,
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _internal_error_for("get push notification config", e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     async def on_create_task_push_notification_config(
         self,
@@ -1353,12 +1370,15 @@ class AdCPRequestHandler(RequestHandler):
         Creates or updates a push notification configuration for async operation callbacks.
         Buyers use this to register webhook URLs where they want to receive status updates.
         """
+        # One local for all four literals below (auth op id, tool_context op id,
+        # boundary-error op id, InternalError phrase) so they cannot drift —
+        # they were previously four independent literals kept in sync only by
+        # comments.
+        operation = "set_push_notification_config"
         tool_context = None
         try:
-            # Op id must match tool_context + body error path ("set …") so auth
-            # failures join the same method vocabulary.
-            identity = self._authenticate(context, operation="set_push_notification_config")
-            tool_context = self._make_tool_context(identity, "set_push_notification_config")
+            identity = self._authenticate(context, operation=operation)
+            tool_context = self._make_tool_context(identity, operation)
 
             # In a2a-sdk 1.0, TaskPushNotificationConfig is a flat protobuf message
             # with fields: tenant, id, task_id, url, token, authentication
@@ -1417,12 +1437,12 @@ class AdCPRequestHandler(RequestHandler):
         except Exception as e:
             record_boundary_error(
                 "a2a",
-                "set_push_notification_config",
+                operation,
                 e,
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _internal_error_for("set push notification config", e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     async def on_list_task_push_notification_configs(
         self,
@@ -1433,10 +1453,11 @@ class AdCPRequestHandler(RequestHandler):
 
         Returns all active push notification configurations for the authenticated principal.
         """
+        operation = "list_push_notification_configs"
         tool_context = None
         try:
-            identity = self._authenticate(context, operation="list_push_notification_configs")
-            tool_context = self._make_tool_context(identity, "list_push_notification_configs")
+            identity = self._authenticate(context, operation=operation)
+            tool_context = self._make_tool_context(identity, operation)
 
             with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
                 assert uow.push_notification_configs is not None
@@ -1472,12 +1493,12 @@ class AdCPRequestHandler(RequestHandler):
         except Exception as e:
             record_boundary_error(
                 "a2a",
-                "list_push_notification_configs",
+                operation,
                 e,
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _internal_error_for("list push notification configs", e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     async def on_delete_task_push_notification_config(
         self,
@@ -1488,10 +1509,11 @@ class AdCPRequestHandler(RequestHandler):
 
         Marks a push notification configuration as inactive (soft delete).
         """
+        operation = "delete_push_notification_config"
         tool_context = None
         try:
-            identity = self._authenticate(context, operation="delete_push_notification_config")
-            tool_context = self._make_tool_context(identity, "delete_push_notification_config")
+            identity = self._authenticate(context, operation=operation)
+            tool_context = self._make_tool_context(identity, operation)
 
             config_id = params.id
             if not config_id:
@@ -1504,7 +1526,9 @@ class AdCPRequestHandler(RequestHandler):
                     principal_id=tool_context.principal_id,
                 )
                 if not deleted:
-                    raise TaskNotFoundError(message=f"Push notification config not found: {config_id}")
+                    raise TaskNotFoundError(
+                        message=f"Push notification config not found: {_safe_id_for_log(config_id)}"
+                    )
 
             logger.info("Deleted push notification config: %s for tenant %s", config_id, tool_context.tenant_id)
             return None
@@ -1514,12 +1538,12 @@ class AdCPRequestHandler(RequestHandler):
         except Exception as e:
             record_boundary_error(
                 "a2a",
-                "delete_push_notification_config",
+                operation,
                 e,
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _internal_error_for("delete push notification config", e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     async def on_get_extended_agent_card(
         self,
@@ -1713,7 +1737,9 @@ class AdCPRequestHandler(RequestHandler):
 
         if skill_name not in skill_handlers:
             available_skills = list(skill_handlers.keys())
-            raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
+            raise MethodNotFoundError(
+                message=f"Unknown skill '{_safe_id_for_log(skill_name)}'. Available skills: {available_skills}"
+            )
 
         try:
             handler = skill_handlers[skill_name]

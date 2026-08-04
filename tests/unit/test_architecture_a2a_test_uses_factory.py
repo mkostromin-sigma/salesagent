@@ -19,7 +19,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import (
+    assert_inline_resolved_identity_matcher_self_test,
+    find_inline_resolved_identity_calls,
+)
 
 
 def _a2a_test_files() -> list[Path]:
@@ -33,14 +36,7 @@ def _a2a_test_files() -> list[Path]:
 
 def _find_resolved_identity_calls(path: Path) -> list[int]:
     tree = ast.parse(path.read_text(), filename=str(path))
-    lines: list[int] = []
-    for node in iter_call_expressions(tree):
-        func = node.func
-        if isinstance(func, ast.Name) and func.id == "ResolvedIdentity":
-            lines.append(node.lineno)
-        elif isinstance(func, ast.Attribute) and func.attr == "ResolvedIdentity":
-            lines.append(node.lineno)
-    return lines
+    return find_inline_resolved_identity_calls(tree)
 
 
 @pytest.mark.arch_guard
@@ -64,19 +60,11 @@ def test_a2a_test_files_use_principal_factory_make_identity():
 
 
 @pytest.mark.arch_guard
-def test_find_resolved_identity_calls_self_test(tmp_path: Path) -> None:
-    """Matcher self-test for the A2A factory guard (R5-N5b)."""
-    positive = tmp_path / "test_a2a_probe.py"
-    positive.write_text(
-        "from src.core.resolved_identity import ResolvedIdentity\n"
-        "import src.core.resolved_identity as mod\n"
-        "ResolvedIdentity(principal_id='a')\n"
-        "mod.ResolvedIdentity(principal_id='b')\n"
-    )
-    assert _find_resolved_identity_calls(positive) == [3, 4]
+def test_find_resolved_identity_calls_self_test() -> None:
+    """Matcher self-test for the A2A factory guard (R5-N5b).
 
-    negative = tmp_path / "test_a2a_factory.py"
-    negative.write_text(
-        "from tests.factories.principal import PrincipalFactory\nPrincipalFactory.make_identity(principal_id='a')\n"
-    )
-    assert _find_resolved_identity_calls(negative) == []
+    Body hoisted to ``tests.unit._architecture_helpers`` — shared with the
+    sister per-file cap guard's self-test so the detector's coverage isn't
+    duplicated byte-for-byte across both guard files.
+    """
+    assert_inline_resolved_identity_matcher_self_test()
