@@ -1370,28 +1370,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
                 "response for sandbox accounts (BR-RULE-209 INV-4)"
             ),
-            # Async submitted envelope: CreativeSyncEnv.call_a2a uses
-            # sync_creatives_raw (not _run_a2a_handler), so wire_dict() fails
-            # with "wire_response missing" before the submitted envelope can be
-            # graded — that harness gap is the proximate cause on the default
-            # [a2a] node. Underlying SPEC-PRODUCTION GAP: sync_creatives has no
-            # submitted envelope (_sync_creatives_impl only returns the success
-            # variant). Poll step unbound until create→poll seam exists (#1780).
-            "T-UC-006-main-async-submitted": (
-                "HARNESS GAP (proximate): CreativeSyncEnv.call_a2a does not stash "
-                "wire_response, so wire_dict() fails before grading. "
-                "SPEC-PRODUCTION GAP (underlying): sync_creatives has no submitted "
-                "envelope — _sync_creatives_impl only returns the success variant"
-            ),
-            # Same submitted-envelope gap as main-async-submitted; no poll step,
-            # so this entry retains the production-gap ratchet (flips when the
-            # envelope lands). A2A node also blocked by the wire_response stash.
-            "T-UC-006-sandbox-submitted-no-flag": (
-                "SPEC-PRODUCTION GAP: sync_creatives has no submitted envelope — "
-                "sandbox INV-11 (omit sandbox on submitted) cannot be graded until "
-                "status='submitted' with a pollable task_id is emitted "
-                "(A2A also blocked by CreativeSyncEnv wire_response stash gap)"
-            ),
+            # NOTE: T-UC-006-main-async-submitted and T-UC-006-sandbox-submitted-no-flag
+            # are NOT wired here (see the UC-006 harness-selection branch below) — both
+            # fall through to the blanket "UC-006 harness not yet wired" xfail, same as
+            # before #1720's poll-step seam. Wiring them into CreativeSyncEnv only to
+            # strict-xfail on the still-open SPEC-PRODUCTION GAP (sync_creatives emits no
+            # `submitted` envelope) would grow the strict-xfail registry to park a gap
+            # instead of closing it (shrink-only rule). Re-wire once _sync_creatives_impl
+            # emits the `submitted` envelope, so both scenarios pass outright.
             # Sandbox: invalid format_id does not trigger validation error at _impl level
             "T-UC-006-sandbox-validation": (
                 "SPEC-PRODUCTION GAP: production does not validate format_id pattern "

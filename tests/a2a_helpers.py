@@ -13,7 +13,12 @@ from types import MappingProxyType
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
+from a2a.server.routes.common import ServerCallContextBuilder
+from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 from a2a.types import CancelTaskRequest, GetTaskRequest, Task, TaskNotFoundError, TaskState, TaskStatus
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.testclient import TestClient
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _safe_task_id_for_log, _TaskOwner
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
@@ -197,6 +202,60 @@ def assert_task_not_found_nondisclosure(
     blob = f"{exc.message}{exc.data!s}"
     for needle in forbidden_substrings:
         assert needle not in blob
+
+
+class _XAdcpAuthContextBuilder(ServerCallContextBuilder):
+    """Per-request token extraction on the harness's ``x-adcp-auth`` contract.
+
+    Not ``Authorization: Bearer`` — both are production-valid, but pinning the
+    wire unit test to a second header vocabulary means the A2A auth-context
+    seam has to change in two places on a future edit (#1720 review).
+    """
+
+    def build(self, request: Request) -> ServerCallContext:
+        token = request.headers.get("x-adcp-auth") or None
+        return ServerCallContext(
+            state={
+                AUTH_CONTEXT_STATE_KEY: AuthContext(
+                    auth_token=token,
+                    headers=auth_headers_mapping(dict(request.headers.items())),
+                )
+            }
+        )
+
+
+def build_a2a_jsonrpc_client(handler: AdCPRequestHandler) -> TestClient:
+    """Shared route+client build for the live v0.3-compat JSON-RPC wire grade.
+
+    Drives the same ``create_jsonrpc_routes(..., enable_v0_3_compat=True)``
+    production call on one ``x-adcp-auth`` auth contract. Callers POST with an
+    ``{"x-adcp-auth": token}`` header rather than hand-rolling a new
+    route+client+auth-header build per call site.
+    """
+    routes = create_jsonrpc_routes(
+        request_handler=handler,
+        rpc_url="/a2a",
+        context_builder=_XAdcpAuthContextBuilder(),
+        enable_v0_3_compat=True,
+    )
+    return TestClient(Starlette(routes=routes))
+
+
+def assert_wire_no_identity_leak(
+    error: Mapping[str, object],
+    needles: tuple[str, ...] = OWNED_TASK_FORBIDDEN_SUBSTRINGS,
+) -> None:
+    """Wire-dict sibling of ``assert_task_not_found_nondisclosure`` (#1720 review).
+
+    The object-altitude oracle only grades a ``TaskNotFoundError`` instance;
+    the wire/BDD altitude captures a plain JSON-RPC error dict instead, so it
+    needs its own sweep over the *same* forbidden-substring set — the wire
+    path is the copy most likely to be missed if the non-disclosure policy
+    changes.
+    """
+    blob = f"{error.get('message', '')}{error.get('data')!s}"
+    for needle in needles:
+        assert needle not in blob, f"identity leak {needle!r} in wire error body: {error!r}"
 
 
 def assert_wire_task_not_found(err: Mapping[str, object], task_id: str) -> None:

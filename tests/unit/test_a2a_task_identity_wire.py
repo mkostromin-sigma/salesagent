@@ -1,11 +1,12 @@
 """In-process JSON-RPC wire grade for A2A task ownership (#1702 / #1720).
 
 live_server xfails only POST an unknown id — they never hit the owner-compare
-branch. This builds the same create_jsonrpc_routes(..., enable_v0_3_compat=True)
-routing/dispatch/error-shaping path production uses (auth extraction is
-hand-rolled here — no middleware; see ``_AuthHeaderContextBuilder``), seeds an
-owned in-memory task on the handler instance, and asserts sibling denial matches
-unknown-id on the wire (code/message shape).
+branch. Routes through the shared ``build_a2a_jsonrpc_client`` (``tests/a2a_helpers.py``),
+which drives the same ``create_jsonrpc_routes(..., enable_v0_3_compat=True)``
+routing/dispatch/error-shaping path production uses over the harness's
+``x-adcp-auth`` header contract (no middleware — the builder extracts the
+token directly), seeds an owned in-memory task on the handler instance, and
+asserts sibling denial matches unknown-id on the wire (code/message shape).
 """
 
 from __future__ import annotations
@@ -13,55 +14,22 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-from a2a.server.context import ServerCallContext
-from a2a.server.routes.common import ServerCallContextBuilder
-from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
-from starlette.applications import Starlette
-from starlette.requests import Request
 from starlette.testclient import TestClient
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from tests.a2a_helpers import (
     OWNED_TASK_ID,
     OWNED_TASK_OWNER_TOK,
     OWNED_TASK_SIBLING_TOK,
     TASK_METHOD_MATRIX,
     assert_wire_task_not_found,
-    auth_headers_mapping,
+    build_a2a_jsonrpc_client,
     seeded_owned_a2a_handler,
     seeded_owner_sibling_resolver,
 )
 
 
-class _AuthHeaderContextBuilder(ServerCallContextBuilder):
-    """Minimal builder: Authorization Bearer → AuthContext (no middleware)."""
-
-    def build(self, request: Request) -> ServerCallContext:
-        auth = request.headers.get("authorization", "")
-        token = auth[7:].strip() if auth.lower().startswith("bearer ") else None
-        return ServerCallContext(
-            state={
-                AUTH_CONTEXT_STATE_KEY: AuthContext(
-                    auth_token=token,
-                    headers=auth_headers_mapping(dict(request.headers.items())),
-                )
-            }
-        )
-
-
-def _client_for(handler: AdCPRequestHandler) -> TestClient:
-    routes = create_jsonrpc_routes(
-        request_handler=handler,
-        rpc_url="/a2a",
-        context_builder=_AuthHeaderContextBuilder(),
-        enable_v0_3_compat=True,
-    )
-    return TestClient(Starlette(routes=routes))
-
-
 def _post_task(client: TestClient, *, method: str, task_id: str, token: str | None) -> dict:
-    headers = {"Authorization": f"Bearer {token}"} if token is not None else {}
+    headers = {"x-adcp-auth": token} if token is not None else {}
     response = client.post(
         "/a2a",
         json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
@@ -81,7 +49,7 @@ def test_sibling_wire_error_matches_unknown_id(method):
     handler = seeded_owned_a2a_handler()
     resolve = seeded_owner_sibling_resolver()
 
-    client = _client_for(handler)
+    client = build_a2a_jsonrpc_client(handler)
     with (
         patch("src.core.resolved_identity.resolve_identity", side_effect=resolve),
         patch.object(handler, "_log_a2a_operation"),
@@ -106,7 +74,7 @@ def test_sibling_wire_error_matches_unknown_id(method):
 def test_unauthenticated_wire_is_auth_failure_not_task_not_found(method):
     """No Authorization → auth-failure shape, distinct from not-found on the wire."""
     handler = seeded_owned_a2a_handler()
-    client = _client_for(handler)
+    client = build_a2a_jsonrpc_client(handler)
     with patch.object(handler, "_log_a2a_operation"):
         body = _post_task(client, method=method, task_id=OWNED_TASK_ID, token=None)
 
