@@ -20,19 +20,39 @@ from tests.utils.workflow_task_seed import create_principal_owned_workflow_step
 
 
 class GetTaskWireResponse(BaseModel):
-    """Minimal success-path wire shape for get_task (extra fields allowed)."""
+    """Full success-path wire shape for get_task — every returned field declared.
 
-    model_config = ConfigDict(extra="allow")
+    ``extra="allow"`` with only 3 of ~12 fields would let a leaked or dropped
+    field pass silently on the payload this PR gates access to; this model
+    mirrors the full ``task_detail`` dict built in
+    ``src.core.tools.task_management.get_task`` so a shape drift reddens.
+    ``extra="forbid"`` (no default "ignore") so a leaked field reddens too,
+    not just a dropped one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     task_id: str
-    status: str
     context_id: str | None = None
+    status: str
+    type: str
+    tool_name: str
+    owner: str
+    created_at: str
+    updated_at: str | None = None
+    request_data: dict[str, Any] | None = None
+    response_data: dict[str, Any] | None = None
+    error_message: str | None = None
+    associated_objects: list[dict[str, Any]]
 
 
 class CompleteTaskWireResponse(BaseModel):
-    """Minimal success-path wire shape for complete_task."""
+    """Full success-path wire shape for complete_task — every returned field declared.
 
-    model_config = ConfigDict(extra="allow")
+    ``extra="forbid"`` so a leaked field reddens too, not just a dropped one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     task_id: str
     status: str

@@ -695,6 +695,15 @@ class TestA2ASkillInvocation:
         # equality would force advertising UnsupportedOperation stubs.
         missing = advertised - handlers
         assert not missing, f"Advertised skills without handlers: {sorted(missing)}"
+        # Other direction: a handler dropped from the card (but kept dispatchable)
+        # would leave `missing` empty, making the skill undiscoverable to buyers.
+        # Pin this PR's two new skills as a floor so that regression reddens.
+        assert {"get_task", "complete_task"} <= advertised
+        # Value-type contract: `_skill_handlers` values are plain strings resolved
+        # via `getattr` at dispatch, so a typo'd handler name is invisible to the
+        # key-only checks above — assert every value actually resolves.
+        unresolvable = [name for name in handler._skill_handlers.values() if not hasattr(handler, name)]
+        assert not unresolvable, f"Skill handler map has unresolvable method names: {unresolvable}"
 
     # Phase 2: Tests for previously untested skills
 

@@ -32,6 +32,21 @@ def _compiled_last_select(session: MagicMock) -> str:
     return str(session.scalars.call_args[0][0].compile(compile_kwargs={"literal_binds": True}))
 
 
+def _expected_scoped_clause(step_id: str, tenant_id: str, principal_id: str) -> str:
+    """Expected FROM..WHERE tail for a step_id/tenant/principal-scoped SELECT.
+
+    Includes the JOIN (not just the WHERE tail): ``select(...).join(DBContext).where(*c)``
+    and ``select(...).where(*c)`` (a cartesian product that re-leaks across tenants)
+    produce byte-identical WHERE tails, so a WHERE-only slice cannot see a dropped
+    ``.join(DBContext)``.
+    """
+    return (
+        "workflow_steps JOIN contexts ON contexts.context_id = workflow_steps.context_id \n"
+        f"WHERE workflow_steps.step_id = '{step_id}' AND contexts.tenant_id = '{tenant_id}' "
+        f"AND contexts.principal_id = '{principal_id}'"
+    )
+
+
 class TestMediaBuyOrRaise:
     def test_get_by_id_or_raise_returns_when_present(self):
         media_buy = MagicMock()
@@ -102,10 +117,7 @@ class TestWorkflowOrRaise:
         with pytest.raises(AdCPTaskNotFoundError):
             repo.get_by_step_id_or_raise("step-1", principal_id="sibling-b")
         compiled = _compiled_last_select(session)
-        assert compiled.split("WHERE", 1)[1].strip() == (
-            "workflow_steps.step_id = 'step-1' AND contexts.tenant_id = 'tenant-1' "
-            "AND contexts.principal_id = 'sibling-b'"
-        )
+        assert compiled.split("FROM", 1)[1].strip() == _expected_scoped_clause("step-1", "tenant-1", "sibling-b")
 
     def test_get_by_step_id_or_raise_rejects_falsy_principal_id(self):
         """Explicit None/empty must not silently tenant-scope via get_by_step_id."""
@@ -123,7 +135,4 @@ class TestWorkflowOrRaise:
         repo = WorkflowRepository(session, "tenant-1")
         repo.get_by_step_id("step-1", principal_id="principal-a")
         compiled = _compiled_last_select(session)
-        assert compiled.split("WHERE", 1)[1].strip() == (
-            "workflow_steps.step_id = 'step-1' AND contexts.tenant_id = 'tenant-1' "
-            "AND contexts.principal_id = 'principal-a'"
-        )
+        assert compiled.split("FROM", 1)[1].strip() == _expected_scoped_clause("step-1", "tenant-1", "principal-a")

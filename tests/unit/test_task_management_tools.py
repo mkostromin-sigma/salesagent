@@ -10,7 +10,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import pytest
 
 from src.core.database.models import WorkflowStep
-from src.core.exceptions import AdCPTaskNotFoundError
+from src.core.exceptions import VALIDATION_ERROR_SUGGESTION, AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 
 
@@ -211,7 +211,7 @@ class TestGetTaskTool:
             with pytest.raises(AdCPValidationError, match="task_id is required") as exc:
                 await get_task(task_id="", identity=identity)
         assert exc.value.field == "task_id"
-        assert exc.value.suggestion
+        assert exc.value.suggestion == VALIDATION_ERROR_SUGGESTION
         mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()
 
 
@@ -289,6 +289,7 @@ class TestCompleteTaskTool:
             status="completed",
             completed_at=ANY,
             response_data={"manually_completed": True, "completed_by": "principal_123"},
+            principal_id="principal_123",
         )
 
     async def test_complete_task_rejects_invalid_status(self, mock_uow, mock_workflow_repo, sample_tenant):
@@ -316,5 +317,5 @@ class TestCompleteTaskTool:
             with pytest.raises(AdCPValidationError, match="task_id is required") as exc:
                 await complete_task(task_id="", identity=identity)
         assert exc.value.field == "task_id"
-        assert exc.value.suggestion
+        assert exc.value.suggestion == VALIDATION_ERROR_SUGGESTION
         mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()

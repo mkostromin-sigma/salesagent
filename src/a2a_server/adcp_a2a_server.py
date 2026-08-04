@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
@@ -265,35 +265,43 @@ class AdCPRequestHandler(RequestHandler):
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     def _build_skill_handlers(self) -> dict[str, str]:
-        """Map skill names to handler method names (dispatch + card oracle SSOT)."""
+        """Map skill names to handler method names (dispatch + card oracle SSOT).
+
+        Values are derived from the real bound-method references
+        (``.__name__``) rather than hand-typed strings, so a typo'd handler
+        name is a ``mypy``/attribute error at definition time instead of a
+        silent ``getattr`` ``AttributeError`` at dispatch — while the stored
+        value is still the plain method-name string ``getattr`` resolves at
+        call time, keeping ``patch.object`` visible for tests.
+        """
         return {
             # Core AdCP Discovery Skills
-            "get_adcp_capabilities": "_handle_get_adcp_capabilities_skill",
+            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill.__name__,
             # Core AdCP Media Buy Skills
-            "get_products": "_handle_get_products_skill",
-            "create_media_buy": "_handle_create_media_buy_skill",
+            "get_products": self._handle_get_products_skill.__name__,
+            "create_media_buy": self._handle_create_media_buy_skill.__name__,
             # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
-            "list_creative_formats": "_handle_list_creative_formats_skill",
-            "list_accounts": "_handle_list_accounts_skill",
-            "sync_accounts": "_handle_sync_accounts_skill",
-            "list_authorized_properties": "_handle_list_authorized_properties_skill",
+            "list_creative_formats": self._handle_list_creative_formats_skill.__name__,
+            "list_accounts": self._handle_list_accounts_skill.__name__,
+            "sync_accounts": self._handle_sync_accounts_skill.__name__,
+            "list_authorized_properties": self._handle_list_authorized_properties_skill.__name__,
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
-            "update_media_buy": "_handle_update_media_buy_skill",
-            "get_media_buys": "_handle_get_media_buys_skill",
-            "get_media_buy_delivery": "_handle_get_media_buy_delivery_skill",
-            "update_performance_index": "_handle_update_performance_index_skill",
+            "update_media_buy": self._handle_update_media_buy_skill.__name__,
+            "get_media_buys": self._handle_get_media_buys_skill.__name__,
+            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill.__name__,
+            "update_performance_index": self._handle_update_performance_index_skill.__name__,
             # AdCP Spec Creative Management (centralized library approach)
-            "sync_creatives": "_handle_sync_creatives_skill",
-            "list_creatives": "_handle_list_creatives_skill",
-            "create_creative": "_handle_create_creative_skill",
-            "assign_creative": "_handle_assign_creative_skill",
+            "sync_creatives": self._handle_sync_creatives_skill.__name__,
+            "list_creatives": self._handle_list_creatives_skill.__name__,
+            "create_creative": self._handle_create_creative_skill.__name__,
+            "assign_creative": self._handle_assign_creative_skill.__name__,
             # Creative Management & Approval
-            "approve_creative": "_handle_approve_creative_skill",
-            "get_media_buy_status": "_handle_get_media_buy_status_skill",
-            "optimize_media_buy": "_handle_optimize_media_buy_skill",
+            "approve_creative": self._handle_approve_creative_skill.__name__,
+            "get_media_buy_status": self._handle_get_media_buy_status_skill.__name__,
+            "optimize_media_buy": self._handle_optimize_media_buy_skill.__name__,
             # Durable AdCP task tools (principal-scoped get / complete)
-            "get_task": "_handle_get_task_skill",
-            "complete_task": "_handle_complete_task_skill",
+            "get_task": self._handle_get_task_skill.__name__,
+            "complete_task": self._handle_complete_task_skill.__name__,
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         }
@@ -1939,28 +1947,27 @@ class AdCPRequestHandler(RequestHandler):
         a typed task_id that does not exist or is not accessible by the caller
         MUST emit REFERENCE_NOT_FOUND uniformly (sibling principal = unknown id).
 
-        Input contract (task_id presence) lives in ``get_task`` so A2A and MCP
-        emit the same wire error; this handler is a pure forwarder.
+        Input contract (task_id presence *and* type) lives in ``get_task`` so
+        A2A and MCP emit the same wire error; this handler is a pure
+        forwarder and must not coerce the raw value (``or ""`` would turn a
+        supplied falsy scalar like ``0`` into a masquerading empty string).
         """
-        return await core_get_task(task_id=parameters.get("task_id") or "", identity=identity)
+        # cast: static type only — the raw value may not actually be str at
+        # runtime (A2A forwards arbitrary JSON), and `get_task`'s own
+        # `_require_task_id` is what actually validates the type at runtime.
+        return await core_get_task(task_id=cast(str, parameters.get("task_id")), identity=identity)
 
     async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit complete_task skill — principal-scoped durable completion.
 
-        Pure forwarder: ``task_id`` validation and ``status`` default live on the
-        shared tool so transports cannot fork the contract.
+        Pure forwarder: ``task_id`` validation and the ``status`` default both
+        live on the shared tool, so this only forwards whatever the caller
+        sent (never a hand-enumerated, transcribed subset) — the tool
+        signature stays the single source of the contract.
         """
-        kwargs: dict[str, Any] = {
-            "task_id": parameters.get("task_id") or "",
-            "identity": identity,
-        }
-        # Only forward status when the caller sent it — signature default is SSOT.
-        if "status" in parameters:
-            kwargs["status"] = parameters["status"]
-        if "response_data" in parameters:
-            kwargs["response_data"] = parameters["response_data"]
-        if "error_message" in parameters:
-            kwargs["error_message"] = parameters["error_message"]
+        kwargs: dict[str, Any] = {k: v for k, v in parameters.items() if k != "identity"}
+        kwargs.setdefault("task_id", None)
+        kwargs["identity"] = identity
         return await core_complete_task(**kwargs)
 
     # Signals skill handlers removed - should come from dedicated signals agents

@@ -26,6 +26,26 @@ from src.core.resolved_identity import ResolvedIdentity
 logger = logging.getLogger(__name__)
 
 
+def _require_task_id(task_id: Any) -> str:
+    """Validate presence *and* type of ``task_id`` for both durable task tools.
+
+    A2A forwards raw skill parameters, so ``task_id`` can arrive as any JSON
+    type (int, bool, list, ...), not just ``str``. A presence-only check
+    (``if not task_id``) lets a non-string value reach the SQL comparison,
+    where the untyped DB error (e.g. ``UndefinedFunction`` for a numeric
+    literal against a varchar column) escapes as ``SERVICE_UNAVAILABLE`` and
+    leaks the query. Single source of truth so both tools (and both
+    transports, via them) reject the same shapes uniformly.
+    """
+    if not isinstance(task_id, str) or not task_id:
+        raise AdCPValidationError(
+            "task_id is required",
+            field="task_id",
+            suggestion=VALIDATION_ERROR_SUGGESTION,
+        )
+    return task_id
+
+
 async def list_tasks(
     status: str | None = None,
     object_type: str | None = None,
@@ -141,13 +161,7 @@ async def get_task(
     identity = require_identity(identity)
     tenant = require_tenant(identity)
     principal_id = require_principal_id(identity)  # F-03: authenticated principal + ownership key
-
-    if not task_id:
-        raise AdCPValidationError(
-            "task_id is required",
-            field="task_id",
-            suggestion=VALIDATION_ERROR_SUGGESTION,
-        )
+    task_id = _require_task_id(task_id)
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -213,13 +227,7 @@ async def complete_task(
     identity = require_identity(identity)
     tenant = require_tenant(identity)
     principal_id = require_principal_id(identity)  # F-03: an authenticated principal is required
-
-    if not task_id:
-        raise AdCPValidationError(
-            "task_id is required",
-            field="task_id",
-            suggestion=VALIDATION_ERROR_SUGGESTION,
-        )
+    task_id = _require_task_id(task_id)
 
     if status not in ["completed", "failed"]:
         raise AdCPValidationError(
@@ -243,6 +251,7 @@ async def complete_task(
                 status=status,
                 completed_at=completed_time,
                 response_data=response_data or {"manually_completed": True, "completed_by": principal_id},
+                principal_id=principal_id,
             )
         else:
             uow.workflows.update_status(
@@ -251,6 +260,7 @@ async def complete_task(
                 completed_at=completed_time,
                 error_message=error_message or "Task marked as failed manually",
                 response_data=response_data,
+                principal_id=principal_id,
             )
 
         audit_logger = get_audit_logger("task_management", tenant["tenant_id"])

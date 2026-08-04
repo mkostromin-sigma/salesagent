@@ -175,7 +175,12 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # specific subclasses; the mappings stay as a safety net.
     "NOT_FOUND": "INVALID_REQUEST",
     # Entity-specific not-found codes the pinned spec enum does NOT define
-    # as named codes. FORMAT_NOT_FOUND stays INVALID_REQUEST (separate cleanup).
+    # as named codes. FORMAT_NOT_FOUND stays INVALID_REQUEST — tracked cleanup
+    # to REFERENCE_NOT_FOUND per the pinned enum (# FIXME(#1847)): needs
+    # generic (non-resource-qualified) messages at both raise sites plus a
+    # BR-UC-021-ext-e update, since that scenario currently pins a
+    # resource-qualified message this code's target (REFERENCE_NOT_FOUND)
+    # would forbid.
     # TASK_NOT_FOUND → REFERENCE_NOT_FOUND: pinned 3.1.1 enum mandates
     # REFERENCE_NOT_FOUND for a typed task_id that "does not exist or is not
     # accessible by the caller" (uniform not-found for sibling principal).

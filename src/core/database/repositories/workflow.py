@@ -299,13 +299,21 @@ class WorkflowRepository:
         completed_at: datetime | None = None,
         response_data: dict[str, Any] | None = None,
         error_message: str | None = None,
+        principal_id: str | None = None,
     ) -> WorkflowStep | None:
         """Update the status of a workflow step.
 
-        Returns the updated step, or None if not found.
+        When ``principal_id`` is set, the re-fetch also requires
+        ``contexts.principal_id`` to match (buyer-path ownership) so the
+        terminalize write is scoped at the same seam as the read, instead of
+        relying on an earlier scoped read in the same unit of work. Admin/
+        service callers omit it for tenant-only scoping (unchanged).
+
+        Returns the updated step, or None if not found (including "found but
+        not owned by principal_id").
         Does NOT commit — the caller handles that.
         """
-        step = self.get_by_step_id(step_id)
+        step = self.get_by_step_id(step_id, principal_id=principal_id)
         if step is None:
             return None
 

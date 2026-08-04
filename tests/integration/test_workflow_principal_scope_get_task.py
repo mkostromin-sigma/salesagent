@@ -2,7 +2,7 @@
 
 AdCP 3.1.1 L1 Agent and Account Isolation — bind on create, verify on access;
 same REFERENCE_NOT_FOUND on the wire for sibling principal as for unknown id
-(pinned enums/error-code.json @ 04f59d2d5: typed task_id that does not exist
+(pinned enums/error-code.json @ 3.1.1: typed task_id that does not exist
 or is not accessible). UC-027 BDD grades the wire path; this module grades
 the in-process repository + tool contract.
 """
@@ -48,10 +48,18 @@ def _assert_same_not_found(
 
 @pytest.fixture
 def principal_scoped_step(integration_db):
-    """Two principals in one tenant; durable workflow steps under principal A."""
+    """Two principals in one tenant; durable workflow steps under principal A.
+
+    The sibling also owns a durable step (``sibling_step_id``) — without it,
+    the sibling has zero ``contexts`` rows in this tenant, so a regression
+    that drops ``.join(DBContext)`` (cartesian product on ``WorkflowStep`` x
+    ``Context``) would match zero rows either way and the sibling-denial
+    tests below would pass for the wrong reason. Seeding a sibling-owned row
+    means a mis-paired cartesian match can actually leak the owner's step to
+    the sibling, so the tests genuinely exercise the leak path.
+    """
     engine = get_engine()
-    session = SASession(bind=engine)
-    with _bind_factories_to_session(session):
+    with SASession(bind=engine) as session, _bind_factories_to_session(session):
         tenant = TenantFactory(tenant_id="pscope_tenant_get_task")
         owner = PrincipalFactory(
             tenant=tenant,
@@ -73,15 +81,20 @@ def principal_scoped_step(integration_db):
             principal_id=owner.principal_id,
             status="requires_approval",
         )
+        sibling_step = create_principal_owned_workflow_step(
+            tenant_id=tenant.tenant_id,
+            principal_id=sibling.principal_id,
+            status="completed",
+        )
         yield {
             "tenant_id": tenant.tenant_id,
             "owner_principal_id": owner.principal_id,
             "sibling_principal_id": sibling.principal_id,
             "step_id": step.step_id,
             "pending_step_id": pending.step_id,
+            "sibling_step_id": sibling_step.step_id,
             "session": session,
         }
-    session.close()
 
 
 def test_owner_can_fetch_step(principal_scoped_step):

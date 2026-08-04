@@ -64,15 +64,19 @@ def when_owner_invokes_get_task(ctx: dict) -> None:
 
 
 @when("the owner principal invokes complete_task for their pending task")
-def when_owner_invokes_complete_task_probe(ctx: dict) -> None:
-    """Owner get_task probe before sibling complete_task denial (seed must be visible).
+def when_owner_invokes_complete_task(ctx: dict) -> None:
+    """Owner success control — runs the real ``complete_task`` success leg on the wire.
 
-    complete_task would mutate the pending step; use get_task as the reachability
-    control so the later sibling complete_task still targets a pending row.
+    Completing the task here does not break the later sibling-denial check:
+    ownership is filtered on ``contexts.principal_id`` in the SQL WHERE
+    clause, so a sibling's ``complete_task`` attempt on this same task_id
+    still returns REFERENCE_NOT_FOUND (row invisible to them) regardless of
+    the task's resulting status — the row is never visible for them to hit
+    a "already completed" conflict instead.
     """
     authenticate_env_as(ctx, ctx["owner_principal_id"])
     ctx["task_tool"] = "complete_task"
-    dispatch_request(ctx, tool="get_task", task_id=ctx["owner_task_id"])
+    dispatch_request(ctx, tool="complete_task", task_id=ctx["owner_task_id"], status="completed")
 
 
 @then("the wire returns the owner's task_id")
@@ -121,11 +125,16 @@ def then_wire_error_matches_unknown_task(ctx: dict) -> None:
     """Sibling denial must be wire-indistinguishable from unknown task_id.
 
     Grades buyer-facing ``REFERENCE_NOT_FOUND`` via ``assert_wire_error`` on both
-    the sibling result and the unknown-id result (same transport).
+    results (same transport), *and* asserts the full two-layer envelopes are
+    byte-equal — a single-query ownership oracle that emits a distinguishing
+    ``suggestion``/``field``/``message`` on denial would still pass the two
+    independent ``assert_wire_error`` calls, so equality is what closes every
+    channel (code, message, field, details, suggestion) in one line.
     """
-    sibling_result = ctx.get("sibling_result") or ctx["result"]
+    assert "sibling_result" in ctx, "Expected sibling dispatch to have set sibling_result"
+    sibling_result = ctx["sibling_result"]
     unknown_result = ctx.get("unknown_result")
-    assert sibling_result is not None, "Expected sibling dispatch TransportResult"
     sibling_result.assert_wire_error("REFERENCE_NOT_FOUND")
     assert unknown_result is not None, "Expected unknown-id dispatch TransportResult"
     unknown_result.assert_wire_error("REFERENCE_NOT_FOUND")
+    assert sibling_result.wire_error_envelope == unknown_result.wire_error_envelope
