@@ -105,3 +105,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
             testing_context=None,
             **kwargs,
         )
+
+
+# Public omit-arg sentinel (typed ``_Unset``), for wrappers that forward defaults.
+PrincipalFactory.UNSET = _UNSET

@@ -988,11 +988,9 @@ class BaseTestEnv:
         Returns the served Task, or None when the call errored.
         """
         from a2a.server.routes.common import ServerCallContext, ServerCallContextBuilder
-        from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
-        from starlette.applications import Starlette
         from starlette.requests import Request
-        from starlette.testclient import TestClient
 
+        from tests.a2a_helpers import post_a2a_task_method
         from tests.harness.transport import Transport
 
         self._commit_factory_data()
@@ -1015,22 +1013,14 @@ class BaseTestEnv:
             def build(self, request: Request) -> ServerCallContext:
                 return server_context
 
-        routes = create_jsonrpc_routes(
-            request_handler=handler,
-            rpc_url="/a2a",
-            context_builder=_PreparedContextBuilder(),
-            enable_v0_3_compat=True,
-        )
-        client = TestClient(Starlette(routes=routes))
-
         self._last_a2a_task = None
         self._last_a2a_task_error = None
-        response = client.post(
-            "/a2a",
-            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
+        body = post_a2a_task_method(
+            handler,
+            method=method,
+            task_id=task_id,
+            context_builder=_PreparedContextBuilder(),
         )
-        assert response.status_code == 200, f"JSON-RPC {method} returned HTTP {response.status_code}: {response.text}"
-        body = response.json()
         if "error" in body:
             self._last_a2a_task_error = body["error"]
             return None

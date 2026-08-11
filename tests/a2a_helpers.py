@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
+from typing import Any
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
@@ -204,7 +205,7 @@ def assert_task_not_found_nondisclosure(
         assert needle not in blob
 
 
-class _XAdcpAuthContextBuilder(ServerCallContextBuilder):
+class XAdcpAuthContextBuilder(ServerCallContextBuilder):
     """Per-request token extraction on the harness's ``x-adcp-auth`` contract.
 
     Not ``Authorization: Bearer`` — both are production-valid, but pinning the
@@ -224,21 +225,65 @@ class _XAdcpAuthContextBuilder(ServerCallContextBuilder):
         )
 
 
-def build_a2a_jsonrpc_client(handler: AdCPRequestHandler) -> TestClient:
+def build_a2a_jsonrpc_client(
+    handler: AdCPRequestHandler,
+    *,
+    context_builder: ServerCallContextBuilder | None = None,
+) -> TestClient:
     """Shared route+client build for the live v0.3-compat JSON-RPC wire grade.
 
     Drives the same ``create_jsonrpc_routes(..., enable_v0_3_compat=True)``
-    production call on one ``x-adcp-auth`` auth contract. Callers POST with an
-    ``{"x-adcp-auth": token}`` header rather than hand-rolling a new
-    route+client+auth-header build per call site.
+    production call. Default ``context_builder`` is the harness ``x-adcp-auth``
+    contract; callers that need a prepared context (BDD) pass their own.
+    Prefer ``post_a2a_task_method`` for the full POST+200+json boundary.
     """
     routes = create_jsonrpc_routes(
         request_handler=handler,
         rpc_url="/a2a",
-        context_builder=_XAdcpAuthContextBuilder(),
+        context_builder=context_builder or XAdcpAuthContextBuilder(),
         enable_v0_3_compat=True,
     )
     return TestClient(Starlette(routes=routes))
+
+
+def post_a2a_task_method(
+    handler: AdCPRequestHandler,
+    *,
+    method: str,
+    task_id: str,
+    context_builder: ServerCallContextBuilder,
+    headers: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """One production JSON-RPC POST for ``tasks/get`` / ``tasks/cancel``.
+
+    Shared boundary for the harness (``run_a2a_task_method``) and the
+    in-process wire unit test: both build routes with
+    ``enable_v0_3_compat=True``, open a context-managed ``TestClient``, POST the
+    same envelope, assert HTTP 200, and return the parsed JSON-RPC body.
+    """
+    routes = create_jsonrpc_routes(
+        request_handler=handler,
+        rpc_url="/a2a",
+        context_builder=context_builder,
+        enable_v0_3_compat=True,
+    )
+    with TestClient(Starlette(routes=routes)) as client:
+        response = client.post(
+            "/a2a",
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
+            headers=dict(headers) if headers else {},
+        )
+        assert response.status_code == 200, f"JSON-RPC {method} returned HTTP {response.status_code}: {response.text}"
+        return response.json()
+
+
+def assert_wire_auth_failure(err: Mapping[str, object]) -> None:
+    """Exact wire-body oracle for unauthenticated A2A task calls (v0.3 compat)."""
+    assert err == {
+        "code": -32603,
+        "message": "Missing authentication token",
+        "data": None,
+    }
 
 
 def assert_wire_no_identity_leak(
