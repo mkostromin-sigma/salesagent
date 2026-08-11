@@ -247,17 +247,19 @@ def _post_approval_action(admin_session, ids: dict, data: dict):
     assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
 
 
-def _parse_instant(value: str):
-    """Parse a wire ISO-8601 timestamp into an aware datetime.
+def _a2a_artifact_datas(payload) -> list[dict]:
+    """Unwrap ``create_a2a_webhook_payload`` framing into artifact part data dicts.
 
-    Both sides of the confirmed_at comparison go through a parse: the wire carries a
-    string (with a trailing "Z" that fromisoformat wants spelled "+00:00"), the column
-    carries a datetime, and comparing the two textually would grade formatting rather
-    than the instant.
+    Mirrors the double-nested ``part.data.data`` fallback used by both A2A
+    approve and reject webhook assertions (KM Aug-05 DRY).
     """
-    from datetime import datetime
+    from google.protobuf.json_format import MessageToDict
 
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    body = MessageToDict(payload, preserving_proto_field_name=True)
+    artifacts = body.get("artifacts") or []
+    if not artifacts:
+        return []
+    return [part.get("data", {}).get("data", part.get("data", {})) for part in artifacts[0].get("parts", [])]
 
 
 def _webhook_body(captured: dict) -> dict:
@@ -387,9 +389,10 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("status") == "completed", (
             f"approved webhook must embed a completed Success, got status={embedded.get('status')!r}"
         )
-        # Domain field (AdCP 3.1): resolve_canonical_status date-refines a
-        # future-start buy to pending_start (ORM may still say "scheduled").
-        # Protocol TaskStatus on the Success envelope stays "completed".
+        # Domain field (media-buy-status.json@3.1.1): resolve_canonical_status
+        # date-refines a future-start buy to pending_start (ORM may still say
+        # "scheduled"). Protocol TaskStatus on the Success envelope stays
+        # "completed".
         assert embedded.get("media_buy_status") == "pending_start", (
             f"approved webhook must embed media_buy_status matching get_media_buys "
             f"(canonical), got media_buy_status={embedded.get('media_buy_status')!r}"
@@ -508,28 +511,27 @@ class TestAdminMediaBuyRejectWebhook:
         references — the reject fixture hardcoded protocol "mcp", so what this PR
         changed inside that branch (the typed CreateMediaBuyError carrying the
         wire code POLICY_VIOLATION) was unpinned on A2A. The A2A envelope framing
-        (protobuf Task with artifacts[].parts[].data) differs from the MCP
+        (        protobuf Task with artifacts[].parts[].data) differs from the MCP
         payload, so the passing MCP test does not cover it. Asserts on the actual
         protobuf Task create_a2a_webhook_payload emits.
         """
-        from google.protobuf.json_format import MessageToDict
-
         ids = make_pending_media_buy(protocol="a2a")
 
         _post_approval_action(authenticated_admin_session, ids, {"action": "reject", "reason": "Budget too low"})
         assert "payload" in webhook_capture, "A2A reject route did not send a webhook payload"
         task = webhook_capture["payload"]
         # Terminated statuses produce a protobuf a2a Task (create_a2a_webhook_payload contract).
+        from google.protobuf.json_format import MessageToDict
+
         body = MessageToDict(task, preserving_proto_field_name=True)
 
         assert body.get("status", {}).get("state") == "TASK_STATE_REJECTED", (
             f"A2A reject Task must carry the rejected state, got {body.get('status')!r}"
         )
-        artifacts = body.get("artifacts") or []
-        assert artifacts, f"A2A reject Task must embed the result artifact, got {body!r}"
-        datas = [part.get("data", {}).get("data", part.get("data", {})) for part in artifacts[0].get("parts", [])]
+        datas = _a2a_artifact_datas(task)
+        assert datas, f"A2A reject Task must embed the result artifact, got {body!r}"
         result_data = next((d for d in datas if isinstance(d, dict) and "errors" in d), None)
-        assert result_data is not None, f"A2A reject artifact must carry the errors payload, got {artifacts!r}"
+        assert result_data is not None, f"A2A reject artifact must carry the errors payload, got {datas!r}"
         errors = result_data["errors"]
         assert errors and errors[0].get("code") == "POLICY_VIOLATION", (
             f"A2A reject artifact leaked code {errors and errors[0].get('code')!r} — the wire code for a "
@@ -585,23 +587,19 @@ class TestAdminMediaBuyRejectWebhook:
         media_buy_status field. Mirror test_a2a_reject_webhook_carries_policy_violation_task
         for the approve Success path.
         """
-        from google.protobuf.json_format import MessageToDict
-
         ids = make_pending_media_buy(protocol="a2a", media_buy_id="mb_a2a_approve", tenant_id="a2a_appr_tenant")
 
         _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
         assert "payload" in webhook_capture, "A2A approve route did not send a webhook payload"
         task = webhook_capture["payload"]
-        body = MessageToDict(task, preserving_proto_field_name=True)
 
-        artifacts = body.get("artifacts") or []
-        assert artifacts, f"A2A approve Task must embed the result artifact, got {body!r}"
-        datas = [part.get("data", {}).get("data", part.get("data", {})) for part in artifacts[0].get("parts", [])]
+        datas = _a2a_artifact_datas(task)
+        assert datas, f"A2A approve Task must embed the result artifact, got empty datas from {task!r}"
         result_data = next(
             (d for d in datas if isinstance(d, dict) and d.get("media_buy_id") == ids["media_buy_id"]),
             None,
         )
-        assert result_data is not None, f"A2A approve artifact must carry the Success payload, got {artifacts!r}"
+        assert result_data is not None, f"A2A approve artifact must carry the Success payload, got {datas!r}"
         assert result_data.get("media_buy_status") == "pending_start", (
             f"A2A approve must embed canonical media_buy_status matching MCP sibling, "
             f"got media_buy_status={result_data.get('media_buy_status')!r}"
@@ -737,3 +735,44 @@ class TestAdminWorkflowApproveHold:
         mock_execute.assert_called_once_with(ids["media_buy_id"], ids["tenant_id"])
         # make_pending_media_buy seeds start_time = now+7d → scheduled
         _assert_persisted_status(ids, "scheduled", approved_by="test@example.com")
+
+
+class TestAdminApproveAdapterFailureRollback:
+    """Ready-arm adapter failure → shared mark_media_buy_adapter_failed (#1696 / KM Aug-05).
+
+    Both operations and workflows commit optimistic flight status before execute;
+    a (False, error) adapter result must leave ``failed`` on both surfaces.
+    """
+
+    @pytest.mark.parametrize("surface", ["operations", "workflows"])
+    def test_adapter_failure_persists_failed(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+        surface,
+    ):
+        ids = make_pending_media_buy(
+            tenant_id=f"afail_{surface[:3]}_t",
+            media_buy_id=f"mb_afail_{surface[:3]}",
+            principal_id=f"afail_{surface[:3]}_p",
+        )
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+            return_value=(False, "adapter boom"),
+        ) as mock_execute:
+            if surface == "operations":
+                _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+            else:
+                resp = authenticated_admin_session.post(
+                    f"/tenant/{ids['tenant_id']}/workflows/{ids['context_id']}/steps/{ids['step_id']}/approve",
+                    content_type="application/json",
+                    json={},
+                )
+                assert resp.status_code == 500, f"expected 500, got {resp.status_code}: {resp.data!r}"
+                body = resp.get_json()
+                assert body.get("success") is False
+                assert body.get("error") == "adapter boom"
+
+        mock_execute.assert_called_once_with(ids["media_buy_id"], ids["tenant_id"])
+        _assert_persisted_status(ids, "failed", approved_by="test@example.com")

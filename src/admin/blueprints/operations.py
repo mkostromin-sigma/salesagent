@@ -440,8 +440,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # Capture canonical status while media_buy is still attached.
                     # execute_approved_media_buy opens its own session and leaves this
                     # instance expired/detached after commit — do not touch ORM attrs later.
-                    from datetime import UTC, datetime
-
                     from src.core.media_buy_status import resolve_canonical_status
 
                     webhook_media_buy_status = resolve_canonical_status(media_buy, datetime.now(UTC).date())
@@ -454,7 +452,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
 
                     if not success:
-                        mark_media_buy_adapter_failed(media_buy_id, tenant_id)
+                        mark_media_buy_adapter_failed(media_buy_id, tenant_id, error_msg=error_msg)
 
                         flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
                         return redirect(

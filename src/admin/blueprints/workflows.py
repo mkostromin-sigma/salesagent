@@ -232,8 +232,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
 
                     if not success:
-                        logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
-                        mark_media_buy_adapter_failed(media_buy_id, tenant_id)
+                        mark_media_buy_adapter_failed(media_buy_id, tenant_id, error_msg=error_msg)
                         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
                         return jsonify({"success": False, "error": error_msg}), 500
 

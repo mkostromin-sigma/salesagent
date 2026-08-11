@@ -82,12 +82,16 @@ def evaluate_creative_finalize_readiness(
     for principal_id, creative_ids in by_principal.items():
         creatives.extend(creatives_repo.get_by_ids(creative_ids, principal_id))
 
-    unapproved_creative_ids = [c.creative_id for c in creatives if c.status not in FINALIZE_READY_CREATIVE_STATUSES]
+    # dict preserves first-seen order; membership is O(1) (list `in` was O(n)).
+    unapproved_ids: dict[str, None] = {
+        c.creative_id: None for c in creatives if c.status not in FINALIZE_READY_CREATIVE_STATUSES
+    }
     # Missing creative rows (assignment points at deleted/missing) count as not ready.
     found_ids = {c.creative_id for c in creatives}
     for cid in (a.creative_id for a in assignments):
-        if cid not in found_ids and cid not in unapproved_creative_ids:
-            unapproved_creative_ids.append(cid)
+        if cid not in found_ids:
+            unapproved_ids[cid] = None
+    unapproved_creative_ids = list(unapproved_ids)
 
     if unapproved_creative_ids:
         return CreativeFinalizeReadiness(
@@ -159,15 +163,22 @@ def apply_creative_finalize_ready(media_buy: MediaBuy, *, approved_by: str) -> N
     media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
 
 
-def mark_media_buy_adapter_failed(media_buy_id: str, tenant_id: str) -> None:
-    """Roll back to ``failed`` after adapter execute fails on the ready arm.
+def mark_media_buy_adapter_failed(
+    media_buy_id: str,
+    tenant_id: str,
+    *,
+    error_msg: str | None = None,
+) -> None:
+    """Roll back to ``failed`` and log after adapter execute fails on the ready arm.
 
     ``apply_creative_finalize_ready`` commits the optimistic flight-window
     status before adapter execute runs (so a failed adapter still records who
-    approved the buy). This undoes that status — shared by every ready-arm
-    caller so an adapter failure leaves the same persisted status regardless
-    of which admin surface approved the buy.
+    approved the buy). This undoes that status and emits one ``[APPROVAL]``
+    ERROR line — shared by every ready-arm caller so an adapter failure leaves
+    the same persisted status and the same operator trail regardless of which
+    admin surface approved the buy.
     """
+    logger.error("[APPROVAL] Adapter creation failed for %s: %s", media_buy_id, error_msg)
     with get_db_session() as session:
         repo = MediaBuyRepository(session, tenant_id)
         if repo.update_status(media_buy_id, "failed"):

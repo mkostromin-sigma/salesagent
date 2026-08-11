@@ -13,6 +13,7 @@ from src.services.media_buy_creative_readiness import (
     evaluate_creative_finalize_readiness,
     evaluate_creative_finalize_readiness_for_session,
     log_creative_finalize_hold,
+    mark_media_buy_adapter_failed,
     stamp_media_buy_approval,
 )
 
@@ -199,6 +200,30 @@ class TestStampMediaBuyApproval:
         stamp_media_buy_approval(media_buy, approved_by="op@example.com")
         assert media_buy.approved_by == "op@example.com"
         assert isinstance(media_buy.approved_at, datetime)
+
+
+class TestMarkMediaBuyAdapterFailed:
+    def test_logs_approval_error_then_updates_status(self, caplog):
+        mock_repo = MagicMock()
+        mock_repo.update_status.return_value = True
+        mock_session = MagicMock()
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_session)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+
+        with (
+            patch("src.services.media_buy_creative_readiness.get_db_session", return_value=mock_uow),
+            patch(
+                "src.services.media_buy_creative_readiness.MediaBuyRepository",
+                return_value=mock_repo,
+            ),
+            caplog.at_level("ERROR", logger="src.services.media_buy_creative_readiness"),
+        ):
+            mark_media_buy_adapter_failed("mb_x", "tenant_1", error_msg="adapter boom")
+
+        mock_repo.update_status.assert_called_once_with("mb_x", "failed")
+        mock_session.commit.assert_called_once()
+        assert any("[APPROVAL] Adapter creation failed for mb_x: adapter boom" in r.message for r in caplog.records)
 
 
 class TestLogCreativeFinalizeHold:
