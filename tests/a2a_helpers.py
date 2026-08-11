@@ -257,17 +257,12 @@ def post_a2a_task_method(
     """One production JSON-RPC POST for ``tasks/get`` / ``tasks/cancel``.
 
     Shared boundary for the harness (``run_a2a_task_method``) and the
-    in-process wire unit test: both build routes with
-    ``enable_v0_3_compat=True``, open a context-managed ``TestClient``, POST the
-    same envelope, assert HTTP 200, and return the parsed JSON-RPC body.
+    in-process wire unit test. Route+client construction goes through
+    ``build_a2a_jsonrpc_client`` so ``enable_v0_3_compat`` (and any future
+    flag flip) has a single home — do not re-hand-roll
+    ``create_jsonrpc_routes`` here (KM Aug-05).
     """
-    routes = create_jsonrpc_routes(
-        request_handler=handler,
-        rpc_url="/a2a",
-        context_builder=context_builder,
-        enable_v0_3_compat=True,
-    )
-    with TestClient(Starlette(routes=routes)) as client:
+    with build_a2a_jsonrpc_client(handler, context_builder=context_builder) as client:
         response = client.post(
             "/a2a",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": task_id}},
