@@ -222,7 +222,7 @@ class TestMarkMediaBuyAdapterFailed:
             mark_media_buy_adapter_failed("mb_x", "tenant_1", error_msg="adapter boom")
 
         mock_repo.update_status.assert_called_once_with("mb_x", "failed")
-        mock_session.commit.assert_called_once()
+        mock_session.commit.assert_called_once_with()
         assert any("[APPROVAL] Adapter creation failed for mb_x: adapter boom" in r.message for r in caplog.records)
 
 
