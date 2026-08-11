@@ -196,6 +196,22 @@ class TestNestedCreativeAdvisoryAccessor:
         advisory = first_failed_creative_advisory(wire, transport=Transport.MCP)
         assert advisory == {"code": "X_PREBID_CREATIVE_GEMINI_KEY_MISSING", "recovery": "terminal"}
 
+    def test_loud_when_failed_creative_drops_errors_with_response(self):
+        """Present wire + failed creative + dropped errors[] must raise (KM Aug-05)."""
+        from types import SimpleNamespace
+
+        import pytest
+
+        from tests.harness.transport import Transport, first_failed_creative_advisory
+
+        wire = {"creatives": [{"creative_id": "bad", "action": "failed"}]}  # errors[] dropped
+        resp = SimpleNamespace(
+            creatives=[SimpleNamespace(action="failed", errors=[{"code": "X"}])],
+            results=None,
+        )
+        with pytest.raises(AssertionError, match="dropped errors"):
+            first_failed_creative_advisory(wire, transport=Transport.REST, response=resp)
+
     def test_assert_wire_advisory_grades_code_and_recovery(self):
         from tests.harness.transport import Transport, assert_wire_advisory
 
