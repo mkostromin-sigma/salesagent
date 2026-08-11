@@ -171,6 +171,7 @@ def seeded_owned_a2a_handler(
     """Minimal owned in-memory task handler (bypasses ``__init__`` for unit/wire)."""
     handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
     handler.tasks = {task_id: Task(id=task_id, status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED))}
+    handler._task_push_configs = {}
     handler._task_owners = {}
     if record_owner:
         record_a2a_task_owner(handler, task_id, tenant_id=tenant_id, principal_id=principal_id)

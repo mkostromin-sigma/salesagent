@@ -1378,8 +1378,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # submitted envelope (_sync_creatives_impl only returns the success
             # variant). Poll step unbound until create→poll seam exists (#1780).
             "T-UC-006-main-async-submitted": (
-                "HARNESS GAP (proximate): CreativeSyncEnv.call_a2a does not stash "
-                "wire_response, so wire_dict() fails before grading. "
+                "HARNESS GAP (proximate, #1922): CreativeSyncEnv.call_a2a does not "
+                "stash wire_response, so wire_dict() fails before grading. "
                 "SPEC-PRODUCTION GAP (underlying): sync_creatives has no submitted "
                 "envelope — _sync_creatives_impl only returns the success variant"
             ),

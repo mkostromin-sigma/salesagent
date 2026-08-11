@@ -24,30 +24,26 @@ if TYPE_CHECKING:
     from a2a.compat.v0_3.types import TaskState as WireTaskState
     from a2a.types import TaskState
 
-_OWNED_TASK_STATE_BY_NAME = {
-    "WORKING": "TASK_STATE_WORKING",
-    "CANCELED": "TASK_STATE_CANCELED",
-}
-
-# v0.3 compat wire uses lowercase TaskState values (``working`` / ``canceled``).
-_WIRE_TASK_STATE_BY_NAME = {
-    "WORKING": "working",
-    "CANCELED": "canceled",
-}
+# Single Gherkin key set — protobuf / wire values are pure functions of the key.
+_OWNED_TASK_STATE_NAMES = ("WORKING", "CANCELED")
 
 
 def _task_state(name: str) -> TaskState:
     """Resolve a Gherkin state word to the protobuf ``TaskState`` enum member."""
     from a2a.types import TaskState
 
-    return getattr(TaskState, _OWNED_TASK_STATE_BY_NAME[name])
+    if name not in _OWNED_TASK_STATE_NAMES:
+        raise KeyError(name)
+    return getattr(TaskState, f"TASK_STATE_{name}")
 
 
 def _wire_task_state(name: str) -> WireTaskState:
     """Resolve a Gherkin state word to the v0.3 wire ``TaskState`` enum member."""
     from a2a.compat.v0_3.types import TaskState as WireTaskState
 
-    return WireTaskState(_WIRE_TASK_STATE_BY_NAME[name])
+    if name not in _OWNED_TASK_STATE_NAMES:
+        raise KeyError(name)
+    return WireTaskState(name.lower())
 
 
 @given(parsers.parse('an in-memory A2A task "{task_id}" owned by the owning principal'))
@@ -129,7 +125,7 @@ def then_auth_failure_not_task_not_found(ctx: dict) -> None:
     shape by construction, so no separate substring check is needed.
     """
     env = ctx["env"]
-    assert env.last_a2a_task is None, f"Unauth call still returned a Task: {env.last_a2a_task}"
+    assert env.last_a2a_wire_task is None, f"Unauth call still returned a Task: {env.last_a2a_wire_task}"
     error = env.last_a2a_task_error
     assert error is not None, "Expected an authentication failure, got none"
     assert_wire_auth_failure(error)

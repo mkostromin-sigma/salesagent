@@ -255,9 +255,9 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
     assert telem.message == f"Task not found: {_safe_id_for_log(forged_id)}"
     assert any("Task access denied on" in r.getMessage() for r in caplog.records)
     assert all("\n" not in r.getMessage() for r in caplog.records)
-    # Sibling attempt: task exists and principal is set → ownership_miss=True
-    # (distinguishes this branch from unknown-id for whoever is on call).
-    assert any("ownership_miss=True" in r.getMessage() for r in caplog.records)
+    # Operator log must stay structurally identical across deny branches
+    # (no ownership_miss= flag — existence oracle for whoever is on call).
+    assert all("ownership_miss=" not in r.getMessage() for r in caplog.records)
 
     caplog.clear()
     with a2a_auth_as(handler, owner):
@@ -274,9 +274,7 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
     assert type(unknown_telem) is AdCPTaskNotFoundError
     assert unknown_telem.message == f"Task not found: {_safe_id_for_log('task_does_not_exist')}"
     assert any("Task access denied on" in r.getMessage() for r in caplog.records)
-    # Unknown id: no task record → ownership_miss=False (distinct from the
-    # sibling-attempt branch above).
-    assert any("ownership_miss=False" in r.getMessage() for r in caplog.records)
+    assert all("ownership_miss=" not in r.getMessage() for r in caplog.records)
 
     assert_task_not_found_nondisclosure(deny_exc.value, forged_id)
     assert_task_not_found_nondisclosure(unknown_exc.value, "task_does_not_exist")

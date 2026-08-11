@@ -48,7 +48,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-    from src.core.resolved_identity import ResolvedIdentity
     from tests.a2a_helpers import JsonRpcError
     from tests.harness.transport import E2EConfig, Transport, TransportResult
 
@@ -533,13 +532,20 @@ class BaseTestEnv:
             )
         return self._identity_cache[protocol]
 
-    def _resolve_dispatch_identity(self, transport: Transport, identity: Any = _NO_OVERRIDE) -> Any:
+    def _resolve_dispatch_identity(
+        self,
+        transport: Transport,
+        identity: ResolvedIdentity | None | object = _NO_OVERRIDE,
+    ) -> ResolvedIdentity | None:
         """Override-or-default identity for a dispatcher.
 
         ``_NO_OVERRIDE`` → ``identity_for(transport)``; any other value
         (including explicit ``None`` for unauthenticated) is returned as-is.
         """
-        return self.identity_for(transport) if identity is _NO_OVERRIDE else identity
+        if identity is _NO_OVERRIDE:
+            return self.identity_for(transport)
+        assert identity is None or isinstance(identity, ResolvedIdentity)
+        return identity
 
     def _resolve_auth_token(self) -> str | None:
         """Look up the real access_token from the session-bound Principal.
@@ -799,8 +805,7 @@ class BaseTestEnv:
         # The real A2A handler writes audit logs which require the tenant to exist
         # in the DB. Ensure the tenant record exists (idempotent) so audit logging
         # doesn't fail with FK violations on discovery endpoints.
-        if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
-            self._ensure_tenant_for_audit(a2a_identity.tenant_id)
+        self._ensure_audit_tenant(a2a_identity)
 
         # Unpack req object into flat parameters if present.
         # A2A skills accept a flat parameter dict, not a request model.
@@ -1000,8 +1005,7 @@ class BaseTestEnv:
 
         self._commit_factory_data()
         a2a_identity = self._resolve_dispatch_identity(Transport.A2A, identity)
-        if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
-            self._ensure_tenant_for_audit(a2a_identity.tenant_id)
+        self._ensure_audit_tenant(a2a_identity)
 
         handler = self.a2a_handler
 
@@ -1427,6 +1431,12 @@ class BaseTestEnv:
         if setup is not None:
             setup()
             self._session.commit()
+
+    def _ensure_audit_tenant(self, identity: ResolvedIdentity | None) -> None:
+        """No-op unless real-db mode has a tenant-bearing identity."""
+        if not self.use_real_db or identity is None or not identity.tenant_id:
+            return
+        self._ensure_tenant_for_audit(identity.tenant_id)
 
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
         """Create a minimal tenant record if none exists (idempotent).

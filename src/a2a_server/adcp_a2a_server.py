@@ -1222,13 +1222,12 @@ class AdCPRequestHandler(RequestHandler):
             # (error-handling.mdx:206-207) — both omit tenant/principal so feeds
             # self-skip (no asymmetric audit flood).
             log_task_id = _safe_id_for_log(task_id)
-            ownership_miss = task is not None and bool(identity.principal_id)
-            # Structurally identical traces on both branches (error-handling.mdx:207).
+            # Structurally identical traces on both branches (error-handling.mdx:207) —
+            # do not log a branch-differentiating "ownership_miss" flag.
             logger.warning(
-                "Task access denied on %s: task_id=%s ownership_miss=%s caller tenant_id=%s principal_id=%s",
+                "Task access denied on %s: task_id=%s caller tenant_id=%s principal_id=%s",
                 operation,
                 log_task_id,
-                ownership_miss,
                 identity.tenant_id,
                 identity.principal_id,
             )

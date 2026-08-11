@@ -98,24 +98,14 @@ def _find_error_code_kwargs() -> list[tuple[str, str, int]]:
 
 def _find_a2a_recovery_kwargs() -> list[tuple[str, str, int]]:
     """Find recovery= on AdCP*Error constructors under a2a_server (synthesize exempt)."""
-    hits: list[tuple[str, str, int]] = []
-    for py_file in A2A_SERVER_DIR.rglob("*.py"):
-        try:
-            tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        except SyntaxError:
-            continue
-        rel_path = str(py_file.relative_to(REPO_ROOT))
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for child in iter_call_expressions(node):
-                if not _func_targets_adcp_error_or_synthesize(child.func):
-                    continue
-                if _func_is_synthesize(child.func):
-                    continue
-                if any(kw.arg == "recovery" for kw in child.keywords):
-                    hits.append((rel_path, node.name, child.lineno))
-    return hits
+    a2a_prefix = str(A2A_SERVER_DIR.relative_to(REPO_ROOT)) + "/"
+    return [
+        (rel, func, call.lineno)
+        for rel, func, call in _iter_adcp_error_calls()
+        if rel.startswith(a2a_prefix)
+        and not _func_is_synthesize(call.func)
+        and any(kw.arg == "recovery" for kw in call.keywords)
+    ]
 
 
 def _find_error_code_in_details() -> list[tuple[str, str, int]]:
