@@ -110,6 +110,13 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         mock_config.gemini_api_key = None
         self.mock["config"].return_value = mock_config
 
+    @realize_e2e(
+        e2e_unsupported(
+            "generative build grading injects an in-process format mock and "
+            "registry.build_creative AsyncMock; the live e2e creative-agent "
+            "catalog cannot be stubbed mid-suite, and Then steps assert the mock"
+        )
+    )
     def setup_generative_build(
         self,
         format_id: str = "display_gen",
@@ -124,6 +131,10 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         - build_creative AsyncMock with the given return value
         - gemini_api_key on the config mock
         - run_async to return the generative format list
+
+        In-process only (a2a/mcp/rest). Live e2e_rest cannot stub the
+        creative-agent catalog or observe ``registry.build_creative`` —
+        declare E2EUnsupportedSetup so the BDD hook non-strict-xfails e2e.
 
         Returns a format_id dict for use in creative payloads::
 
