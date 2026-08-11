@@ -24,7 +24,7 @@ import pytest
 
 from src.core import creative_agent_registry as creative_agent_registry_module
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
-from src.core.exceptions import AdCPNotFoundError
+from src.core.exceptions import AdCPFormatNotFoundError, AdCPNotFoundError
 
 # The live creative agent URL — reads env var so CI can point at a containerized agent
 CREATIVE_AGENT_URL = os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org")
@@ -367,10 +367,10 @@ class TestFormatResolverIntegration:
         assert fmt.format_id.id == "display_image"
 
     def test_get_format_error_for_nonexistent(self):
-        """Test format_resolver raises clear error for nonexistent format."""
+        """format_resolver raises typed miss with uniform generic message (AdCP 3.1.1)."""
         from src.core.format_resolver import get_format
 
-        with pytest.raises(AdCPNotFoundError) as exc_info:
+        with pytest.raises(AdCPFormatNotFoundError) as exc_info:
             get_format(
                 format_id="nonexistent_format_xyz",
                 agent_url=CREATIVE_AGENT_URL,
@@ -379,5 +379,10 @@ class TestFormatResolverIntegration:
             )
 
         error_msg = str(exc_info.value)
-        assert "Unknown format_id" in error_msg
-        assert "nonexistent_format_xyz" in error_msg
+        assert error_msg == "Reference not found"
+        assert "nonexistent_format_xyz" not in error_msg
+        assert "Unknown format_id" not in error_msg
+        assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
+        assert exc_info.value.wire_error_code == "REFERENCE_NOT_FOUND"
+        assert exc_info.value.recovery == "correctable"
+        assert isinstance(exc_info.value, AdCPNotFoundError)
