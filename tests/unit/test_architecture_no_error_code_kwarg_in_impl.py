@@ -27,7 +27,9 @@ from tests.unit._architecture_helpers import assert_violations_match_allowlist, 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters", REPO_ROOT / "src" / "a2a_server"]
-A2A_SERVER_DIR = REPO_ROOT / "src" / "a2a_server"
+# Prefer filtering _iter_adcp_error_calls() over a second rglob — A2A_SERVER_DIR
+# would restate SCAN_DIRS[2] byte-for-byte (KM Aug-05 extract-then-skip).
+A2A_SERVER_PREFIX = "src/a2a_server/"
 
 # The only sanctioned error_code= sites: the two boundary helpers that call
 # AdCPError.synthesize(). Keyed by (relative_path, enclosing_function_name) so the
@@ -97,12 +99,15 @@ def _find_error_code_kwargs() -> list[tuple[str, str, int]]:
 
 
 def _find_a2a_recovery_kwargs() -> list[tuple[str, str, int]]:
-    """Find recovery= on AdCP*Error constructors under a2a_server (synthesize exempt)."""
-    a2a_prefix = str(A2A_SERVER_DIR.relative_to(REPO_ROOT)) + "/"
+    """Find recovery= on AdCP*Error constructors under a2a_server (synthesize exempt).
+
+    Filters the shared ``_iter_adcp_error_calls()`` walk — do not re-open-code
+    rglob/ast.parse for a narrower root (KM Aug-05).
+    """
     return [
         (rel, func, call.lineno)
         for rel, func, call in _iter_adcp_error_calls()
-        if rel.startswith(a2a_prefix)
+        if rel.startswith(A2A_SERVER_PREFIX)
         and not _func_is_synthesize(call.func)
         and any(kw.arg == "recovery" for kw in call.keywords)
     ]
