@@ -45,9 +45,6 @@ from tests.factories import PrincipalFactory
 # ---------------------------------------------------------------------------
 
 
-_TESTING_CONTEXT_UNSET = object()
-
-
 def make_identity(
     tenant_id="tenant_1",
     principal_id="principal_1",
@@ -66,15 +63,13 @@ def make_identity(
     """
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "adapter_type": "mock"}
-    kwargs: dict = {
-        "principal_id": principal_id,
-        "tenant_id": tenant_id,
-        "tenant": tenant,
-        "protocol": "mcp",
-    }
-    if testing_context is not _TESTING_CONTEXT_UNSET:
-        kwargs["testing_context"] = testing_context
-    return PrincipalFactory.make_identity(**kwargs)
+    return PrincipalFactory.make_identity(
+        principal_id=principal_id,
+        tenant_id=tenant_id,
+        tenant=tenant,
+        protocol="mcp",
+        testing_context=testing_context,
+    )
 
 
 def make_media_buy(
