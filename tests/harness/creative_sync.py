@@ -158,8 +158,12 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # Also configure get_format to return this format for validation
         registry.get_format = AsyncMock(return_value=mock_format)
 
-        # Set gemini API key
+        # Set gemini API key on both lookup surfaces production consults
+        # (tenant dict first, then process-global config).
         self.mock["config"].return_value.gemini_api_key = gemini_api_key
+        tenant = getattr(self.identity, "tenant", None)
+        if isinstance(tenant, dict):
+            tenant["gemini_api_key"] = gemini_api_key
 
         return {"agent_url": agent, "id": format_id}
 
@@ -170,13 +174,16 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         )
     )
     def clear_gemini_api_key(self) -> None:
-        """Clear GEMINI_API_KEY on the in-process config mock (impl-only).
+        """Clear GEMINI_API_KEY on config mock and tenant dict (impl-only).
 
         Live e2e_rest cannot unset the server process env mid-suite — declare
         E2EUnsupportedSetup so the BDD hook non-strict-xfails e2e only while
         a2a/mcp/rest still grade X_PREBID_CREATIVE_GEMINI_KEY_MISSING.
         """
         self.mock["config"].return_value.gemini_api_key = None
+        tenant = getattr(self.identity, "tenant", None)
+        if isinstance(tenant, dict):
+            tenant["gemini_api_key"] = None
 
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.

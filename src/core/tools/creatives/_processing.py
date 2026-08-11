@@ -85,15 +85,17 @@ def _check_gemini_key_or_advisory(
     *,
     action_verb: str,
     creative_format: FormatId,
+    tenant: dict[str, Any],
 ) -> str | SyncCreativeResult:
     """Return the GEMINI API key, or a missing-key advisory result.
 
-    Shared by the update and create generative branches so config lookup,
-    message assembly, and logging stay in one place.
+    Prefer the tenant/account key (DB-backed, harness-controllable) and fall
+    back to the process-global settings key so a tenant that configured its
+    own key is not blocked by a missing server-wide ``GEMINI_API_KEY``.
     """
     from src.core.config import get_config
 
-    gemini_api_key = get_config().gemini_api_key
+    gemini_api_key = tenant.get("gemini_api_key") or get_config().gemini_api_key
     if gemini_api_key:
         return gemini_api_key
     error_msg = f"Cannot {action_verb} generative creative {creative_format.id}: GEMINI_API_KEY not configured"
@@ -247,6 +249,7 @@ def _update_existing_creative(
                         existing_creative.creative_id,
                         action_verb="update",
                         creative_format=creative_format,
+                        tenant=tenant,
                     )
                     if isinstance(gemini_or_advisory, SyncCreativeResult):
                         return (gemini_or_advisory, False)
@@ -454,7 +457,15 @@ def _update_existing_creative(
                     # Creative agent should have generated previews but didn't
                     error_msg = f"Preview generation failed for {existing_creative.creative_id}: no previews returned and no media_url provided"
                     logger.error(f"[sync_creatives] {error_msg}")
-                    return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="transient"), False)
+                    return (
+                        _failed_sync_result(
+                            existing_creative.creative_id,
+                            error_msg,
+                            code="SERVICE_UNAVAILABLE",
+                            recovery="transient",
+                        ),
+                        False,
+                    )
 
         except AdCPConfigurationError as config_error:
             # Residual non-GEMINI configuration errors (GEMINI missing returns early
@@ -567,6 +578,7 @@ def _create_new_creative(
                         creative_id,
                         action_verb="build",
                         creative_format=creative_format,
+                        tenant=tenant,
                     )
                     if isinstance(gemini_or_advisory, SyncCreativeResult):
                         return (gemini_or_advisory, False)
@@ -742,7 +754,15 @@ def _create_new_creative(
                         # Creative agent should have generated previews but didn't
                         error_msg = f"Preview generation failed for {creative_id}: no previews returned and no media_url provided"
                         logger.error(f"[sync_creatives] {error_msg}")
-                        return (_failed_sync_result(creative_id, error_msg, recovery="transient"), False)
+                        return (
+                            _failed_sync_result(
+                                creative_id,
+                                error_msg,
+                                code="SERVICE_UNAVAILABLE",
+                                recovery="transient",
+                            ),
+                            False,
+                        )
 
         except AdCPConfigurationError as config_error:
             # Residual non-GEMINI configuration errors (GEMINI missing returns early
