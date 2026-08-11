@@ -157,7 +157,7 @@ class TestWorkflowOrRaise:
         repo = WorkflowRepository(session, "tenant-1")
         assert repo.update_status("step-1", status="completed", principal_id="owner-a") is step
         assert step.status == "completed"
-        session.flush.assert_called_once()
+        session.flush.assert_called_once_with()
         compiled = _compiled_last_select(session)
         assert compiled.split("FROM", 1)[1].strip() == _expected_scoped_clause("step-1", "tenant-1", "owner-a")
 

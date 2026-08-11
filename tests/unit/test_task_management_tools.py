@@ -11,7 +11,7 @@ import pytest
 
 from src.core.database.models import WorkflowStep
 from src.core.exceptions import VALIDATION_ERROR_SUGGESTION, AdCPTaskNotFoundError
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 
 class TestListTasksTool:
@@ -63,7 +63,7 @@ class TestListTasksTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
@@ -157,7 +157,7 @@ class TestGetTaskTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
@@ -262,7 +262,7 @@ class TestCompleteTaskTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
@@ -347,7 +347,7 @@ class TestCompleteTaskA2AForwarder:
         from src.core.exceptions import AdCPValidationError
 
         handler = object.__new__(AdCPRequestHandler)
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="t1",
             tenant={"tenant_id": "t1"},
