@@ -245,13 +245,9 @@ def get_format(
             if format_ref_id(fmt.format_id) == format_id:
                 return fmt
 
-    # Not found anywhere
-    error_msg = f"Unknown format_id '{format_id}'"
-    if agent_url:
-        error_msg += f" from agent {agent_url}"
-    if tenant_id:
-        error_msg += f" for tenant {tenant_id}"
-    raise AdCPFormatNotFoundError(error_msg)
+    # Uniform response (AdCP 3.1.1): generic message — no format_id / agent_url /
+    # tenant leak via message/field/details. Wire code → REFERENCE_NOT_FOUND.
+    raise AdCPFormatNotFoundError("Reference not found")
 
 
 def _get_product_format_override(

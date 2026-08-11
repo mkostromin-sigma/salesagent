@@ -1808,11 +1808,9 @@ async def _validate_and_convert_format_ids(
         try:
             format_obj = await registry.get_format(agent_url, format_id)
             if not format_obj:
-                raise AdCPFormatNotFoundError(
-                    f"Package {package_idx + 1}, format_ids[{idx}]: Format not found on agent. "
-                    f"agent_url={agent_url}, format_id={format_id!r}. "
-                    f"Use list_creative_formats to discover available formats.",
-                )
+                # Uniform response (AdCP 3.1.1): generic message — no package index /
+                # agent_url / format_id leak. Wire code → REFERENCE_NOT_FOUND.
+                raise AdCPFormatNotFoundError("Reference not found")
         except AdCPError:
             raise
         except Exception as e:

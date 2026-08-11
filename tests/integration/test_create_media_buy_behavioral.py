@@ -1686,6 +1686,8 @@ class TestExtensionObligations:
                 )
 
             assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
+            assert exc_info.value.wire_error_code == "REFERENCE_NOT_FOUND"
+            assert str(exc_info.value) == "Reference not found"
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):
