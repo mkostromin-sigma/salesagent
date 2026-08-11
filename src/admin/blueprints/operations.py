@@ -418,6 +418,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     from src.services.media_buy_creative_readiness import (
                         apply_creative_finalize_ready,
                         evaluate_creative_finalize_readiness_for_session,
+                        mark_media_buy_adapter_failed,
                     )
 
                     readiness = evaluate_creative_finalize_readiness_for_session(
@@ -439,11 +440,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # Capture canonical status while media_buy is still attached.
                     # execute_approved_media_buy opens its own session and leaves this
                     # instance expired/detached after commit — do not touch ORM attrs later.
-                    from datetime import date as date_cls
+                    from datetime import UTC, datetime
 
                     from src.core.media_buy_status import resolve_canonical_status
 
-                    webhook_media_buy_status = resolve_canonical_status(media_buy, date_cls.today())
+                    webhook_media_buy_status = resolve_canonical_status(media_buy, datetime.now(UTC).date())
                     db_session.commit()
 
                     # Ready arm only: create order/line items in adapter
@@ -453,11 +454,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
 
                     if not success:
-                        with get_db_session() as error_session:
-                            error_repo = MediaBuyRepository(error_session, tenant_id)
-                            error_buy = error_repo.update_status(media_buy_id, "failed")
-                            if error_buy:
-                                error_session.commit()
+                        mark_media_buy_adapter_failed(media_buy_id, tenant_id)
 
                         flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
                         return redirect(

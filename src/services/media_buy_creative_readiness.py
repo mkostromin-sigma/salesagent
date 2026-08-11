@@ -14,11 +14,13 @@ from typing import Literal, cast
 
 from sqlalchemy.orm import Session
 
+from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy
 from src.core.database.repositories.creative import (
     CreativeAssignmentRepository,
     CreativeRepository,
 )
+from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
 from src.core.utils import utc_flight_end, utc_flight_start
 
@@ -155,6 +157,21 @@ def apply_creative_finalize_ready(media_buy: MediaBuy, *, approved_by: str) -> N
     """Apply ready outcome: provenance + flight-window status (mirror of hold)."""
     stamp_media_buy_approval(media_buy, approved_by=approved_by)
     media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
+
+
+def mark_media_buy_adapter_failed(media_buy_id: str, tenant_id: str) -> None:
+    """Roll back to ``failed`` after adapter execute fails on the ready arm.
+
+    ``apply_creative_finalize_ready`` commits the optimistic flight-window
+    status before adapter execute runs (so a failed adapter still records who
+    approved the buy). This undoes that status — shared by every ready-arm
+    caller so an adapter failure leaves the same persisted status regardless
+    of which admin surface approved the buy.
+    """
+    with get_db_session() as session:
+        repo = MediaBuyRepository(session, tenant_id)
+        if repo.update_status(media_buy_id, "failed"):
+            session.commit()
 
 
 def _coerce_flight_boundary(
