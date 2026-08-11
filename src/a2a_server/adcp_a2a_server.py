@@ -12,7 +12,7 @@ from collections.abc import AsyncGenerator
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any
 
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
@@ -1952,22 +1952,25 @@ class AdCPRequestHandler(RequestHandler):
         forwarder and must not coerce the raw value (``or ""`` would turn a
         supplied falsy scalar like ``0`` into a masquerading empty string).
         """
-        # cast: static type only — the raw value may not actually be str at
-        # runtime (A2A forwards arbitrary JSON), and `get_task`'s own
-        # `_require_task_id` is what actually validates the type at runtime.
-        return await core_get_task(task_id=cast(str, parameters.get("task_id")), identity=identity)
+        # Forward the raw JSON value — ``get_task`` / ``_require_task_id`` owns
+        # type validation. Do not ``cast`` or coerce here (architecture guard
+        # bans ``typing.cast`` in this module).
+        return await core_get_task(task_id=parameters.get("task_id"), identity=identity)
 
     async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit complete_task skill — principal-scoped durable completion.
 
-        Pure forwarder: ``task_id`` validation and the ``status`` default both
-        live on the shared tool, so this only forwards whatever the caller
-        sent (never a hand-enumerated, transcribed subset) — the tool
-        signature stays the single source of the contract.
+        Forward only declared L2 kwargs (match ``_handle_get_task_skill`` and
+        sibling skills). Never splat the buyer namespace — unknown keys would
+        ``TypeError`` into SERVICE_UNAVAILABLE on A2A while MCP screens them.
         """
-        kwargs: dict[str, Any] = {k: v for k, v in parameters.items() if k != "identity"}
-        kwargs.setdefault("task_id", None)
-        kwargs["identity"] = identity
+        kwargs: dict[str, Any] = {
+            "task_id": parameters.get("task_id"),
+            "identity": identity,
+        }
+        for key in ("status", "response_data", "error_message", "context"):
+            if key in parameters:
+                kwargs[key] = parameters[key]
         return await core_complete_task(**kwargs)
 
     # Signals skill handlers removed - should come from dedicated signals agents

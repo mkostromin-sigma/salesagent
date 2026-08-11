@@ -165,6 +165,31 @@ async def test_complete_task_owner_ok_sibling_same_as_unknown(principal_scoped_s
     assert result["status"] == "completed"
 
 
+def test_update_status_write_predicate_denies_sibling(principal_scoped_step):
+    """Repository update_status with sibling principal_id returns None (KM Aug-05).
+
+    Grades the write-side SQL ownership seam directly — not a mock kwarg proxy.
+    """
+    data = principal_scoped_step
+    engine = get_engine()
+    with SASession(bind=engine) as session:
+        repo = WorkflowRepository(session, data["tenant_id"])
+        denied = repo.update_status(
+            data["pending_step_id"],
+            status="completed",
+            principal_id=data["sibling_principal_id"],
+        )
+        assert denied is None
+        updated = repo.update_status(
+            data["pending_step_id"],
+            status="completed",
+            principal_id=data["owner_principal_id"],
+        )
+        assert updated is not None
+        assert updated.status == "completed"
+        session.commit()
+
+
 def test_get_task_a2a_and_mcp_success_path(integration_db):
     """Success-path oracle: A2A + MCP return a parseable get_task payload (#1812).
 

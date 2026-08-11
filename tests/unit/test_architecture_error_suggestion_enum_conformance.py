@@ -47,12 +47,9 @@ _CANONICAL_SUGGESTION_CONSTANTS = [
 ]
 
 # Per-class ``_default_suggestion`` ClassVars that intentionally diverge from
-# the pinned enum (pre-existing). Shrink only — never grow without a tracker.
-_DEFAULT_SUGGESTION_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        "AdCPAuthenticationError",  # pre-existing AUTH_REQUIRED wording divergence
-    }
-)
+# the pinned enum. Shrink only — never grow without a tracker. Empty after
+# aligning AdCPAuthenticationError to the pinned AUTH_REQUIRED suggestion.
+_DEFAULT_SUGGESTION_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def test_pinned_enum_suggestions_loaded() -> None:

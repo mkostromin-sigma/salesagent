@@ -697,7 +697,10 @@ class AdCPInvalidRequestError(AdCPValidationError):
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
 
 
-AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
+# Pinned AdCP 3.1.1 enumMetadata suggestion for AUTH_REQUIRED (error-code.json).
+AUTH_REQUIRED_SUGGESTION = (
+    "provide credentials when missing; do NOT auto-retry rejected credentials — escalate for rotation"
+)
 
 
 class AdCPAuthenticationError(AdCPError):
@@ -1053,9 +1056,40 @@ class AdCPTaskNotFoundError(AdCPNotFoundError):
 
     Recovery=correctable: the buyer can correct by supplying a valid task_id
     (discoverable via list_tasks).
+
+    Default ``message`` is the REFERENCE_NOT_FOUND uniform-response string from
+    ``_SPEC_SUPPLEMENT_CODES`` — raise sites should call ``AdCPTaskNotFoundError()``
+    with no message so L3 does not duplicate wire wording.
     """
 
     _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        error_code: str | None = None,
+        status_code: int | None = None,
+        details: dict[str, Any] | None = None,
+        recovery: RecoveryHint | None = None,
+        field: str | None = None,
+        suggestion: str | None = None,
+        retry_after: int | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> None:
+        if not message:
+            message = _SPEC_SUPPLEMENT_CODES["REFERENCE_NOT_FOUND"]["message"]
+        super().__init__(
+            message,
+            error_code=error_code,
+            status_code=status_code,
+            details=details,
+            recovery=recovery,
+            field=field,
+            suggestion=suggestion,
+            retry_after=retry_after,
+            context=context,
+        )
 
 
 class AdCPBudgetTooLowError(AdCPError):

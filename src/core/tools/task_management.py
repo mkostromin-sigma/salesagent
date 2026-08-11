@@ -34,8 +34,10 @@ def _require_task_id(task_id: Any) -> str:
     (``if not task_id``) lets a non-string value reach the SQL comparison,
     where the untyped DB error (e.g. ``UndefinedFunction`` for a numeric
     literal against a varchar column) escapes as ``SERVICE_UNAVAILABLE`` and
-    leaks the query. Single source of truth so both tools (and both
-    transports, via them) reject the same shapes uniformly.
+    leaks the query. Shared by ``get_task`` / ``complete_task`` so both tools
+    reject the same shapes at L2. Wire grading for the type half currently
+    covers the A2A skill path plus unit calls; MCP FastMCP TypeAdapter may
+    still reject non-strings before L2 — see transport-equivalence follow-up.
     """
     if not isinstance(task_id, str) or not task_id:
         raise AdCPValidationError(
@@ -143,7 +145,7 @@ async def list_tasks(
 
 
 async def get_task(
-    task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None
+    task_id: Any = None, context: Context | None = None, identity: ResolvedIdentity | None = None
 ) -> dict[str, Any]:
     """Get detailed information about a specific task.
 
@@ -201,7 +203,7 @@ async def get_task(
 
 
 async def complete_task(
-    task_id: str,
+    task_id: Any = None,
     status: str = "completed",
     response_data: dict[str, Any] | None = None,
     error_message: str | None = None,

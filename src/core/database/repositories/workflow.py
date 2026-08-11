@@ -88,7 +88,9 @@ class WorkflowRepository:
         if step is None:
             from src.core.exceptions import AdCPTaskNotFoundError
 
-            raise AdCPTaskNotFoundError("Reference not found")
+            # Default message comes from the typed exception (spec supplement) —
+            # L3 must not hand-transcribe wire wording.
+            raise AdCPTaskNotFoundError()
         return step
 
     def list_by_tenant(

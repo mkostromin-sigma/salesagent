@@ -319,3 +319,54 @@ class TestCompleteTaskTool:
         assert exc.value.field == "task_id"
         assert exc.value.suggestion == VALIDATION_ERROR_SUGGESTION
         mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()
+
+    @pytest.mark.parametrize("bad_id", [123, True, ["x"], {"id": "x"}])
+    async def test_require_task_id_rejects_truthy_non_string(self, mock_uow, mock_workflow_repo, sample_tenant, bad_id):
+        """Type half of _require_task_id — not just falsy presence (KM Aug-05)."""
+        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.task_management import complete_task, get_task
+
+        identity = self._make_identity(sample_tenant)
+        with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
+            with pytest.raises(AdCPValidationError, match="task_id is required") as get_exc:
+                await get_task(task_id=bad_id, identity=identity)
+            with pytest.raises(AdCPValidationError, match="task_id is required") as complete_exc:
+                await complete_task(task_id=bad_id, identity=identity)
+        assert get_exc.value.field == complete_exc.value.field == "task_id"
+        mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()
+
+
+class TestCompleteTaskA2AForwarder:
+    """A2A complete_task must not splat unknown buyer keys into L2 (KM Aug-05)."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_buyer_key_does_not_typeerror(self):
+        from unittest.mock import AsyncMock, patch
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPValidationError
+
+        handler = object.__new__(AdCPRequestHandler)
+        identity = ResolvedIdentity(
+            principal_id="p1",
+            tenant_id="t1",
+            tenant={"tenant_id": "t1"},
+            protocol="a2a",
+        )
+        with patch(
+            "src.a2a_server.adcp_a2a_server.core_complete_task",
+            new_callable=AsyncMock,
+            side_effect=AdCPValidationError("task_id is required", field="task_id"),
+        ) as mock_complete:
+            with pytest.raises(AdCPValidationError):
+                await handler._handle_complete_task_skill(
+                    {"task_id": "", "statas": "completed", "push_notification_config": {}},
+                    identity,
+                )
+        mock_complete.assert_awaited_once()
+        kwargs = mock_complete.await_args.kwargs
+        assert set(kwargs) <= {"task_id", "status", "response_data", "error_message", "context", "identity"}
+        assert "statas" not in kwargs
+        assert "push_notification_config" not in kwargs
+        assert kwargs["task_id"] == ""
+        assert kwargs["identity"] is identity

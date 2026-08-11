@@ -136,3 +136,36 @@ class TestWorkflowOrRaise:
         repo.get_by_step_id("step-1", principal_id="principal-a")
         compiled = _compiled_last_select(session)
         assert compiled.split("FROM", 1)[1].strip() == _expected_scoped_clause("step-1", "tenant-1", "principal-a")
+
+    def test_update_status_sibling_principal_returns_none(self):
+        """Write-side ownership: sibling principal_id must not update the row.
+
+        Grades the SQL seam (same scoped WHERE as read), not a mocked kwarg
+        forward. Reverting update_status to tenant-only get_by_step_id must fail.
+        """
+        session = MagicMock()
+        session.scalars.return_value.first.return_value = None
+        repo = WorkflowRepository(session, "tenant-1")
+        assert repo.update_status("step-1", status="completed", principal_id="sibling-b") is None
+        compiled = _compiled_last_select(session)
+        assert compiled.split("FROM", 1)[1].strip() == _expected_scoped_clause("step-1", "tenant-1", "sibling-b")
+
+    def test_update_status_owner_principal_updates(self):
+        step = MagicMock()
+        session = MagicMock()
+        session.scalars.return_value.first.return_value = step
+        repo = WorkflowRepository(session, "tenant-1")
+        assert repo.update_status("step-1", status="completed", principal_id="owner-a") is step
+        assert step.status == "completed"
+        session.flush.assert_called_once()
+        compiled = _compiled_last_select(session)
+        assert compiled.split("FROM", 1)[1].strip() == _expected_scoped_clause("step-1", "tenant-1", "owner-a")
+
+    def test_get_by_step_id_or_raise_default_message_from_spec_supplement(self):
+        """Argument-less raise must still emit the REFERENCE_NOT_FOUND uniform message."""
+        from src.core.exceptions import _SPEC_SUPPLEMENT_CODES
+
+        repo = _repo_with_first(WorkflowRepository, None)
+        with pytest.raises(AdCPTaskNotFoundError) as exc:
+            repo.get_by_step_id_or_raise("step-missing", principal_id="principal-a")
+        assert str(exc.value) == _SPEC_SUPPLEMENT_CODES["REFERENCE_NOT_FOUND"]["message"]
