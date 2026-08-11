@@ -1660,9 +1660,11 @@ class TestExtensionObligations:
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
-        """Format ID not found on registered agent returns error.
+        """Helper raises typed format miss with generic message and field=format_ids.
 
-        Covers: UC-002-EXT-H-03
+        Unwired from ``_create_media_buy_impl`` (T-UC-002-ext-h-agent). This
+        characterizes ``_validate_and_convert_format_ids`` only — not create_media_buy
+        buyer-wire coverage.
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
@@ -1688,6 +1690,8 @@ class TestExtensionObligations:
             assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
             assert exc_info.value.wire_error_code == "REFERENCE_NOT_FOUND"
             assert str(exc_info.value) == "Reference not found"
+            assert exc_info.value.field == "format_ids"
+            assert exc_info.value.details is None
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):

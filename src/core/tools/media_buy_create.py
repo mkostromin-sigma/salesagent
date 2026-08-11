@@ -1750,7 +1750,15 @@ async def _validate_and_convert_format_ids(
         List of validated FormatId dicts with {agent_url, id}
 
     Raises:
-        ToolError: If any format_id is invalid, unregistered, or doesn't exist
+        AdCPValidationError: If any format_id is a plain string or malformed.
+        AdCPAuthorizationError: If the agent_url is not a registered creative agent.
+        AdCPFormatNotFoundError: If the format does not exist on the agent.
+        AdCPAdapterError: If the agent lookup itself fails.
+
+    Note:
+        Currently unwired from ``_create_media_buy_impl`` (T-UC-002-ext-h-agent).
+        Callers are tests that characterize this helper; do not treat them as
+        create_media_buy buyer-wire coverage.
     """
     from src.core.creative_agent_registry import CreativeAgentRegistry
 
@@ -1808,9 +1816,9 @@ async def _validate_and_convert_format_ids(
         try:
             format_obj = await registry.get_format(agent_url, format_id)
             if not format_obj:
-                # Uniform response (AdCP 3.1.1): generic message — no package index /
-                # agent_url / format_id leak. Wire code → REFERENCE_NOT_FOUND.
-                raise AdCPFormatNotFoundError("Reference not found")
+                # Uniform response (AdCP 3.1.1): class default message; field names
+                # the array parameter itself (not an indexed path). Wire → REFERENCE_NOT_FOUND.
+                raise AdCPFormatNotFoundError(field="format_ids")
         except AdCPError:
             raise
         except Exception as e:

@@ -47,6 +47,7 @@ import pytest
 
 from src.core.exceptions import AdCPFormatNotFoundError, AdCPNotFoundError
 from src.core.schemas import Format
+from tests.helpers import pinned_schema
 from tests.helpers.adcp_factories import create_test_format_id
 
 
@@ -327,6 +328,9 @@ class TestGetFormat:
             assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
             assert exc_info.value.wire_error_code == "REFERENCE_NOT_FOUND"
             assert exc_info.value.recovery == "correctable"
+            assert exc_info.value.field is None
+            assert exc_info.value.details is None
+            assert exc_info.value.suggestion == pinned_schema.error_code_suggestion("REFERENCE_NOT_FOUND")
 
     def test_not_found_error_no_agent_url_no_tenant(self):
         """AdCPFormatNotFoundError message is generic without agent_url and tenant_id."""
@@ -345,6 +349,9 @@ class TestGetFormat:
             assert "from agent" not in error_msg
             assert "for tenant" not in error_msg
             assert exc_info.value.recovery == "correctable"
+            assert exc_info.value.field is None
+            assert exc_info.value.details is None
+            assert exc_info.value.suggestion == pinned_schema.error_code_suggestion("REFERENCE_NOT_FOUND")
 
 
 # ---------------------------------------------------------------------------

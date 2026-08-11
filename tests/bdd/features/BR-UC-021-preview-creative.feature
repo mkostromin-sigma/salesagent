@@ -24,11 +24,10 @@ Feature: BR-UC-021 Preview Creative
   # Rules: BR-RULE-043, BR-RULE-160..168 (10 rules, 44 invariants),
   #   BR-RULE-227 (quality), BR-RULE-228 (item_limit)
   # Extensions: A (batch), B (variant), C (input variants), D (CREATIVE_MANIFEST_REQUIRED),
-  #   E (REFERENCE_NOT_FOUND for missing format_id — was FORMAT_NOT_FOUND internal),
-  #   F (MANIFEST_VALIDATION_ERROR), G (BATCH_LIMIT_EXCEEDED),
-  #   H (REFERENCE_NOT_FOUND for variant), I (OUTPUT_FORMAT_INVALID), J (SERVICE_UNAVAILABLE)
-  # Error codes: CREATIVE_MANIFEST_REQUIRED, REFERENCE_NOT_FOUND, MANIFEST_VALIDATION_ERROR,
-  #   BATCH_LIMIT_EXCEEDED, OUTPUT_FORMAT_INVALID, SERVICE_UNAVAILABLE,
+  #   E (FORMAT_NOT_FOUND), F (MANIFEST_VALIDATION_ERROR), G (BATCH_LIMIT_EXCEEDED),
+  #   H (REFERENCE_NOT_FOUND), I (OUTPUT_FORMAT_INVALID), J (SERVICE_UNAVAILABLE)
+  # Error codes: CREATIVE_MANIFEST_REQUIRED, FORMAT_NOT_FOUND, MANIFEST_VALIDATION_ERROR,
+  #   BATCH_LIMIT_EXCEEDED, REFERENCE_NOT_FOUND, OUTPUT_FORMAT_INVALID, SERVICE_UNAVAILABLE,
   #   BATCH_EMPTY, BATCH_REQUESTS_REQUIRED, MANIFEST_FORMAT_ID_REQUIRED, MANIFEST_ASSETS_REQUIRED,
   #   MANIFEST_ASSET_KEY_INVALID, MANIFEST_AGENT_URL_REQUIRED, MANIFEST_DIMENSIONS_INCOMPLETE,
   #   INPUTS_EMPTY, INPUT_NAME_REQUIRED, VARIANT_ID_REQUIRED, REQUEST_TYPE_REQUIRED,
@@ -201,24 +200,19 @@ Feature: BR-UC-021 Preview Creative
     # POST-F3: Item 1 succeeds despite item 2 failure
 
   @T-UC-021-ext-e @extension @ext-e @error @post-f1 @post-f2
-  Scenario: Format not found in creative agent registry -- REFERENCE_NOT_FOUND
+  Scenario: Format not found in creative agent registry -- FORMAT_NOT_FOUND
     Given a creative manifest with format_id.id "nonexistent_format" and a valid agent_url
     And the creative agent does not support the format "nonexistent_format"
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should contain "Reference not found"
+    And the error code should be "FORMAT_NOT_FOUND"
+    And the error message should contain "nonexistent_format"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "identifier"
+    And the suggestion should contain "format"
     # POST-F1: System state unchanged
-    # POST-F2: Buyer sees REFERENCE_NOT_FOUND with generic message (uniform response;
-    #          no format_id leak). Wire-first transports; IMPL keeps internal
-    #          FORMAT_NOT_FOUND on AdCPFormatNotFoundError.error_code.
+    # POST-F2: Buyer knows which format was not found
     # POST-F3: Suggestion for recovery
-    # Note: salesagent has no first-class preview_creative tool yet — scenario
-    # auto-xfails on missing steps; contract text aligned for when UC-021 lands.
-    # Regen debt: prefer upstream adcp-req + compile_bdd.py --merge over local-only edits.
 
   @T-UC-021-ext-f-format-id @extension @ext-f @error @post-f1 @post-f2 @br-rule-161
   Scenario: Manifest missing format_id -- MANIFEST_VALIDATION_ERROR

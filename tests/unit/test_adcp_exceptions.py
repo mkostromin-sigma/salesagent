@@ -384,7 +384,7 @@ class TestRecoveryClassification:
 # ---------------------------------------------------------------------------
 
 
-from tests.helpers import assert_envelope_shape  # noqa: E402
+from tests.helpers import assert_envelope_shape, pinned_schema  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -448,7 +448,7 @@ def exc_handler_test_app():
 
     @_app.get("/test-exc/format-not-found")
     def raise_format_not_found():
-        raise AdCPFormatNotFoundError("Reference not found")
+        raise AdCPFormatNotFoundError(field="format_ids")
 
     @_app.get("/test-exc/task-not-found")
     def raise_task_not_found():
@@ -550,15 +550,20 @@ class TestFastAPIExceptionHandlers:
     def test_format_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPFormatNotFoundError → 404, wire REFERENCE_NOT_FOUND, correctable.
 
-        FORMAT_NOT_FOUND translates to REFERENCE_NOT_FOUND at the boundary
-        (AdCP 3.1.1: typed params without a dedicated *_NOT_FOUND MUST use
-        REFERENCE_NOT_FOUND); recovery=correctable distinguishes it from the
-        base (terminal).
+        Internal FORMAT_NOT_FOUND maps to wire REFERENCE_NOT_FOUND (AdCP 3.1.1:
+        typed params without a dedicated *_NOT_FOUND MUST use REFERENCE_NOT_FOUND).
+        Recovery follows that wire code (correctable).
         """
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/format-not-found")
         assert response.status_code == 404
-        assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
+        body = response.json()
+        assert_envelope_shape(body, "REFERENCE_NOT_FOUND", recovery="correctable", message_substr="Reference not found")
+        expected_suggestion = pinned_schema.error_code_suggestion("REFERENCE_NOT_FOUND")
+        assert body["errors"][0]["suggestion"] == expected_suggestion
+        assert body["adcp_error"]["suggestion"] == expected_suggestion
+        assert body["errors"][0]["field"] == "format_ids"
+        assert not body["errors"][0].get("details")
 
     def test_task_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPTaskNotFoundError → 404, wire INVALID_REQUEST, correctable.

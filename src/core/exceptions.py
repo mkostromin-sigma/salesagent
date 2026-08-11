@@ -177,10 +177,10 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # FORMAT_NOT_FOUND → REFERENCE_NOT_FOUND per AdCP 3.1.1: typed params without
     # a dedicated standard *_NOT_FOUND MUST use REFERENCE_NOT_FOUND (error-handling
     # L3 + enumMetadata). Internal class code stays FORMAT_NOT_FOUND for typed
-    # identity; wire translation is REFERENCE_NOT_FOUND (#1847).
+    # identity; wire translation is REFERENCE_NOT_FOUND.
     "FORMAT_NOT_FOUND": "REFERENCE_NOT_FOUND",
     # TASK_NOT_FOUND: still demoted to INVALID_REQUEST on tip (remap out of scope
-    # for #1847; see #1812 for intended shape).
+    # for this leaf; intended shape is a dedicated TASK_NOT_FOUND wire code).
     "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
@@ -452,6 +452,9 @@ class AdCPError(Exception):
     # "provide valid credentials") sets this so no raise site can forget the
     # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
     _default_suggestion: ClassVar[str | None] = None
+    # Optional class-level message default: empty ``message`` falls back here so
+    # raise sites cannot omit (or drift from) the canonical buyer-facing text.
+    _default_message: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     # ``recovery`` is NOT among them: it is a read-only property, derived below.
@@ -474,8 +477,9 @@ class AdCPError(Exception):
         # sanctioned ``synthesize()`` classmethod for boundary fallback paths
         # that need a wire code the typed class hierarchy doesn't model.
         # Direct raises use a typed subclass and inherit its ``_default_*``.
-        super().__init__(message)
-        self.message = message
+        resolved_message = message or type(self)._default_message or ""
+        super().__init__(resolved_message)
+        self.message = resolved_message
         self.details = details
         self.field = field
         self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
@@ -1029,8 +1033,10 @@ class AdCPFormatNotFoundError(AdCPNotFoundError):
     No standard ``FORMAT_NOT_FOUND`` wire code exists in the pinned AdCP 3.1.1
     enum, so the raw code is internal and translated to ``REFERENCE_NOT_FOUND``
     (mandatory for typed params lacking a dedicated ``*_NOT_FOUND``). Uniform
-    response: buyer-facing ``message`` MUST be generic — no format_id / agent_url
-    leak via message/field/details.
+    response: buyer-facing ``message`` MUST be generic (no format_id / agent_url
+    in message or details). When the buyer parameter is the ``format_ids`` array,
+    ``error.field`` MUST name that array; library ``get_format`` has no buyer
+    parameter name and leaves ``field`` unset.
 
     Recovery=correctable: the buyer can correct by supplying a valid format_id
     (discoverable via list_creative_formats).

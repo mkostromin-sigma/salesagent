@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from src.core import exceptions
+from src.core.exceptions import WIRE_STANDARD_CODES, AdCPFormatNotFoundError, translate_error_code
 
 _PINNED_ENUM_PATH = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
 
@@ -72,3 +73,12 @@ def test_suggestion_constant_matches_pinned_enum(const_name: str, code: str) -> 
         f"that code's text, not another code's: fix the constant, or advance the pin if the spec "
         f"changed the suggestion."
     )
+
+
+def test_format_not_found_default_suggestion_matches_wire_code_pin() -> None:
+    """Remapped-class ``_default_suggestion`` must equal the wire code's pinned hint."""
+    wire = translate_error_code(AdCPFormatNotFoundError._default_error_code)
+    assert wire == "REFERENCE_NOT_FOUND"
+    assert wire in _SUGGESTION_BY_CODE, f"{wire!r} carries no suggestion in the pinned error-code.json enumMetadata"
+    assert AdCPFormatNotFoundError._default_suggestion == _SUGGESTION_BY_CODE[wire]
+    assert AdCPFormatNotFoundError._default_message == WIRE_STANDARD_CODES[wire]["message"]

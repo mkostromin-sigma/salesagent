@@ -385,4 +385,6 @@ class TestFormatResolverIntegration:
         assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
         assert exc_info.value.wire_error_code == "REFERENCE_NOT_FOUND"
         assert exc_info.value.recovery == "correctable"
+        assert exc_info.value.field is None
+        assert exc_info.value.details is None
         assert isinstance(exc_info.value, AdCPNotFoundError)

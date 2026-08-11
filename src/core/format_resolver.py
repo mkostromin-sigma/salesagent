@@ -245,9 +245,9 @@ def get_format(
             if format_ref_id(fmt.format_id) == format_id:
                 return fmt
 
-    # Uniform response (AdCP 3.1.1): generic message — no format_id / agent_url /
-    # tenant leak via message/field/details. Wire code → REFERENCE_NOT_FOUND.
-    raise AdCPFormatNotFoundError("Reference not found")
+    # Uniform response (AdCP 3.1.1): class default message; no buyer parameter
+    # name here so field stays unset (do not bake format_id). Wire → REFERENCE_NOT_FOUND.
+    raise AdCPFormatNotFoundError()
 
 
 def _get_product_format_override(
