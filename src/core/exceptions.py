@@ -482,8 +482,10 @@ class AdCPError(Exception):
         # sanctioned ``synthesize()`` classmethod for boundary fallback paths
         # that need a wire code the typed class hierarchy doesn't model.
         # Direct raises use a typed subclass and inherit its ``_default_*``.
-        if not message and type(self)._default_message is not None:
-            message = type(self)._default_message
+        if not message:
+            default_message = type(self)._default_message
+            if default_message is not None:
+                message = default_message
         super().__init__(message)
         self.message = message
         self.details = details

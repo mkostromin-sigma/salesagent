@@ -91,12 +91,12 @@ class RequestCompatMiddleware(Middleware):
             if RequestCompatMiddleware._is_missing_required_argument_error(exc):
                 from src.core.exceptions import VALIDATION_ERROR_SUGGESTION, AdCPValidationError
 
-                typed = AdCPValidationError(
+                missing_typed = AdCPValidationError(
                     str(exc),
                     suggestion=VALIDATION_ERROR_SUGGESTION,
                 )
-                await self._record_boundary(context, tool_name, typed)
-                _translate_to_tool_error(typed)
+                await self._record_boundary(context, tool_name, missing_typed)
+                _translate_to_tool_error(missing_typed)
 
             if not self._is_typeadapter_validation_error(exc):
                 raise

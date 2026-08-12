@@ -1959,8 +1959,12 @@ class AdCPRequestHandler(RequestHandler):
             assert_known_task_params(parameters, allowed=GET_TASK_BUYER_PARAMS)
             # Forward the raw JSON value — ``get_task`` / ``_require_task_id`` owns
             # type validation. Do not ``cast`` or coerce here (architecture guard
-            # bans ``typing.cast`` in this module).
-            return await core_get_task(task_id=parameters.get("task_id"), identity=identity)
+            # bans ``typing.cast`` in this module). MCP keeps ``task_id: str`` for
+            # the advertised schema; A2A may still forward a non-str JSON value.
+            return await core_get_task(
+                task_id=parameters.get("task_id"),  # type: ignore[arg-type]
+                identity=identity,
+            )
 
     async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit complete_task skill — principal-scoped durable completion.
