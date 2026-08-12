@@ -358,8 +358,12 @@ class TestNestedCreativeAdvisoryAccessor:
         with pytest.raises(AssertionError, match="wire_response missing"):
             _nested_creative_advisory_error({"transport": Transport.A2A, "wire_response": None, "response": resp})
 
-    def test_nested_bdd_helper_skips_a2a_model_dump_proxy(self):
-        """Proxy wire must not count as nested-advisory wire evidence (#1919 / Chris R3-04)."""
+    def test_nested_bdd_helper_grades_a2a_model_dump_proxy_payload(self):
+        """BDD grades proxy *payload* until real A2A framing lands (#1919 / Chris R3-04).
+
+        Framing refusal is ``require_real_wire=True`` (integration +
+        ``test_assert_wire_advisory_refuses_proxy_when_require_real_wire``).
+        """
         from types import SimpleNamespace
 
         from tests.bdd.steps.generic.then_error import _nested_creative_advisory_error
@@ -375,17 +379,16 @@ class TestNestedCreativeAdvisoryAccessor:
                 }
             ]
         }
-        assert (
-            _nested_creative_advisory_error(
-                {
-                    "transport": Transport.A2A,
-                    "wire_response": wire,
-                    "response": None,
-                    "result": result,
-                }
-            )
-            is None
+        advisory = _nested_creative_advisory_error(
+            {
+                "transport": Transport.A2A,
+                "wire_response": wire,
+                "response": None,
+                "result": result,
+            }
         )
+        assert advisory is not None
+        assert advisory["code"] == "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"
 
     def test_nested_bdd_helper_loud_when_wire_without_transport(self):
         """Present wire + unset transport must not default to IMPL."""
