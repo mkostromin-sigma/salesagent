@@ -34,6 +34,11 @@ def _nested_creative_advisory_error(ctx: dict) -> dict | None:
 
     When ``wire_response`` is a dict, ``ctx["transport"]`` MUST be set — defaulting
     to ``Transport.IMPL`` would disarm the loud guards.
+
+    CreativeSyncEnv A2A stashes a ``model_dump`` proxy (``wire_response_is_proxy``),
+    not Task/Artifact DataPart framing (#1919). A proxy must not count as a third
+    independent wire grade — return ``None`` so callers fall back to the
+    reconstructed model (honest) rather than pretending the proxy is A2A wire.
     """
     from tests.harness.transport import (
         _response_has_failed_creative,
@@ -52,14 +57,15 @@ def _nested_creative_advisory_error(ctx: dict) -> dict | None:
                 "wire_response present but ctx['transport'] unset — "
                 "refusing Transport.IMPL default that would disarm loud guards"
             )
+        if wire_is_proxy:
+            # Not genuine A2A framing — do not claim wire-grade evidence (#1919).
+            return None
         return first_failed_creative_advisory(
             wire,
             transport=transport,
             response=response,
-            wire_is_proxy=wire_is_proxy,
-            # BDD grades proxy payload content (same serializer as REST) until #1919;
-            # integration callers that need real framing pass require_real_wire=True.
-            require_real_wire=False,
+            wire_is_proxy=False,
+            require_real_wire=True,
         )
     # IMPL / unset: no success-path wire to require.
     if transport is None or _transport_has_no_wire(transport):
