@@ -560,10 +560,6 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     tenant_id = _create_test_tenant(f"tenant_isolation_1714_{raiser_slot}")
     principal_id = _create_test_principal(tenant_id)
 
-    now = datetime.now(UTC)
-    past_start = now - timedelta(days=7)
-    past_end = now - timedelta(hours=1)
-
     buy_ids = [
         f"mb_isolation_{raiser_slot}_a",
         f"mb_isolation_{raiser_slot}_b",
@@ -572,15 +568,12 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     bad_buy_id = buy_ids[raiser_slot]
     good_ids = [mid for mid in buy_ids if mid != bad_buy_id]
 
-    for mid in buy_ids:
-        _create_media_buy(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            media_buy_id=mid,
-            status="active",
-            start_time=past_start,
-            end_time=past_end,
-        )
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=buy_ids,
+    )
 
     for mid in buy_ids:
         assert _get_media_buy_status(tenant_id, mid) == "active"
@@ -597,7 +590,7 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
             session.execute(text("SELECT 1/0"))
         return real_compute(media_buy, now_arg, session)
 
-    # DataError maps through categorize_error → "db_error"
+    # SQLAlchemyError (DataError) → _classify_scheduler_error → "db_error"
     metric_before = counter_value("media_buy_status", tenant_id, "db_error")
 
     with (
@@ -638,22 +631,15 @@ async def test_operational_error_class_is_isolated_without_invalidated(integrati
     tenant_id = _create_test_tenant("tenant_isolation_oe_1714")
     principal_id = _create_test_principal(tenant_id)
 
-    now = datetime.now(UTC)
-    past_start = now - timedelta(days=7)
-    past_end = now - timedelta(hours=1)
-
     buy_ids = ["mb_oe_a", "mb_oe_b", "mb_oe_c"]
     bad_buy_id = "mb_oe_b"
 
-    for mid in buy_ids:
-        _create_media_buy(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            media_buy_id=mid,
-            status="active",
-            start_time=past_start,
-            end_time=past_end,
-        )
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=buy_ids,
+    )
 
     scheduler = MediaBuyStatusScheduler()
     real_compute = scheduler._compute_new_status
@@ -686,25 +672,20 @@ async def test_all_failing_flips_emit_warning_summary(integration_db):
     tenant_id = _create_test_tenant("tenant_isolation_all_fail_1714")
     principal_id = _create_test_principal(tenant_id)
 
-    now = datetime.now(UTC)
-    past_start = now - timedelta(days=7)
-    past_end = now - timedelta(hours=1)
-
     buy_ids = ["mb_all_fail_a", "mb_all_fail_b", "mb_all_fail_c"]
-    for mid in buy_ids:
-        _create_media_buy(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            media_buy_id=mid,
-            status="active",
-            start_time=past_start,
-            end_time=past_end,
-        )
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=buy_ids,
+    )
 
     scheduler = MediaBuyStatusScheduler()
 
     def _always_fail(_media_buy, _now_arg, _session):
         raise ValueError("flip failed")
+
+    metric_before = counter_value("media_buy_status", tenant_id, "other")
 
     with (
         patch.object(status_scheduler_mod.logger, "info") as mock_info,
@@ -718,6 +699,8 @@ async def test_all_failing_flips_emit_warning_summary(integration_db):
     assert len(warning_msgs) == 1
     assert "0 updated, 3 errors" in warning_msgs[0]
     assert info_msgs == []
+    # Non-SQLAlchemyError → _classify_scheduler_error → "other"
+    assert counter_value("media_buy_status", tenant_id, "other") == metric_before + 3
 
 
 @pytest.mark.requires_db
@@ -732,20 +715,13 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     tenant_id = _create_test_tenant("tenant_isolation_release_fail_1714")
     principal_id = _create_test_principal(tenant_id)
 
-    now = datetime.now(UTC)
-    past_start = now - timedelta(days=7)
-    past_end = now - timedelta(hours=1)
-
     buy_ids = ["mb_rel_a", "mb_rel_b", "mb_rel_c"]
-    for mid in buy_ids:
-        _create_media_buy(
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            media_buy_id=mid,
-            status="active",
-            start_time=past_start,
-            end_time=past_end,
-        )
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=buy_ids,
+    )
 
     scheduler = MediaBuyStatusScheduler()
 
@@ -769,9 +745,7 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     assert "0 updated, 3 errors" in warning_msgs[0]
     assert info_msgs == []
     # on_success must not claim flips that rolled back at SAVEPOINT release.
-    updated_lines = [
-        call.args[0] for call in mock_info.call_args_list if call.args and "Updated media buy " in str(call.args[0])
-    ]
+    updated_lines = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ")
     assert updated_lines == []
 
 
@@ -787,14 +761,11 @@ async def test_status_scheduler_invalidated_error_arms_real_breaker(integration_
     tenant_id = _create_test_tenant("tenant_isolation_breaker_1714")
     principal_id = _create_test_principal(tenant_id)
 
-    now = datetime.now(UTC)
-    _create_media_buy(
+    seed_active_expired_buys(
+        _create_media_buy,
         tenant_id=tenant_id,
         principal_id=principal_id,
-        media_buy_id="mb_breaker",
-        status="active",
-        start_time=now - timedelta(days=7),
-        end_time=now - timedelta(hours=1),
+        buy_ids=["mb_breaker"],
     )
 
     scheduler = MediaBuyStatusScheduler()
@@ -807,6 +778,94 @@ async def test_status_scheduler_invalidated_error_arms_real_breaker(integration_
             await scheduler._update_statuses()
 
     await assert_escaped_invalidation_arms_breaker(_run)
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_status_scheduler_interface_error_arms_real_breaker(integration_db):
+    """Escaped InterfaceError(connection_invalidated=True) must arm the breaker."""
+    from tests.helpers.scheduler_isolation import (
+        assert_escaped_invalidation_arms_breaker,
+        invalidated_interface_error,
+    )
+
+    tenant_id = _create_test_tenant("tenant_isolation_ie_breaker_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=["mb_ie_breaker"],
+    )
+
+    scheduler = MediaBuyStatusScheduler()
+
+    def _raise_interface(_media_buy, _now_arg, _session):
+        raise invalidated_interface_error()
+
+    async def _run() -> None:
+        with patch.object(scheduler, "_compute_new_status", side_effect=_raise_interface):
+            await scheduler._update_statuses()
+
+    await assert_escaped_invalidation_arms_breaker(_run)
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_disconnection_error_escapes_while_plain_oe_isolates(integration_db):
+    """Bare DisconnectionError escapes+arms; plain OperationalError stays isolated.
+
+    Pins both ``is_connection_dead`` operands independently: the
+    ``isinstance(..., DisconnectionError)`` arm (escape) vs a non-invalidated
+    ``OperationalError`` (isolate).
+    """
+    from sqlalchemy.exc import OperationalError
+
+    import src.core.database.database_session as db_session_mod
+    from tests.helpers.scheduler_isolation import bare_disconnection_error
+
+    tenant_id = _create_test_tenant("tenant_isolation_de_vs_oe_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=["mb_de_a", "mb_de_b", "mb_de_c"],
+    )
+
+    scheduler = MediaBuyStatusScheduler()
+    real_compute = scheduler._compute_new_status
+    metric_before = counter_value("media_buy_status", tenant_id, "db_error")
+
+    # Plain OperationalError: isolate, siblings complete, breaker stays healthy.
+    def _raise_plain_oe(media_buy, now_arg, session):
+        if media_buy.media_buy_id == "mb_de_b":
+            raise OperationalError("SELECT …", {}, Exception("QueryCanceled"))
+        return real_compute(media_buy, now_arg, session)
+
+    db_session_mod.reset_health_state()
+    assert db_session_mod._is_healthy is True
+    with patch.object(scheduler, "_compute_new_status", side_effect=_raise_plain_oe):
+        await scheduler._update_statuses()
+    assert db_session_mod._is_healthy is True
+    assert _get_media_buy_status(tenant_id, "mb_de_a") == "completed"
+    assert _get_media_buy_status(tenant_id, "mb_de_b") == "active"
+    assert _get_media_buy_status(tenant_id, "mb_de_c") == "completed"
+    assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
+
+    # Bare DisconnectionError: escape and arm the breaker.
+    def _raise_disconnection(_media_buy, _now_arg, _session):
+        raise bare_disconnection_error()
+
+    async def _run_escape() -> None:
+        with patch.object(scheduler, "_compute_new_status", side_effect=_raise_disconnection):
+            await scheduler._update_statuses()
+
+    from tests.helpers.scheduler_isolation import assert_escaped_invalidation_arms_breaker
+
+    await assert_escaped_invalidation_arms_breaker(_run_escape)
 
 
 # =============================================================================

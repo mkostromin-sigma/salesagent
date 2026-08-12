@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
 
 
-def summary_lines(mock_logger: MagicMock, prefix: str) -> list[str]:
-    """Extract batch-summary log lines that start with ``{prefix}:``.
+def summary_lines(mock_logger: MagicMock, prefix: str, *, needle: str | None = None) -> list[str]:
+    """Extract log lines whose message contains ``needle``.
 
-    Matches the production batch-summary log format
-    (``f"{prefix}: {processed} …"``). Prefer the production prefix constant
-    (``STATUS_BATCH_SUMMARY_PREFIX``).
+    Default ``needle`` is ``f"{prefix}:"`` — the production batch-summary
+    format (``f"{prefix}: {processed} …"``). Pass an explicit substring when
+    matching a different production log (e.g. ``"Updated media buy "``).
+    Prefer the production prefix constant (``STATUS_BATCH_SUMMARY_PREFIX``).
     """
-    needle = f"{prefix}:"
-    return [call.args[0] for call in mock_logger.call_args_list if call.args and needle in str(call.args[0])]
+    match = needle if needle is not None else f"{prefix}:"
+    return [call.args[0] for call in mock_logger.call_args_list if call.args and match in str(call.args[0])]
 
 
 def counter_value(scheduler: str, tenant_id: str, error_type: str) -> float:
@@ -33,6 +35,16 @@ def counter_value(scheduler: str, tenant_id: str, error_type: str) -> float:
 def invalidated_operational_error() -> OperationalError:
     """Connection-invalidated OperationalError used by breaker-arm oracles."""
     return OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
+
+
+def invalidated_interface_error() -> InterfaceError:
+    """Connection-invalidated InterfaceError used by breaker-arm oracles."""
+    return InterfaceError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
+
+
+def bare_disconnection_error() -> DisconnectionError:
+    """Bare DisconnectionError (no connection_invalidated) for escape oracles."""
+    return DisconnectionError("connection closed")
 
 
 async def assert_escaped_invalidation_arms_breaker(run) -> None:
@@ -101,3 +113,31 @@ def mock_media_buy(
     buy.start_date = None
     buy.end_date = None
     return buy
+
+
+def seed_active_expired_buys(
+    create_media_buy: Callable[..., str],
+    *,
+    tenant_id: str,
+    principal_id: str,
+    buy_ids: Sequence[str],
+) -> tuple[datetime, datetime]:
+    """Seed active buys whose flight window is already past (ready to complete).
+
+    Real-DB peer of :func:`mock_media_buy` — collapses the
+    ``now/past_start/past_end`` + ``_create_media_buy(..., status="active", …)``
+    preamble shared by the isolation integration oracles.
+    """
+    now = datetime.now(UTC)
+    past_start = now - timedelta(days=7)
+    past_end = now - timedelta(hours=1)
+    for mid in buy_ids:
+        create_media_buy(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=mid,
+            status="active",
+            start_time=past_start,
+            end_time=past_end,
+        )
+    return past_start, past_end

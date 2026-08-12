@@ -26,6 +26,8 @@ does not own — one classifier cannot serve two subsystems with disjoint
 exception populations without changing behavior for one of them.
 """
 
+from collections.abc import Container
+
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
 from src.core.exceptions import (
@@ -92,25 +94,24 @@ def categorize_error(error: BaseException) -> str:
     return "other"
 
 
+def _sanitize_or_other(value: str | None, allowed: Container[str]) -> str:
+    """Return ``value`` when it is a member of ``allowed``, else ``"other"``."""
+    return value if value in allowed else "other"
+
+
 def sanitize_policy_triggered(value: str | None) -> str:
     """Return ``value`` if it is in the allowlist, else ``"other"``."""
-    if value in POLICY_TRIGGERED_ALLOWLIST:
-        return value
-    return "other"
+    return _sanitize_or_other(value, POLICY_TRIGGERED_ALLOWLIST)
 
 
 def sanitize_scheduler(value: str | None) -> str:
     """Return ``value`` if it is in the scheduler allowlist, else ``"other"``."""
-    if value in SCHEDULER_ALLOWLIST:
-        return value
-    return "other"
+    return _sanitize_or_other(value, SCHEDULER_ALLOWLIST)
 
 
-def sanitize_scheduler_error_type(value: str) -> str:
+def sanitize_scheduler_error_type(value: str | None) -> str:
     """Return ``value`` if it is in :data:`SCHEDULER_ERROR_TYPE_VALUES`, else ``"other"``."""
-    if value in SCHEDULER_ERROR_TYPE_VALUES:
-        return value
-    return "other"
+    return _sanitize_or_other(value, SCHEDULER_ERROR_TYPE_VALUES)
 
 
 # ---------------------------------------------------------------------------

@@ -14,9 +14,11 @@ import asyncio
 import logging
 import os
 from datetime import UTC, datetime
+from enum import Enum, auto
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, PersistedMediaBuyStatus
@@ -88,7 +90,7 @@ class MediaBuyStatusScheduler:
                 # Wait before next check
                 await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
 
-    def _process_one_media_buy(self, media_buy: MediaBuy, now: datetime, session) -> bool | None:
+    def _process_one_media_buy(self, media_buy: MediaBuy, now: datetime, session: Session) -> _BuyOutcome:
         """Run one buy's status check inside its own SAVEPOINT; isolate DB errors.
 
         Ids are captured into plain locals *before* the SAVEPOINT opens — under
@@ -101,8 +103,7 @@ class MediaBuyStatusScheduler:
         :func:`is_connection_dead`) are *not* isolated — they re-raise so
         ``get_db_session`` can trip the process-global circuit breaker.
 
-        Returns ``True`` if the buy's status flipped, ``False`` if the error was
-        isolated, or ``None`` if no status change was needed.
+        Returns :class:`_BuyOutcome` — ``FLIPPED`` / ``ISOLATED`` / ``NOOP``.
         """
         tenant_id = media_buy.tenant_id
         principal_id = media_buy.principal_id
@@ -128,12 +129,12 @@ class MediaBuyStatusScheduler:
                 tenant_id=tenant_id,
                 error_type=_classify_scheduler_error(exc),
             )
-            return False
+            return _BuyOutcome.ISOLATED
 
         if not new_status:
-            return None
+            return _BuyOutcome.NOOP
         logger.info(f"Updated media buy {media_buy_id} status: {old_status} -> {new_status}")
-        return True
+        return _BuyOutcome.FLIPPED
 
     async def _update_statuses(self) -> None:
         """Check and update media buy statuses based on flight dates.

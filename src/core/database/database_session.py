@@ -54,7 +54,9 @@ def is_connection_dead(exc: BaseException) -> bool:
 
     Owned here next to :data:`CONNECTION_ERROR_TYPES` so the breaker arm-set and
     the per-item isolation escape predicate cannot drift across layers.
-    Scheduler batch runners import this as their default ``escape_isolation``.
+    Schedulers call this directly in their per-item ``except`` to re-raise
+    (arming the breaker via :func:`get_db_session`) or isolate; see
+    :meth:`src.services.media_buy_status_scheduler.MediaBuyStatusScheduler._process_one_media_buy`.
     """
     return bool(getattr(exc, "connection_invalidated", False)) or isinstance(exc, DisconnectionError)
 
