@@ -96,7 +96,9 @@ def categorize_error(error: BaseException) -> str:
 
 def _sanitize_or_other(value: str | None, allowed: Container[str]) -> str:
     """Return ``value`` when it is a member of ``allowed``, else ``"other"``."""
-    return value if value in allowed else "other"
+    if value is not None and value in allowed:
+        return value
+    return "other"
 
 
 def sanitize_policy_triggered(value: str | None) -> str:
