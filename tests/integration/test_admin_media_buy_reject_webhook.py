@@ -612,8 +612,8 @@ _APPROVE_HOLD_CASES = [
 ]
 
 
-def _assert_persisted_status(ids: dict, expected_status: str, *, approved_by: str | None = None) -> None:
-    """Read back MediaBuy via UoW and assert status + approval provenance once."""
+def _assert_persisted_status(ids: dict, expected_status: str, *, approved_by: str) -> None:
+    """Read back MediaBuy via UoW and assert status + exact approval provenance."""
     from src.core.database.repositories.uow import MediaBuyUoW
 
     with MediaBuyUoW(ids["tenant_id"]) as uow:
@@ -622,13 +622,10 @@ def _assert_persisted_status(ids: dict, expected_status: str, *, approved_by: st
         assert buy is not None
         assert buy.status == expected_status, f"expected status {expected_status!r}, got {buy.status!r}"
         assert buy.approved_at is not None
-        if approved_by is not None:
-            assert buy.approved_by == approved_by
-        else:
-            assert buy.approved_by
+        assert buy.approved_by == approved_by
 
 
-def _assert_persisted_hold(ids: dict, *, approved_by: str | None = None) -> None:
+def _assert_persisted_hold(ids: dict, *, approved_by: str) -> None:
     _assert_persisted_status(ids, "pending_creatives", approved_by=approved_by)
 
 
@@ -666,16 +663,21 @@ class TestAdminMediaBuyApproveHold:
         _assert_persisted_hold(ids, approved_by="test@example.com")
 
 
-def _post_workflow_approve(admin_session, ids: dict):
-    """Drive the real workflows approve route (JSON) and assert 200 success."""
+def _workflow_approve_url(ids: dict) -> str:
+    return f"/tenant/{ids['tenant_id']}/workflows/{ids['context_id']}/steps/{ids['step_id']}/approve"
+
+
+def _post_workflow_approve(admin_session, ids: dict, *, expected_status: int = 200):
+    """Drive the real workflows approve route (JSON) and assert the expected status."""
     resp = admin_session.post(
-        f"/tenant/{ids['tenant_id']}/workflows/{ids['context_id']}/steps/{ids['step_id']}/approve",
+        _workflow_approve_url(ids),
         content_type="application/json",
         json={},
     )
-    assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.data!r}"
+    assert resp.status_code == expected_status, f"expected {expected_status}, got {resp.status_code}: {resp.data!r}"
     body = resp.get_json()
-    assert body.get("success") is True, f"expected success, got {body!r}"
+    if expected_status == 200:
+        assert body.get("success") is True, f"expected success, got {body!r}"
     return body
 
 
@@ -764,13 +766,7 @@ class TestAdminApproveAdapterFailureRollback:
             if surface == "operations":
                 _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
             else:
-                resp = authenticated_admin_session.post(
-                    f"/tenant/{ids['tenant_id']}/workflows/{ids['context_id']}/steps/{ids['step_id']}/approve",
-                    content_type="application/json",
-                    json={},
-                )
-                assert resp.status_code == 500, f"expected 500, got {resp.status_code}: {resp.data!r}"
-                body = resp.get_json()
+                body = _post_workflow_approve(authenticated_admin_session, ids, expected_status=500)
                 assert body.get("success") is False
                 assert body.get("error") == "adapter boom"
 

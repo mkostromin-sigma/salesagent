@@ -27,6 +27,7 @@ from src.core.utils import utc_flight_end, utc_flight_start
 logger = logging.getLogger(__name__)
 
 HoldReason = Literal["no_assignments", "unapproved_creatives"]
+FinalizeKind = Literal["held", "adapter_failed", "finalized"]
 
 _HOLD_MSG_NO_ASSIGNMENTS = (
     "Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM."
@@ -43,6 +44,17 @@ class CreativeFinalizeReadiness:
     unapproved_creative_ids: list[str]
     hold_reason: HoldReason | None
     hold_message: str | None = None
+
+
+@dataclass(frozen=True)
+class FinalizeOutcome:
+    """Typed result of the shared approve → hold/ready → execute sequence."""
+
+    kind: FinalizeKind
+    hold_message: str | None = None
+    hold_reason: HoldReason | None = None
+    error_msg: str | None = None
+    webhook_media_buy_status: str | None = None
 
 
 def _hold_message_for(reason: HoldReason, unapproved_count: int) -> str:
@@ -168,21 +180,72 @@ def mark_media_buy_adapter_failed(
     tenant_id: str,
     *,
     error_msg: str | None = None,
+    status: str = "failed",
 ) -> None:
-    """Roll back to ``failed`` and log after adapter execute fails on the ready arm.
+    """Persist adapter-failure status and log with a single ``[APPROVAL]`` trail.
 
-    ``apply_creative_finalize_ready`` commits the optimistic flight-window
-    status before adapter execute runs (so a failed adapter still records who
-    approved the buy). This undoes that status and emits one ``[APPROVAL]``
-    ERROR line — shared by every ready-arm caller so an adapter failure leaves
-    the same persisted status and the same operator trail regardless of which
-    admin surface approved the buy.
+    Ready-arm approve routes (operations / workflows) commit an optimistic
+    flight-window status before execute; pass the default ``status="failed"``
+    to roll that back. The creatives unblock path executes before stamping and
+    should stay recoverable — pass ``status="pending_creatives"`` there.
     """
     logger.error("[APPROVAL] Adapter creation failed for %s: %s", media_buy_id, error_msg)
     with get_db_session() as session:
         repo = MediaBuyRepository(session, tenant_id)
-        if repo.update_status(media_buy_id, "failed"):
+        if repo.update_status(media_buy_id, status):
             session.commit()
+
+
+def finalize_media_buy_approval(
+    session: Session,
+    tenant_id: str,
+    media_buy: MediaBuy,
+    *,
+    approved_by: str,
+) -> FinalizeOutcome:
+    """Own the approve finalize sequence once for operations + workflows.
+
+    evaluate readiness → hold (commit) | ready (stamp + commit + execute +
+    optional adapter-failure rollback). Callers only handle transport
+    (flash / redirect / jsonify / webhook) from the typed outcome.
+    """
+    media_buy_id = media_buy.media_buy_id
+    readiness = evaluate_creative_finalize_readiness_for_session(session, tenant_id, media_buy_id=media_buy_id)
+    if not readiness.ready:
+        apply_creative_finalize_hold(media_buy, readiness, approved_by=approved_by)
+        session.commit()
+        return FinalizeOutcome(
+            kind="held",
+            hold_message=readiness.hold_message,
+            hold_reason=readiness.hold_reason,
+        )
+
+    apply_creative_finalize_ready(media_buy, approved_by=approved_by)
+    # Capture canonical status while media_buy is still session-bound.
+    # execute_approved_media_buy opens its own session and leaves this
+    # instance expired/detached after commit — do not touch ORM attrs later.
+    from src.core.media_buy_status import resolve_canonical_status
+
+    webhook_media_buy_status = resolve_canonical_status(media_buy, datetime.now(UTC).date())
+    session.commit()
+
+    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+    logger.info("[APPROVAL] Executing adapter creation for approved media buy %s", media_buy_id)
+    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+    if not success:
+        mark_media_buy_adapter_failed(media_buy_id, tenant_id, error_msg=error_msg)
+        return FinalizeOutcome(
+            kind="adapter_failed",
+            error_msg=error_msg,
+            webhook_media_buy_status=webhook_media_buy_status,
+        )
+
+    logger.info("[APPROVAL] Adapter creation succeeded for %s", media_buy_id)
+    return FinalizeOutcome(
+        kind="finalized",
+        webhook_media_buy_status=webhook_media_buy_status,
+    )
 
 
 def _coerce_flight_boundary(

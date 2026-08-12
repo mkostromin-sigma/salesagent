@@ -196,47 +196,26 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 )
 
                 if media_buy and media_buy.status == "pending_approval":
-                    # Shared Hold predicate (#1696): zero assignments or unapproved creatives
-                    # → park at pending_creatives; do not finalize.
+                    # Shared finalize orchestrator (#1696) — same sequence as
+                    # operations; this route is the jsonify transport tail.
                     from src.admin.services.media_buy_creative_readiness import (
-                        apply_creative_finalize_hold_for_admin,
+                        flash_creative_finalize_hold,
                     )
                     from src.services.media_buy_creative_readiness import (
-                        apply_creative_finalize_ready,
-                        evaluate_creative_finalize_readiness_for_session,
-                        mark_media_buy_adapter_failed,
+                        finalize_media_buy_approval,
                     )
 
-                    readiness = evaluate_creative_finalize_readiness_for_session(
-                        db, tenant_id, media_buy_id=media_buy_id
-                    )
-                    if not readiness.ready:
-                        apply_creative_finalize_hold_for_admin(
-                            media_buy,
-                            readiness,
-                            approved_by=user_email,
-                            db_session=db,
-                        )
+                    outcome = finalize_media_buy_approval(db, tenant_id, media_buy, approved_by=user_email)
+                    if outcome.kind == "held":
+                        flash_creative_finalize_hold(outcome.hold_message)
                         return jsonify({"success": True}), 200
+                    if outcome.kind == "adapter_failed":
+                        flash(
+                            f"Workflow approved but media buy creation failed: {outcome.error_msg}",
+                            "error",
+                        )
+                        return jsonify({"success": False, "error": outcome.error_msg}), 500
 
-                    # Commit provenance + flight status before execute (same contract
-                    # as operations.approve_media_buy) so a failed adapter still
-                    # records who approved the buy.
-                    apply_creative_finalize_ready(media_buy, approved_by=user_email)
-                    db.commit()
-
-                    # Execute adapter creation
-                    from src.core.tools.media_buy_create import execute_approved_media_buy
-
-                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
-                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
-
-                    if not success:
-                        mark_media_buy_adapter_failed(media_buy_id, tenant_id, error_msg=error_msg)
-                        flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
-                        return jsonify({"success": False, "error": error_msg}), 500
-
-                    logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")
                 else:
                     logger.warning(

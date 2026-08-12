@@ -225,6 +225,140 @@ class TestMarkMediaBuyAdapterFailed:
         mock_session.commit.assert_called_once_with()
         assert any("[APPROVAL] Adapter creation failed for mb_x: adapter boom" in r.message for r in caplog.records)
 
+    def test_custom_status_for_creatives_recoverable_path(self):
+        mock_repo = MagicMock()
+        mock_repo.update_status.return_value = True
+        mock_session = MagicMock()
+        mock_uow = MagicMock()
+        mock_uow.__enter__ = MagicMock(return_value=mock_session)
+        mock_uow.__exit__ = MagicMock(return_value=None)
+
+        with (
+            patch("src.services.media_buy_creative_readiness.get_db_session", return_value=mock_uow),
+            patch(
+                "src.services.media_buy_creative_readiness.MediaBuyRepository",
+                return_value=mock_repo,
+            ),
+        ):
+            mark_media_buy_adapter_failed(
+                "mb_x",
+                "tenant_1",
+                error_msg="adapter boom",
+                status="pending_creatives",
+            )
+
+        mock_repo.update_status.assert_called_once_with("mb_x", "pending_creatives")
+
+
+class TestFinalizeMediaBuyApproval:
+    def test_held_applies_hold_and_commits_without_execute(self):
+        from src.services.media_buy_creative_readiness import finalize_media_buy_approval
+
+        session = MagicMock()
+        media_buy = MagicMock()
+        media_buy.media_buy_id = "mb_hold"
+        readiness = CreativeFinalizeReadiness(
+            ready=False,
+            unapproved_creative_ids=[],
+            hold_reason="no_assignments",
+            hold_message="held msg",
+        )
+
+        with (
+            patch(
+                "src.services.media_buy_creative_readiness.evaluate_creative_finalize_readiness_for_session",
+                return_value=readiness,
+            ) as mock_eval,
+            patch("src.services.media_buy_creative_readiness.apply_creative_finalize_hold") as mock_hold,
+            patch("src.services.media_buy_creative_readiness.apply_creative_finalize_ready") as mock_ready,
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+            ) as mock_execute,
+        ):
+            outcome = finalize_media_buy_approval(session, "t1", media_buy, approved_by="op@example.com")
+
+        mock_eval.assert_called_once_with(session, "t1", media_buy_id="mb_hold")
+        mock_hold.assert_called_once_with(media_buy, readiness, approved_by="op@example.com")
+        session.commit.assert_called_once_with()
+        mock_ready.assert_not_called()
+        mock_execute.assert_not_called()
+        assert outcome.kind == "held"
+        assert outcome.hold_message == "held msg"
+        assert outcome.hold_reason == "no_assignments"
+
+    def test_finalized_stamps_commits_executes(self):
+        from src.services.media_buy_creative_readiness import finalize_media_buy_approval
+
+        session = MagicMock()
+        media_buy = MagicMock()
+        media_buy.media_buy_id = "mb_ok"
+        readiness = CreativeFinalizeReadiness(
+            ready=True,
+            unapproved_creative_ids=[],
+            hold_reason=None,
+            hold_message=None,
+        )
+
+        with (
+            patch(
+                "src.services.media_buy_creative_readiness.evaluate_creative_finalize_readiness_for_session",
+                return_value=readiness,
+            ),
+            patch("src.services.media_buy_creative_readiness.apply_creative_finalize_ready") as mock_ready,
+            patch(
+                "src.core.media_buy_status.resolve_canonical_status",
+                return_value="pending_start",
+            ),
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=(True, None),
+            ) as mock_execute,
+            patch("src.services.media_buy_creative_readiness.mark_media_buy_adapter_failed") as mock_fail,
+        ):
+            outcome = finalize_media_buy_approval(session, "t1", media_buy, approved_by="op@example.com")
+
+        mock_ready.assert_called_once_with(media_buy, approved_by="op@example.com")
+        session.commit.assert_called_once_with()
+        mock_execute.assert_called_once_with("mb_ok", "t1")
+        mock_fail.assert_not_called()
+        assert outcome.kind == "finalized"
+        assert outcome.webhook_media_buy_status == "pending_start"
+
+    def test_adapter_failed_rolls_back_via_shared_applier(self):
+        from src.services.media_buy_creative_readiness import finalize_media_buy_approval
+
+        session = MagicMock()
+        media_buy = MagicMock()
+        media_buy.media_buy_id = "mb_fail"
+        readiness = CreativeFinalizeReadiness(
+            ready=True,
+            unapproved_creative_ids=[],
+            hold_reason=None,
+            hold_message=None,
+        )
+
+        with (
+            patch(
+                "src.services.media_buy_creative_readiness.evaluate_creative_finalize_readiness_for_session",
+                return_value=readiness,
+            ),
+            patch("src.services.media_buy_creative_readiness.apply_creative_finalize_ready"),
+            patch(
+                "src.core.media_buy_status.resolve_canonical_status",
+                return_value="pending_start",
+            ),
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=(False, "boom"),
+            ),
+            patch("src.services.media_buy_creative_readiness.mark_media_buy_adapter_failed") as mock_fail,
+        ):
+            outcome = finalize_media_buy_approval(session, "t1", media_buy, approved_by="op@example.com")
+
+        mock_fail.assert_called_once_with("mb_fail", "t1", error_msg="boom")
+        assert outcome.kind == "adapter_failed"
+        assert outcome.error_msg == "boom"
+
 
 class TestLogCreativeFinalizeHold:
     def test_uses_hold_reason_key(self, caplog):

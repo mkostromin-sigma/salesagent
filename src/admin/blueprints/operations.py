@@ -410,56 +410,31 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 db_session.commit()
 
                 if media_buy and media_buy.status == "pending_approval":
-                    # Shared Hold predicate (#1696): zero assignments or unapproved
-                    # creatives → pending_creatives; never finalize on hold.
+                    # Shared finalize orchestrator (#1696): evaluate → hold | ready
+                    # → commit → execute → rollback. Transport only below.
                     from src.admin.services.media_buy_creative_readiness import (
-                        apply_creative_finalize_hold_for_admin,
+                        flash_creative_finalize_hold,
                     )
                     from src.services.media_buy_creative_readiness import (
-                        apply_creative_finalize_ready,
-                        evaluate_creative_finalize_readiness_for_session,
-                        mark_media_buy_adapter_failed,
+                        finalize_media_buy_approval,
                     )
 
-                    readiness = evaluate_creative_finalize_readiness_for_session(
-                        db_session, tenant_id, media_buy_id=media_buy_id
-                    )
-
-                    if not readiness.ready:
-                        apply_creative_finalize_hold_for_admin(
-                            media_buy,
-                            readiness,
-                            approved_by=user_email,
-                            db_session=db_session,
+                    outcome = finalize_media_buy_approval(db_session, tenant_id, media_buy, approved_by=user_email)
+                    if outcome.kind == "held":
+                        flash_creative_finalize_hold(outcome.hold_message)
+                        return redirect(
+                            url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                        )
+                    if outcome.kind == "adapter_failed":
+                        flash(
+                            f"Media buy approved but adapter creation failed: {outcome.error_msg}",
+                            "error",
                         )
                         return redirect(
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
 
-                    apply_creative_finalize_ready(media_buy, approved_by=user_email)
-                    # Capture canonical status while media_buy is still attached.
-                    # execute_approved_media_buy opens its own session and leaves this
-                    # instance expired/detached after commit — do not touch ORM attrs later.
-                    from src.core.media_buy_status import resolve_canonical_status
-
-                    webhook_media_buy_status = resolve_canonical_status(media_buy, datetime.now(UTC).date())
-                    db_session.commit()
-
-                    # Ready arm only: create order/line items in adapter
-                    from src.core.tools.media_buy_create import execute_approved_media_buy
-
-                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
-                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
-
-                    if not success:
-                        mark_media_buy_adapter_failed(media_buy_id, tenant_id, error_msg=error_msg)
-
-                        flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
-                        return redirect(
-                            url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
-                        )
-
-                    logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
+                    webhook_media_buy_status = outcome.webhook_media_buy_status
 
                     webhook_config = None
                     if media_buy_data and media_buy_data["push_notification_url"]:

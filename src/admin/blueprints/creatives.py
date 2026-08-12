@@ -608,8 +608,17 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
                 logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")
             else:
-                logger.error(
-                    f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"
+                # Execute-then-stamp batch: keep recoverable pending_creatives;
+                # status + [APPROVAL] log tag decided in the shared applier.
+                from src.services.media_buy_creative_readiness import (
+                    mark_media_buy_adapter_failed,
+                )
+
+                mark_media_buy_adapter_failed(
+                    action["media_buy_id"],
+                    tenant_id,
+                    error_msg=error_msg,
+                    status="pending_creatives",
                 )
 
         # Retroactive push for already-live buys (#1038):
