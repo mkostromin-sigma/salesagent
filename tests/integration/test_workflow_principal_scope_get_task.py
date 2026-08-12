@@ -228,8 +228,12 @@ def test_get_task_truthy_non_string_task_id_a2a_and_mcp(integration_db):
 
     Presence-only guards catch ``{}`` → None; this sends ``123`` / ``True`` so
     the type half is what fires. Assert no query text survives in the envelope.
+
+    Use ``call_via`` (not ``call_a2a``/``call_mcp``): those raise the
+    reconstructed ``AdCPError``; the dispatcher captures ``wire_error_envelope``.
     """
     from tests.harness.task_management import TaskEnv
+    from tests.harness.transport import Transport
 
     leak_markers = ("UPDATE", "SELECT", "[parameters:", "psycopg2", "workflow_steps")
 
@@ -243,12 +247,12 @@ def test_get_task_truthy_non_string_task_id_a2a_and_mcp(integration_db):
         env._commit_factory_data()
 
         for bad_id in (123, True, ["x"]):
-            a2a = env.call_a2a(tool="get_task", task_id=bad_id)
+            a2a = env.call_via(Transport.A2A, tool="get_task", task_id=bad_id)
             a2a.assert_wire_error("VALIDATION_ERROR")
             envelope = str(a2a.wire_error_envelope)
             assert not any(m in envelope for m in leak_markers), envelope
 
-            mcp = env.call_mcp(tool="get_task", task_id=bad_id)
+            mcp = env.call_via(Transport.MCP, tool="get_task", task_id=bad_id)
             mcp.assert_wire_error("VALIDATION_ERROR")
             envelope = str(mcp.wire_error_envelope)
             assert not any(m in envelope for m in leak_markers), envelope
@@ -257,6 +261,7 @@ def test_get_task_truthy_non_string_task_id_a2a_and_mcp(integration_db):
 def test_complete_task_non_string_error_message_a2a_no_sql_leak(integration_db):
     """A1 sibling-sweep: non-string error_message must not put SQL on the A2A wire."""
     from tests.harness.task_management import TaskEnv
+    from tests.harness.transport import Transport
 
     leak_markers = ("UPDATE", "SELECT", "[parameters:", "psycopg2", "can't adapt type")
 
@@ -269,7 +274,8 @@ def test_complete_task_non_string_error_message_a2a_no_sql_leak(integration_db):
         )
         env._commit_factory_data()
         step_id = env.seed_owner_task(principal_id="wire_owner", status="requires_approval")
-        result = env.call_a2a(
+        result = env.call_via(
+            Transport.A2A,
             tool="complete_task",
             task_id=step_id,
             status="failed",
