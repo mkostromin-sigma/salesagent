@@ -44,10 +44,15 @@ def test_token_mode_prepare_clears_unit_mode_identity_lambdas() -> None:
         env._prepare_a2a_server_context(handler, unit_identity)
         assert "_resolve_a2a_identity" in handler.__dict__
         assert "_get_auth_token" in handler.__dict__
+        # Third shadow: a two-name pop list stays green without this inject;
+        # structural cleanup must drop every callable instance override.
+        handler._authenticate = lambda *a, **k: unit_identity  # type: ignore[method-assign]
+        assert "_authenticate" in handler.__dict__
 
         env._prepare_a2a_server_context(handler, token_identity)
         assert "_resolve_a2a_identity" not in handler.__dict__
         assert "_get_auth_token" not in handler.__dict__
+        assert "_authenticate" not in handler.__dict__
         # Any instance-dict callable that shadows a class method defeats the gate.
         assert {k for k in handler.__dict__ if callable(getattr(type(handler), k, None))} == set()
 

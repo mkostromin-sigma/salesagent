@@ -1444,7 +1444,10 @@ class AdCPRequestHandler(RequestHandler):
                 )
 
             logger.info(
-                f"Push notification config {'created' if created else 'updated'}: {config_id} for tenant {tool_context.tenant_id}"
+                "Push notification config %s: %s for tenant %s",
+                "created" if created else "updated",
+                _safe_id_for_log(config_id),
+                tool_context.tenant_id,
             )
 
             auth_info = (
