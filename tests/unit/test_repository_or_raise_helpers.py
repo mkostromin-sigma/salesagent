@@ -163,6 +163,13 @@ class TestWorkflowOrRaise:
         compiled = _compiled_last_select(repo._session)
         assert _from_tail(compiled) == _expected_scoped_clause("step-1", "tenant-1", "principal-a")
 
+    def test_get_by_step_id_rejects_empty_principal_id(self):
+        """Explicit "" must raise — not silently widen to tenant-only (Chris R4 NIT)."""
+        repo = _repo_with_first(WorkflowRepository, None)
+        with pytest.raises(ValueError, match="principal_id is required"):
+            repo.get_by_step_id("step-1", principal_id="")
+        repo._session.scalars.assert_not_called()
+
     def test_update_status_sibling_principal_returns_none(self):
         """Write-side ownership: sibling principal_id must not update the row.
 

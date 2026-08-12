@@ -61,9 +61,11 @@ class WorkflowRepository:
             WorkflowStep.step_id == step_id,
             DBContext.tenant_id == self._tenant_id,
         ]
-        # Falsy (None / "") → tenant-only; truthy → AND principal ownership.
-        # Aligns with get_by_step_id_or_raise's falsy rejection for buyer paths.
-        if principal_id:
+        # None (omitted) → tenant-only. Explicit "" must not silently widen —
+        # same fail-closed rule as get_by_step_id_or_raise / update_status.
+        if principal_id is not None:
+            if not principal_id:
+                raise ValueError("principal_id is required")
             conditions.append(DBContext.principal_id == principal_id)
         return self._session.scalars(select(WorkflowStep).join(DBContext).where(*conditions)).first()
 
