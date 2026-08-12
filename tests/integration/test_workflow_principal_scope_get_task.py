@@ -39,11 +39,19 @@ def _assert_same_not_found(
     """Sibling-principal denial must be wire-indistinguishable from unknown id.
 
     Asserts the buyer-facing wire code (REFERENCE_NOT_FOUND), not the internal
-    TASK_NOT_FOUND taxonomy, plus the generic (non resource-qualified) message.
+    TASK_NOT_FOUND taxonomy, plus the generic (non resource-qualified) message
+    and the pinned enum suggestion (not the Python ClassVar constant).
     """
+    import json
+    from pathlib import Path
+
     assert sibling_exc.value.wire_error_code == missing_exc.value.wire_error_code == "REFERENCE_NOT_FOUND"
     assert sibling_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
     assert str(sibling_exc.value) == str(missing_exc.value) == "Reference not found"
+    pinned = json.loads(Path("tests/fixtures/adcp_schemas_pinned/enums/error-code.json").read_text())["enumMetadata"][
+        "REFERENCE_NOT_FOUND"
+    ]["suggestion"]
+    assert sibling_exc.value.suggestion == missing_exc.value.suggestion == pinned
 
 
 @pytest.fixture
@@ -213,3 +221,60 @@ def test_get_task_a2a_and_mcp_success_path(integration_db):
         mcp = env.call_mcp(tool="get_task", task_id=step_id)
         assert isinstance(mcp, GetTaskWireResponse)
         assert mcp.task_id == step_id
+
+
+def test_get_task_truthy_non_string_task_id_a2a_and_mcp(integration_db):
+    """Wire grade: truthy non-string task_id must not leak SQL on A2A or MCP.
+
+    Presence-only guards catch ``{}`` → None; this sends ``123`` / ``True`` so
+    the type half is what fires. Assert no query text survives in the envelope.
+    """
+    from tests.harness.task_management import TaskEnv
+
+    leak_markers = ("UPDATE", "SELECT", "[parameters:", "psycopg2", "workflow_steps")
+
+    with TaskEnv(tenant_id="pscope_nonstr", principal_id="wire_owner") as env:
+        tenant = TenantFactory(tenant_id="pscope_nonstr")
+        PrincipalFactory(
+            tenant=tenant,
+            principal_id="wire_owner",
+            platform_mappings={"mock": {"id": "wire_owner_adv"}},
+        )
+        env._commit_factory_data()
+
+        for bad_id in (123, True, ["x"]):
+            a2a = env.call_a2a(tool="get_task", task_id=bad_id)
+            a2a.assert_wire_error("VALIDATION_ERROR")
+            envelope = str(a2a.wire_error_envelope)
+            assert not any(m in envelope for m in leak_markers), envelope
+
+            mcp = env.call_mcp(tool="get_task", task_id=bad_id)
+            mcp.assert_wire_error("VALIDATION_ERROR")
+            envelope = str(mcp.wire_error_envelope)
+            assert not any(m in envelope for m in leak_markers), envelope
+
+
+def test_complete_task_non_string_error_message_a2a_no_sql_leak(integration_db):
+    """A1 sibling-sweep: non-string error_message must not put SQL on the A2A wire."""
+    from tests.harness.task_management import TaskEnv
+
+    leak_markers = ("UPDATE", "SELECT", "[parameters:", "psycopg2", "can't adapt type")
+
+    with TaskEnv(tenant_id="pscope_errmsg", principal_id="wire_owner") as env:
+        tenant = TenantFactory(tenant_id="pscope_errmsg")
+        PrincipalFactory(
+            tenant=tenant,
+            principal_id="wire_owner",
+            platform_mappings={"mock": {"id": "wire_owner_adv"}},
+        )
+        env._commit_factory_data()
+        step_id = env.seed_owner_task(principal_id="wire_owner", status="requires_approval")
+        result = env.call_a2a(
+            tool="complete_task",
+            task_id=step_id,
+            status="failed",
+            error_message={"x": 1},
+        )
+        result.assert_wire_error("VALIDATION_ERROR")
+        envelope = str(result.wire_error_envelope)
+        assert not any(m in envelope for m in leak_markers), envelope

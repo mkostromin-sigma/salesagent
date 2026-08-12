@@ -8,7 +8,7 @@ import copy
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
@@ -1615,7 +1615,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             # Resolve by name at call time so unittest ``patch.object`` on the
             # handler method is honored (bound methods baked at __init__ are not).
-            handler = getattr(self, skill_handlers[skill_name])
+            handler: Callable[..., Awaitable[Any]] = getattr(self, skill_handlers[skill_name])
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
@@ -1951,27 +1951,43 @@ class AdCPRequestHandler(RequestHandler):
         A2A and MCP emit the same wire error; this handler is a pure
         forwarder and must not coerce the raw value (``or ""`` would turn a
         supplied falsy scalar like ``0`` into a masquerading empty string).
+        Unknown buyer keys are rejected via L2 ``assert_known_task_params``.
         """
-        # Forward the raw JSON value — ``get_task`` / ``_require_task_id`` owns
-        # type validation. Do not ``cast`` or coerce here (architecture guard
-        # bans ``typing.cast`` in this module).
-        return await core_get_task(task_id=parameters.get("task_id"), identity=identity)
+        from src.core.tools.task_management import GET_TASK_BUYER_PARAMS, assert_known_task_params
+
+        with adcp_validation_boundary(context="get_task request"):
+            assert_known_task_params(parameters, allowed=GET_TASK_BUYER_PARAMS)
+            # Forward the raw JSON value — ``get_task`` / ``_require_task_id`` owns
+            # type validation. Do not ``cast`` or coerce here (architecture guard
+            # bans ``typing.cast`` in this module).
+            return await core_get_task(task_id=parameters.get("task_id"), identity=identity)
 
     async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit complete_task skill — principal-scoped durable completion.
 
-        Forward only declared L2 kwargs (match ``_handle_get_task_skill`` and
-        sibling skills). Never splat the buyer namespace — unknown keys would
-        ``TypeError`` into SERVICE_UNAVAILABLE on A2A while MCP screens them.
+        Forward only declared L2 buyer kwargs (derived from
+        ``inspect.signature(complete_task)`` minus server-owned names). Never
+        splat the buyer namespace — unknown keys (e.g. typo ``statas``) must
+        raise ``VALIDATION_ERROR``, not silently default ``status``.
+        ``context`` is FastMCP transport-owned and is never buyer-forwarded.
         """
-        kwargs: dict[str, Any] = {
-            "task_id": parameters.get("task_id"),
-            "identity": identity,
-        }
-        for key in ("status", "response_data", "error_message", "context"):
-            if key in parameters:
-                kwargs[key] = parameters[key]
-        return await core_complete_task(**kwargs)
+        from src.core.tools.task_management import (
+            COMPLETE_TASK_BUYER_PARAMS,
+            assert_known_task_params,
+        )
+
+        with adcp_validation_boundary(context="complete_task request"):
+            assert_known_task_params(parameters, allowed=COMPLETE_TASK_BUYER_PARAMS)
+            kwargs: dict[str, Any] = {
+                "task_id": parameters.get("task_id"),
+                "identity": identity,
+            }
+            for key in COMPLETE_TASK_BUYER_PARAMS:
+                if key == "task_id":
+                    continue
+                if key in parameters:
+                    kwargs[key] = parameters[key]
+            return await core_complete_task(**kwargs)
 
     # Signals skill handlers removed - should come from dedicated signals agents
 

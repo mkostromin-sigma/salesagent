@@ -706,10 +706,22 @@ class TestA2AErrorPropagation:
         result = await handler.on_message_send(params, ServerCallContext())
 
         assert isinstance(result, Task)
-        assert result.artifacts is not None and len(result.artifacts) > 0
+        from tests.utils.a2a_helpers import assert_failed_task_artifact
+
+        assert_failed_task_artifact(result)
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="task_id", recovery="correctable")
+        # B4: wire suggestion equals pinned enum text for VALIDATION_ERROR (not the Python constant).
+        import json
+        from pathlib import Path
+
+        meta = json.loads(Path("tests/fixtures/adcp_schemas_pinned/enums/error-code.json").read_text())["enumMetadata"]
+        expected_suggestion = meta["VALIDATION_ERROR"]["suggestion"]
+        suggestion = artifact_data["errors"][0].get("suggestion") or artifact_data.get("adcp_error", {}).get(
+            "suggestion"
+        )
+        assert suggestion == expected_suggestion
 
     @pytest.fixture
     def active_media_buy(self, _seeded):

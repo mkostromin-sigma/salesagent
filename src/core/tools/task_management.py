@@ -7,7 +7,11 @@ pending workflow tasks.
 This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 """
 
+from __future__ import annotations
+
+import inspect
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,6 +29,29 @@ from src.core.resolved_identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
 
+# Server-owned kwargs — never buyer-supplied on the A2A skill path.
+_SERVER_OWNED_TASK_PARAMS = frozenset({"context", "identity"})
+
+
+def _buyer_param_names(fn: Any) -> frozenset[str]:
+    """Buyer-forwardable names from an L2 tool signature (minus server-owned)."""
+    return frozenset(inspect.signature(fn).parameters) - _SERVER_OWNED_TASK_PARAMS
+
+
+def assert_known_task_params(parameters: Mapping[str, Any], *, allowed: frozenset[str]) -> None:
+    """Reject unknown buyer keys at L2 so A2A cannot silently drop typos.
+
+    MCP TypeAdapter already rejects unexpected kwargs; A2A hand-rolls a key
+    allowlist. Sharing this check keeps both transports on the same policy —
+    a typo'd ``statas`` must not default ``status`` to ``completed``.
+    """
+    unknown = sorted(set(parameters) - allowed)
+    if unknown:
+        raise AdCPValidationError(
+            f"Unexpected parameter(s): {', '.join(unknown)}",
+            suggestion=VALIDATION_ERROR_SUGGESTION,
+        )
+
 
 def _require_task_id(task_id: Any) -> str:
     """Validate presence *and* type of ``task_id`` for both durable task tools.
@@ -35,9 +62,8 @@ def _require_task_id(task_id: Any) -> str:
     where the untyped DB error (e.g. ``UndefinedFunction`` for a numeric
     literal against a varchar column) escapes as ``SERVICE_UNAVAILABLE`` and
     leaks the query. Shared by ``get_task`` / ``complete_task`` so both tools
-    reject the same shapes at L2. Wire grading for the type half currently
-    covers the A2A skill path plus unit calls; MCP FastMCP TypeAdapter may
-    still reject non-strings before L2 — see transport-equivalence follow-up.
+    reject the same shapes at L2. Wire grading covers truthy non-strings on
+    both A2A and MCP via TaskEnv (unit covers the in-process path).
     """
     if not isinstance(task_id, str) or not task_id:
         raise AdCPValidationError(
@@ -46,6 +72,19 @@ def _require_task_id(task_id: Any) -> str:
             suggestion=VALIDATION_ERROR_SUGGESTION,
         )
     return task_id
+
+
+def _require_error_message(error_message: Any) -> str | None:
+    """Reject non-string ``error_message`` before it reaches the ORM/DB driver."""
+    if error_message is None:
+        return None
+    if not isinstance(error_message, str):
+        raise AdCPValidationError(
+            "error_message must be a string",
+            field="error_message",
+            suggestion=VALIDATION_ERROR_SUGGESTION,
+        )
+    return error_message
 
 
 async def list_tasks(
@@ -145,7 +184,9 @@ async def list_tasks(
 
 
 async def get_task(
-    task_id: Any = None, context: Context | None = None, identity: ResolvedIdentity | None = None
+    task_id: str,
+    context: Context | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> dict[str, Any]:
     """Get detailed information about a specific task.
 
@@ -203,7 +244,7 @@ async def get_task(
 
 
 async def complete_task(
-    task_id: Any = None,
+    task_id: str,
     status: str = "completed",
     response_data: dict[str, Any] | None = None,
     error_message: str | None = None,
@@ -230,11 +271,13 @@ async def complete_task(
     tenant = require_tenant(identity)
     principal_id = require_principal_id(identity)  # F-03: an authenticated principal is required
     task_id = _require_task_id(task_id)
+    error_message = _require_error_message(error_message)
 
     if status not in ["completed", "failed"]:
         raise AdCPValidationError(
             f"Invalid status '{status}'. Must be 'completed' or 'failed'",
             field="status",
+            suggestion=VALIDATION_ERROR_SUGGESTION,
         )
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
@@ -287,3 +330,8 @@ async def complete_task(
             "completed_at": completed_time.isoformat(),
             "completed_by": principal_id,
         }
+
+
+# Derived once at import — A2A handlers + unit tests share this set (A6).
+GET_TASK_BUYER_PARAMS = _buyer_param_names(get_task)
+COMPLETE_TASK_BUYER_PARAMS = _buyer_param_names(complete_task)

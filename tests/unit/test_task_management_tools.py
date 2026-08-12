@@ -337,14 +337,33 @@ class TestCompleteTaskTool:
 
 
 class TestCompleteTaskA2AForwarder:
-    """A2A complete_task must not splat unknown buyer keys into L2 (KM Aug-05)."""
+    """A2A complete_task rejects unknown buyer keys; forwards only L2 buyer params."""
 
     @pytest.mark.asyncio
-    async def test_unknown_buyer_key_does_not_typeerror(self):
+    async def test_unknown_buyer_key_raises_validation(self):
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPValidationError
+
+        handler = object.__new__(AdCPRequestHandler)
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1",
+            tenant_id="t1",
+            tenant={"tenant_id": "t1"},
+            protocol="a2a",
+        )
+        with pytest.raises(AdCPValidationError, match="Unexpected parameter") as exc:
+            await handler._handle_complete_task_skill(
+                {"task_id": "step-1", "statas": "failed", "push_notification_config": {}},
+                identity,
+            )
+        assert "statas" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_forwarded_kwargs_match_signature_buyer_params(self):
         from unittest.mock import AsyncMock, patch
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.task_management import COMPLETE_TASK_BUYER_PARAMS
 
         handler = object.__new__(AdCPRequestHandler)
         identity = PrincipalFactory.make_identity(
@@ -356,17 +375,22 @@ class TestCompleteTaskA2AForwarder:
         with patch(
             "src.a2a_server.adcp_a2a_server.core_complete_task",
             new_callable=AsyncMock,
-            side_effect=AdCPValidationError("task_id is required", field="task_id"),
+            return_value={"task_id": "step-1", "status": "failed"},
         ) as mock_complete:
-            with pytest.raises(AdCPValidationError):
-                await handler._handle_complete_task_skill(
-                    {"task_id": "", "statas": "completed", "push_notification_config": {}},
-                    identity,
-                )
+            await handler._handle_complete_task_skill(
+                {
+                    "task_id": "step-1",
+                    "status": "failed",
+                    "error_message": "boom",
+                    "response_data": {"ok": True},
+                },
+                identity,
+            )
         mock_complete.assert_awaited_once()
         kwargs = mock_complete.await_args.kwargs
-        assert set(kwargs) <= {"task_id", "status", "response_data", "error_message", "context", "identity"}
-        assert "statas" not in kwargs
-        assert "push_notification_config" not in kwargs
-        assert kwargs["task_id"] == ""
+        forwarded_buyer = set(kwargs) - {"identity"}
+        assert forwarded_buyer == COMPLETE_TASK_BUYER_PARAMS
+        assert "context" not in kwargs
+        assert kwargs["status"] == "failed"
+        assert kwargs["error_message"] == "boom"
         assert kwargs["identity"] is identity

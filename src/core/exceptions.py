@@ -456,6 +456,10 @@ class AdCPError(Exception):
     # "provide valid credentials") sets this so no raise site can forget the
     # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
     _default_suggestion: ClassVar[str | None] = None
+    # Optional class-level message default — subclasses whose every raise shares
+    # one uniform wire message (e.g. REFERENCE_NOT_FOUND) set this so they do
+    # not need a custom ``__init__`` that restates the base kwargs.
+    _default_message: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     # ``recovery`` is NOT among them: it is a read-only property, derived below.
@@ -478,6 +482,8 @@ class AdCPError(Exception):
         # sanctioned ``synthesize()`` classmethod for boundary fallback paths
         # that need a wire code the typed class hierarchy doesn't model.
         # Direct raises use a typed subclass and inherit its ``_default_*``.
+        if not message and type(self)._default_message is not None:
+            message = type(self)._default_message
         super().__init__(message)
         self.message = message
         self.details = details
@@ -1058,8 +1064,9 @@ class AdCPTaskNotFoundError(AdCPNotFoundError):
     (discoverable via list_tasks).
 
     Default ``message`` is the REFERENCE_NOT_FOUND uniform-response string from
-    ``_SPEC_SUPPLEMENT_CODES`` — raise sites should call ``AdCPTaskNotFoundError()``
-    with no message so L3 does not duplicate wire wording.
+    ``_SPEC_SUPPLEMENT_CODES`` via ``_default_message`` — raise sites should
+    call ``AdCPTaskNotFoundError()`` with no message so L3 does not duplicate
+    wire wording.
     """
 
     _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
@@ -1388,6 +1395,10 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     ``AdCPValidationError``; other ``ValueError`` instances map to the plain
     validation error, ``PermissionError`` to ``AdCPAuthorizationError``, and
     anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
+
+    Database-driver / SQLAlchemy errors are *not* forwarded via ``str(exc)`` —
+    those messages embed SQL text and bind parameters that must never reach
+    the buyer wire.
     """
     if isinstance(exc, AdCPError):
         return exc
@@ -1403,4 +1414,21 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
         return AdCPValidationError(str(exc))
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError(str(exc))
+    if _leaks_sql_or_bind_params(exc):
+        # Keep INTERNAL_ERROR / transient recovery, but never echo driver text.
+        return AdCPError("An unexpected error occurred")
     return AdCPError(str(exc) or type(exc).__name__)
+
+
+def _leaks_sql_or_bind_params(exc: BaseException) -> bool:
+    """True when ``str(exc)`` would disclose SQL / bind params to the buyer."""
+    try:
+        from sqlalchemy.exc import DBAPIError, StatementError
+
+        if isinstance(exc, (DBAPIError, StatementError)):
+            return True
+    except ImportError:  # pragma: no cover - sqlalchemy is a hard dep
+        pass
+    text = str(exc)
+    markers = ("[parameters:", "SQL:", "psycopg2", "asyncpg", "can't adapt type")
+    return any(marker in text for marker in markers)

@@ -76,7 +76,8 @@ def _discover_integration_test_files() -> list[str]:
         test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
         conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
     helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files))
+    utils_files = glob.glob("tests/utils/**/*.py", recursive=True)
+    return sorted(set(test_files + conftest_files + helper_files + utils_files))
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()

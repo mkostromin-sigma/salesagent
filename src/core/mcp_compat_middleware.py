@@ -3,7 +3,8 @@
 Translates deprecated field names, strips unknown fields, and converts FastMCP
 TypeAdapter validation failures into AdCP envelopes in every environment. In
 production, it first retries structural failures after schema-aware deep stripping.
-Runs after MCPAuthMiddleware.
+Also translates FastMCP missing-required-argument ``ToolError`` into AdCP
+envelopes (same seam as TypeAdapter failures). Runs after MCPAuthMiddleware.
 """
 
 from __future__ import annotations
@@ -34,9 +35,10 @@ class RequestCompatMiddleware(Middleware):
        strip schema-unknown nested fields and retry when that changes the input.
        This lets our Pydantic models (with extra='ignore') remain the validation
        gate for forward-compatible fields while preserving typed failures in dev.
+       FastMCP missing-required-argument ``ToolError`` is translated at the same
+       seam (empty ``{}`` arguments included).
 
-    The fallback only catches TypeAdapter ValidationErrors (structural type
-    mismatches). Business logic errors from the tool function propagate normally.
+    Business logic errors from the tool function propagate normally.
     """
 
     async def on_call_tool(
@@ -44,50 +46,58 @@ class RequestCompatMiddleware(Middleware):
         context: MiddlewareContext,
         call_next,
     ) -> ToolResult:
-        arguments = context.message.arguments
-        if not arguments:
-            return await call_next(context)
-
+        arguments = context.message.arguments or {}
         tool_name = context.message.name
         normalized = dict(arguments)
         modified = False
 
-        # Step 1: Translate deprecated fields
-        compat_result = normalize_request_params(tool_name, normalized)
-        normalized = compat_result.params
-        if compat_result.translations_applied:
-            modified = True
+        # Step 1: Translate deprecated fields (no-op on empty args)
+        if arguments:
+            compat_result = normalize_request_params(tool_name, normalized)
+            normalized = compat_result.params
+            if compat_result.translations_applied:
+                modified = True
 
-        # Step 2: Strip unknown fields (schema-aware, production only)
-        # In dev mode, unknown fields reach TypeAdapter and fail loudly —
-        # this is how we detect that the seller agent doesn't support a
-        # field the spec requires. In production, strip silently to avoid
-        # rejecting callers using newer schema versions.
-        from src.core.config import is_production
+            # Step 2: Strip unknown fields (schema-aware, production only)
+            # In dev mode, unknown fields reach TypeAdapter and fail loudly —
+            # this is how we detect that the seller agent doesn't support a
+            # field the spec requires. In production, strip silently to avoid
+            # rejecting callers using newer schema versions.
+            from src.core.config import is_production
 
-        if is_production():
-            known_params = await self._get_known_params(context, tool_name)
-            if known_params is not None:
-                normalized, stripped = strip_unknown_params(normalized, known_params)
-                if stripped:
-                    modified = True
-                    logger.warning(
-                        "Stripped unknown fields from %s: %s",
-                        tool_name,
-                        ", ".join(stripped),
-                    )
+            if is_production():
+                known_params = await self._get_known_params(context, tool_name)
+                if known_params is not None:
+                    normalized, stripped = strip_unknown_params(normalized, known_params)
+                    if stripped:
+                        modified = True
+                        logger.warning(
+                            "Stripped unknown fields from %s: %s",
+                            tool_name,
+                            ", ".join(stripped),
+                        )
 
-        if modified:
-            new_message = CallToolRequestParams(
-                name=tool_name,
-                arguments=normalized,
-            )
-            context = context.copy(message=new_message)
+            if modified:
+                new_message = CallToolRequestParams(
+                    name=tool_name,
+                    arguments=normalized,
+                )
+                context = context.copy(message=new_message)
 
-        # Step 3: Dispatch — with production fallback on TypeAdapter rejection
+        # Step 3: Dispatch — TypeAdapter + missing-required ToolError → AdCP envelope
         try:
             return await call_next(context)
         except Exception as exc:
+            if RequestCompatMiddleware._is_missing_required_argument_error(exc):
+                from src.core.exceptions import VALIDATION_ERROR_SUGGESTION, AdCPValidationError
+
+                typed = AdCPValidationError(
+                    str(exc),
+                    suggestion=VALIDATION_ERROR_SUGGESTION,
+                )
+                await self._record_boundary(context, tool_name, typed)
+                _translate_to_tool_error(typed)
+
             if not self._is_typeadapter_validation_error(exc):
                 raise
 
@@ -122,24 +132,27 @@ class RequestCompatMiddleware(Middleware):
             # _translate_to_tool_error so the emitted AdCPToolError keeps it as
             # __cause__. The translator intentionally normalizes it a second time.
             typed = normalize_to_adcp_error(exc)
-            tenant_id = None
-            principal_id = None
-            if context.fastmcp_context is not None:
-                try:
-                    identity = await context.fastmcp_context.get_state("identity")
-                    if identity is not None:
-                        tenant_id = identity.tenant_id
-                        principal_id = identity.principal_id
-                except Exception:
-                    logger.debug("Could not read MCP identity for validation error logging", exc_info=True)
-            record_boundary_error(
-                "mcp",
-                tool_name,
-                typed,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-            )
+            await self._record_boundary(context, tool_name, typed)
             _translate_to_tool_error(exc)
+
+    async def _record_boundary(self, context: MiddlewareContext, tool_name: str, typed) -> None:
+        tenant_id = None
+        principal_id = None
+        if context.fastmcp_context is not None:
+            try:
+                identity = await context.fastmcp_context.get_state("identity")
+                if identity is not None:
+                    tenant_id = identity.tenant_id
+                    principal_id = identity.principal_id
+            except Exception:
+                logger.debug("Could not read MCP identity for validation error logging", exc_info=True)
+        record_boundary_error(
+            "mcp",
+            tool_name,
+            typed,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        )
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:
@@ -160,6 +173,25 @@ class RequestCompatMiddleware(Middleware):
     def _is_typeadapter_validation_error(exc: Exception) -> bool:
         """Return True for FastMCP TypeAdapter validation failures."""
         return isinstance(exc, ValidationError) and exc.title.startswith("call[")
+
+    @staticmethod
+    def _is_missing_required_argument_error(exc: Exception) -> bool:
+        """Return True for FastMCP ToolError raised when a required arg is absent.
+
+        FastMCP raises its own ``ToolError`` (not pydantic ``ValidationError``)
+        for missing required parameters, so ``_is_typeadapter_validation_error``
+        does not match. Translate those into AdCP envelopes at this seam so
+        ``get_task`` / ``complete_task`` / ``sync_creatives`` /
+        ``update_performance_index`` share one missing-arg path.
+        """
+        from fastmcp.exceptions import ToolError
+
+        from src.core.tool_error_logging import AdCPToolError
+
+        if not isinstance(exc, ToolError) or isinstance(exc, AdCPToolError):
+            return False
+        msg = str(exc).lower()
+        return "missing" in msg and ("argument" in msg or "required" in msg)
 
     async def _get_tool_schema(
         self,

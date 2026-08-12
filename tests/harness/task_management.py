@@ -27,22 +27,23 @@ class GetTaskWireResponse(BaseModel):
     mirrors the full ``task_detail`` dict built in
     ``src.core.tools.task_management.get_task`` so a shape drift reddens.
     ``extra="forbid"`` (no default "ignore") so a leaked field reddens too,
-    not just a dropped one.
+    not just a dropped one. No ``= None`` defaults on nullable fields —
+    production emits every key unconditionally, so absence must redden.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     task_id: str
-    context_id: str | None = None
+    context_id: str | None
     status: str
     type: str
     tool_name: str
     owner: str
     created_at: str
-    updated_at: str | None = None
-    request_data: dict[str, Any] | None = None
-    response_data: dict[str, Any] | None = None
-    error_message: str | None = None
+    updated_at: str | None
+    request_data: dict[str, Any] | None
+    response_data: dict[str, Any] | None
+    error_message: str | None
     associated_objects: list[dict[str, Any]]
 
 
@@ -50,15 +51,17 @@ class CompleteTaskWireResponse(BaseModel):
     """Full success-path wire shape for complete_task — every returned field declared.
 
     ``extra="forbid"`` so a leaked field reddens too, not just a dropped one.
+    No ``= None`` defaults: production emits every key unconditionally, so
+    absence must redden (drop half of the forbid claim).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     task_id: str
     status: str
-    message: str | None = None
-    completed_at: str | None = None
-    completed_by: str | None = None
+    message: str | None
+    completed_at: str | None
+    completed_by: str | None
 
 
 class TaskManagementEnv(IntegrationEnv):

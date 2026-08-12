@@ -43,8 +43,10 @@ _MULTI_TENANT_QUERY_PATTERNS = [
     re.compile(r"self\._session\.scalars\(\s*select\(\s*ObjectWorkflowMapping"),
 ]
 
-# Pattern that indicates tenant isolation is present (DBContext join).
-_CONTEXT_JOIN_PATTERN = re.compile(r"DBContext|join\(Context\)")
+# Pattern that indicates tenant isolation is present (DBContext.tenant_id predicate).
+# Joining DBContext alone is not enough — every multi-tenant query method must
+# compare ``DBContext.tenant_id == self._tenant_id``.
+_CONTEXT_JOIN_PATTERN = re.compile(r"DBContext\.tenant_id\s*==\s*self\._tenant_id")
 
 # Pre-existing violations: method names in WorkflowRepository that are known
 # to lack tenant isolation. Each entry needs a FIXME tracking its fix.
@@ -123,3 +125,24 @@ class TestWorkflowRepositoryTenantIsolation:
                 "When fixed, remove the method from WORKFLOW_ISOLATION_ALLOWLIST."
             ),
         )
+
+
+def test_join_without_tenant_predicate_is_violation() -> None:
+    """Negative self-test: ``join(DBContext)`` alone must not satisfy the guard.
+
+    Deleting ``DBContext.tenant_id == self._tenant_id`` while keeping the join
+    token previously left the guard green; the tightened pattern must catch it.
+    """
+    body = """
+    def list_by_tenant(self):
+        return self._session.scalars(select(WorkflowStep).join(DBContext)).all()
+    """
+    assert _method_queries_without_context_join("list_by_tenant", body) is True
+
+    body_ok = """
+    def list_by_tenant(self):
+        return self._session.scalars(
+            select(WorkflowStep).join(DBContext).where(DBContext.tenant_id == self._tenant_id)
+        ).all()
+    """
+    assert _method_queries_without_context_join("list_by_tenant", body_ok) is False

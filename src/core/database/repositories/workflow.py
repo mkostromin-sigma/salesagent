@@ -79,18 +79,44 @@ class WorkflowRepository:
         accidentally fall through to tenant-only scoping via
         ``get_by_step_id(..., principal_id=None)``.
 
+        Resolve-then-authorize (AdCP 3.1.1 error-handling.mdx): select by
+        ``step_id`` + ``tenant_id`` only, then compare ``contexts.principal_id``
+        in Python — including a sentinel comparison when the row is missing —
+        so both legs do equal-shape authorization work. One raise site keeps
+        the wire envelope uniform.
+
         Message is the generic REFERENCE_NOT_FOUND text (AdCP 3.1.1
         error-handling Uniform response — no resource-qualified message).
         """
         if not principal_id:
             raise ValueError("principal_id is required")
-        step = self.get_by_step_id(step_id, principal_id=principal_id)
-        if step is None:
+
+        # Step 1 — resolve within tenant (no principal predicate in SQL).
+        row = self._session.execute(
+            select(WorkflowStep, DBContext.principal_id)
+            .join(DBContext)
+            .where(
+                WorkflowStep.step_id == step_id,
+                DBContext.tenant_id == self._tenant_id,
+            )
+        ).first()
+
+        # Step 2 — authorize with equal-shape work on both hit and miss.
+        # Sentinel is never a real principal_id, so miss always denies.
+        _MISSING_OWNER = object()
+        if row is None:
+            step: WorkflowStep | None = None
+            owner: Any = _MISSING_OWNER
+        else:
+            step, owner = row
+
+        if owner != principal_id:
             from src.core.exceptions import AdCPTaskNotFoundError
 
             # Default message comes from the typed exception (spec supplement) —
             # L3 must not hand-transcribe wire wording.
             raise AdCPTaskNotFoundError()
+        assert step is not None  # owner matched a real row
         return step
 
     def list_by_tenant(
@@ -311,10 +337,15 @@ class WorkflowRepository:
         relying on an earlier scoped read in the same unit of work. Admin/
         service callers omit it for tenant-only scoping (unchanged).
 
+        Explicit empty-string ``principal_id`` raises (same as the read gate)
+        rather than silently widening to tenant-only scope.
+
         Returns the updated step, or None if not found (including "found but
         not owned by principal_id").
         Does NOT commit — the caller handles that.
         """
+        if principal_id is not None and not principal_id:
+            raise ValueError("principal_id is required")
         step = self.get_by_step_id(step_id, principal_id=principal_id)
         if step is None:
             return None
