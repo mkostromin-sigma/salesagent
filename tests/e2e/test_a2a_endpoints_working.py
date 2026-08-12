@@ -380,11 +380,21 @@ class TestA2AServerIntegration:
         Companion to the strict-xfail code check: an auth-gate regression that
         exits before not-found would change this message and redden here, while
         the code-only xfail would stay permanently red under v0.3 flattening.
+
+        Sends ``x-adcp-tenant: ci-test`` with ``test_auth_token`` (ci-test-token)
+        so tenant resolution matches the token's principal — without it the
+        server falls back to ``default`` and exits at auth before not-found.
         """
+        # Token is scoped to ci-test (see test_auth_token); without x-adcp-tenant
+        # the server resolves tenant "default" and exits at auth before not-found.
         response = requests.post(
             f"{live_server['a2a']}/a2a",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
-            headers={"Authorization": f"Bearer {test_auth_token}"},
+            headers={
+                "Authorization": f"Bearer {test_auth_token}",
+                "Content-Type": "application/json",
+                "x-adcp-tenant": "ci-test",
+            },
             timeout=5,
         )
         assert response.status_code == 200, f"JSON-RPC errors ride a 200 envelope: {response.status_code}"
@@ -438,7 +448,11 @@ class TestA2AServerIntegration:
         response = requests.post(
             f"{live_server['a2a']}/a2a",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
-            headers={"Authorization": f"Bearer {test_auth_token}"},
+            headers={
+                "Authorization": f"Bearer {test_auth_token}",
+                "Content-Type": "application/json",
+                "x-adcp-tenant": "ci-test",
+            },
             timeout=5,
         )
 
