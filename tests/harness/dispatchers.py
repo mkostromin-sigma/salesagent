@@ -53,6 +53,29 @@ if TYPE_CHECKING:
 #     catch-all arm that may fire before anything was sent declares False.
 
 
+def apply_testing_hook_headers(
+    headers: dict[str, str],
+    identity: Any | None = None,
+    *,
+    fallback_mock_time: Any | None = None,
+) -> None:
+    """Mutate *headers* with ``X-Dry-Run`` / ``X-Mock-Time`` from identity or env.
+
+    Production A2A/REST/MCP resolve ``AdCPTestContext.from_headers`` — in-process
+    harness paths that rebuild auth headers (real-token A2A/MCP, e2e_rest) must
+    forward the same hooks or ``given_today_is`` is inert and flight status
+    grades against wall clock.
+    """
+    tc = getattr(identity, "testing_context", None) if identity is not None else None
+    if tc is not None and getattr(tc, "dry_run", False):
+        headers["x-dry-run"] = "true"
+    mock_time = getattr(tc, "mock_time", None) if tc is not None else None
+    if mock_time is None:
+        mock_time = fallback_mock_time
+    if mock_time is not None:
+        headers["x-mock-time"] = mock_time.isoformat().replace("+00:00", "Z")
+
+
 class ImplDispatcher:
     """Dispatch via direct ``_impl()`` call.
 

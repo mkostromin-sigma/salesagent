@@ -804,11 +804,19 @@ class BaseTestEnv:
 
         if auth_token:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+            from tests.harness.dispatchers import apply_testing_hook_headers
 
             headers = {
                 "x-adcp-auth": auth_token,
                 "x-adcp-tenant": a2a_identity.tenant_id or "",
             }
+            # Real-token path re-resolves identity via from_headers — forward
+            # X-Mock-Time / X-Dry-Run or UC-019 "today is" is wall-clock only.
+            apply_testing_hook_headers(
+                headers,
+                a2a_identity,
+                fallback_mock_time=self._mock_time,
+            )
             server_context = ServerCallContext(
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
@@ -955,10 +963,17 @@ class BaseTestEnv:
             # Patch get_http_headers in BOTH modules that import it:
             # transport_helpers (called by resolve_identity_from_context) and
             # mcp_auth_middleware (called for context_id extraction).
+            from tests.harness.dispatchers import apply_testing_hook_headers
+
             headers = {
                 "x-adcp-auth": auth_token,
                 "x-adcp-tenant": mcp_identity.tenant_id or "",
             }
+            apply_testing_hook_headers(
+                headers,
+                mcp_identity,
+                fallback_mock_time=self._mock_time,
+            )
 
             async def _call():
                 mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)

@@ -147,3 +147,58 @@ class TestRestE2EDispatcherMockTimeHeader:
 
         assert captured_headers.get("x-mock-time") == "2026-03-15T12:00:00Z"
         assert captured_headers.get("x-dry-run") == "true"
+
+
+class TestApplyTestingHookHeaders:
+    """Shared harness helper used by e2e_rest + real-token A2A/MCP (#1830)."""
+
+    def test_forwards_mock_time_and_dry_run_from_identity(self):
+        from tests.harness.dispatchers import apply_testing_hook_headers
+
+        mock_time = datetime(2026, 3, 15, 12, 0, 0, tzinfo=UTC)
+        identity = PrincipalFactory.make_identity(
+            protocol="a2a",
+            testing_context=AdCPTestContext(mock_time=mock_time, dry_run=True),
+        )
+        headers: dict[str, str] = {"x-adcp-auth": "tok"}
+        apply_testing_hook_headers(headers, identity)
+        assert headers["x-mock-time"] == "2026-03-15T12:00:00Z"
+        assert headers["x-dry-run"] == "true"
+
+    def test_falls_back_to_env_mock_time(self):
+        from tests.harness.dispatchers import apply_testing_hook_headers
+
+        mock_time = datetime(2026, 3, 14, 12, 0, 0, tzinfo=UTC)
+        identity = PrincipalFactory.make_identity(
+            protocol="a2a",
+            testing_context=AdCPTestContext(mock_time=None),
+        )
+        headers: dict[str, str] = {}
+        apply_testing_hook_headers(headers, identity, fallback_mock_time=mock_time)
+        assert headers["x-mock-time"] == "2026-03-14T12:00:00Z"
+
+    def test_a2a_real_token_auth_context_includes_mock_time(self):
+        """Regression: integration A2A rebuilt headers without X-Mock-Time (#1950)."""
+        from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+        from src.core.testing_hooks import AdCPTestContext as HooksCtx
+
+        mock_time = datetime(2026, 3, 15, 12, 0, 0, tzinfo=UTC)
+        identity = PrincipalFactory.make_identity(
+            protocol="a2a",
+            auth_token="real-tok",
+            testing_context=AdCPTestContext(mock_time=mock_time),
+        )
+        from tests.harness.dispatchers import apply_testing_hook_headers
+
+        headers = {
+            "x-adcp-auth": identity.auth_token or "",
+            "x-adcp-tenant": identity.tenant_id or "",
+        }
+        apply_testing_hook_headers(headers, identity, fallback_mock_time=None)
+        auth_ctx = AuthContext(auth_token=identity.auth_token, headers=headers)
+        parsed = HooksCtx.from_headers(auth_ctx.headers)
+        assert parsed is not None
+        assert parsed.mock_time == mock_time
+        # Sanity: state key contract still holds for ServerCallContext consumers.
+        assert AUTH_CONTEXT_STATE_KEY
+        assert auth_ctx.headers["x-mock-time"] == "2026-03-15T12:00:00Z"
