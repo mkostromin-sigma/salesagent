@@ -2543,9 +2543,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
 
-        # --- UC-019: e2e_rest xfails for datetime-mock-dependent tests ---
-        # Graduated (#1830): X-Mock-Time end-to-end (REST from_headers + list
-        # honors mock_time + RestE2EDispatcher header + given_today_is).
+        # --- UC-019: e2e_rest xfails (adapter-mock / fixture gaps) ---
+        # Datetime rows use X-Mock-Time end-to-end (REST from_headers + list
+        # mock clock + RestE2EDispatcher + given_today_is / set_mock_time).
         # Remaining e2e_rest UC-019 gaps below are adapter-mock / fixture-only.
         if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
             _UC019_E2E_MOCK_TAGS: set[str] = {
@@ -3163,8 +3163,8 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
-# variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
-_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
+# variant would 404). Empty: get_media_buys now has POST /api/v1/media-buys/query.
+_NO_REST_UC_TAG_PREFIXES: tuple[str, ...] = ()
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -3217,13 +3217,9 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
     ids = ["a2a", "mcp", "rest"]
 
-    # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
-    # the A2A + MCP wire transports only — including a REST variant would 404.
-    # This applies to e2e_rest too: it dispatches real HTTP REST to the live
-    # server, so a tool with no REST route 404s there identically (confirmed by
-    # the first in-network CI run: every UC-019 e2e_rest param died on a live
-    # 404). Skip the e2e append for these UCs instead of parking ~40 ledger
-    # entries for a definitionally-unsupported transport.
+    # UCs without a REST endpoint are graded on A2A + MCP only (a REST variant
+    # would 404). Same for e2e_rest (live HTTP). Currently empty — get_media_buys
+    # has POST /api/v1/media-buys/query.
     no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
     if no_rest_uc:
         transports = [Transport.A2A, Transport.MCP]

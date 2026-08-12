@@ -15,7 +15,7 @@ This module handles all testing headers and provides isolated test execution:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -100,6 +100,18 @@ class AdCPTestContext(BaseModel):
         per-comparator.
         """
         return _ensure_aware(v) if v is not None else v
+
+    def reference_today(self) -> date:
+        """UTC calendar date used for flight-window refinement under testing hooks.
+
+        When ``mock_time`` is set (``X-Mock-Time``), return that date; otherwise
+        wall-clock UTC today. Shared by ``get_media_buys`` (and callers that need
+        the same mock/wall date). Delivery still uses ``_simulation_clock`` for
+        the full datetime + ``simulate`` flag (including ``jump_to_event``).
+        """
+        if self.mock_time is not None:
+            return self.mock_time.date()
+        return datetime.now(UTC).date()
 
     @classmethod
     def from_headers(cls, headers: dict[str, str]) -> "AdCPTestContext | None":
@@ -215,6 +227,17 @@ class AdCPTestContext(BaseModel):
 TestingContext = AdCPTestContext  # Original name
 TestContext = AdCPTestContext  # Intermediate name (was briefly used)
 TestingHookContext = AdCPTestContext  # Another intermediate name
+
+
+def reference_today(testing_ctx: AdCPTestContext | None) -> date:
+    """Mock/wall UTC date for list-style status refinement.
+
+    Mirrors ``AdCPTestContext.reference_today`` when a context is present;
+    wall-clock UTC today when ``testing_ctx`` is None or has no ``mock_time``.
+    """
+    if testing_ctx is not None and testing_ctx.mock_time is not None:
+        return testing_ctx.mock_time.date()
+    return datetime.now(UTC).date()
 
 
 class NextEventCalculator:

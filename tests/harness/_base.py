@@ -565,6 +565,23 @@ class BaseTestEnv:
         self._tenant_id = tenant_id
 
     @property
+    def mock_time(self) -> datetime | None:
+        """Public simulation clock set by ``set_mock_time`` / Given today is."""
+        return self._mock_time
+
+    def set_mock_time(self, mock_time: datetime | None) -> None:
+        """Set the controllable simulation clock and invalidate cached identities.
+
+        Public mutator for Given ``today is …``: steps must not poke
+        ``_mock_time`` / ``_identity_cache`` / ``__dict__["_identity"]``.
+        ``identity_for`` rebuilds ``AdCPTestContext(mock_time=…)`` on next access.
+        """
+        self._mock_time = mock_time
+        self._identity_cache.clear()
+        if "_identity" in self.__dict__:
+            del self.__dict__["_identity"]
+
+    @property
     def identity(self) -> ResolvedIdentity:
         """Default identity (protocol='mcp'). Backward-compatible.
 
@@ -815,7 +832,7 @@ class BaseTestEnv:
             apply_testing_hook_headers(
                 headers,
                 a2a_identity,
-                fallback_mock_time=self._mock_time,
+                fallback_mock_time=self.mock_time,
             )
             server_context = ServerCallContext(
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
@@ -972,7 +989,7 @@ class BaseTestEnv:
             apply_testing_hook_headers(
                 headers,
                 mcp_identity,
-                fallback_mock_time=self._mock_time,
+                fallback_mock_time=self.mock_time,
             )
 
             async def _call():

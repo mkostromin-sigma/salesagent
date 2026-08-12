@@ -2106,8 +2106,8 @@ class AdCPRequestHandler(RequestHandler):
 
         params = {**parameters}
         include_snapshot = params.pop("include_snapshot", False)
-        # No REST route exists for get_media_buys; context string follows the
-        # same "<tool> request" convention as the sibling boundaries (klkg).
+        # REST sibling: POST /api/v1/media-buys/query. Context string follows
+        # the same "<tool> request" convention as the sibling boundaries.
         with adcp_validation_boundary(context="get_media_buys request"):
             req = GetMediaBuysRequest.model_validate(params)
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)

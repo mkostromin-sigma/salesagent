@@ -44,7 +44,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, cast
 
@@ -197,13 +197,13 @@ def _get_media_buys_impl(
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
     # if no tenant resolved (the principal advisories above take precedence).
     tenant = require_tenant(identity, context=req.context)
-    # Honor X-Mock-Time / testing_context.mock_time (parity with delivery
-    # _simulation_clock) so e2e_rest UC-019 date refinement is controllable.
-    today = (
-        testing_ctx.mock_time.date()
-        if testing_ctx is not None and testing_ctx.mock_time is not None
-        else datetime.now(UTC).date()
-    )
+    # Honor X-Mock-Time for reference date + simulate=True so list status
+    # agrees with delivery under the same mock clock (jump_to_event remains
+    # delivery-only).
+    from src.core.testing_hooks import reference_today
+
+    today = reference_today(testing_ctx)
+    simulate = testing_ctx is not None and testing_ctx.mock_time is not None
     tenant_id: str = tenant["tenant_id"]
 
     # Every non-fatal per-row advisory lands here — a degraded optional field and an
@@ -744,7 +744,7 @@ def _compute_status(buy: MediaBuy, today: date) -> MediaBuyStatus:
     terminal state, "rejected" (enums/media-buy-status.json).
 
     """
-    canonical = resolve_canonical_status(buy, today)
+    canonical = resolve_canonical_status(buy, today, simulate=simulate)
     if canonical == "failed":
         return MediaBuyStatus.rejected
     return MediaBuyStatus(canonical)

@@ -161,9 +161,9 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     """Override 'today' for status computation via testing_context.mock_time.
 
     Production ``get_media_buys`` honors ``identity.testing_context.mock_time``
-    (parity with delivery). For e2e_rest, RestE2EDispatcher forwards
-    ``X-Mock-Time`` from the same clock. Seed helpers still read
-    ``ctx["mock_today"]``.
+    (same mock clock as delivery under X-Mock-Time). For e2e_rest,
+    RestE2EDispatcher forwards ``X-Mock-Time`` from ``env.mock_time``.
+    Seed helpers still read ``ctx["mock_today"]``.
     """
     from datetime import UTC, datetime
 
@@ -172,16 +172,10 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)
 
     env = ctx["env"]
-    env._mock_time = fake_now
-    # Rebuild identities so all transports carry the simulation clock.
-    env._identity_cache.clear()
-    if "_identity" in env.__dict__:
-        del env.__dict__["_identity"]
-    # Eagerly stamp the default identity so in-process REST overrides /
-    # IMPL calls see mock_time even before the next identity_for().
+    env.set_mock_time(fake_now)
+    # Eagerly build default identity so in-process calls see mock_time
+    # before the next identity_for() without private cache surgery.
     _ = env.identity
-    if env.identity.testing_context is not None:
-        env.identity.testing_context.mock_time = fake_now
 
 
 # Pre-flight window (far future) for persisted-status seeds that carry no
