@@ -305,4 +305,4 @@ def test_get_task_reference_not_found_wire_suggestion_a2a_and_mcp(integration_db
         env._commit_factory_data()
         for transport in (Transport.A2A, Transport.MCP):
             result = env.call_via(transport, tool="get_task", task_id="missing-task-id-b4")
-            result.assert_wire_error("REFERENCE_NOT_FOUND", require_suggestion=True)
+            result.assert_wire_error("REFERENCE_NOT_FOUND", pin_enum_suggestion=True)

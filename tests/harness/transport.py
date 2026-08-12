@@ -30,11 +30,10 @@ def _pinned_error_metadata() -> dict[str, dict[str, str]]:
 
     ``assert_wire_error`` reads ``recovery`` from this SDK-sourced metadata
     (safe: SDK enum is a strict recovery-identical superset of the vendored
-    fixture across all 64 shared codes). ``suggestion`` content, when
-    ``require_suggestion=True``, is graded against the *vendored* fixture
-    instead — SDK and fixture diverge on 4 suggestion texts, and wire grading
-    must not follow that drift (#1812 B4). See docs/adcp-spec-version.md
-    "Pinned schema sources".
+    fixture across all 64 shared codes). Exact ``suggestion`` pinning (when
+    ``pin_enum_suggestion=True``) uses the *vendored* fixture instead — SDK and
+    fixture diverge on 4 suggestion texts, and wire grading must not follow
+    that drift (#1812 B4). See docs/adcp-spec-version.md "Pinned schema sources".
     """
     return pinned_schema.load("error-code.json")["enumMetadata"]
 
@@ -450,6 +449,7 @@ class TransportResult:
         *,
         recovery: str | None = None,
         require_suggestion: bool = False,
+        pin_enum_suggestion: bool = False,
         message_substr: str | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
@@ -462,10 +462,14 @@ class TransportResult:
         harness-provided way to verify an error on the wire — step definitions
         must not hand-roll envelope parsing.
 
-        When ``require_suggestion`` is True, the wire ``suggestion`` must equal
-        the vendored fixture ``enums/error-code.json`` enumMetadata text for
+        ``require_suggestion=True`` asserts a non-empty buyer-facing suggestion
+        (field-specific pydantic hints are valid — used by suggestion-parity).
+
+        ``pin_enum_suggestion=True`` additionally requires the wire suggestion
+        equal the vendored ``enums/error-code.json`` enumMetadata text for
         ``code`` (not a Python ClassVar) — closes #1812 B4 envelope-null /
-        ClassVar-swap mutations that sibling equality alone cannot catch.
+        ClassVar-swap mutations. Do **not** use this for request-validation
+        paths that emit field-specific suggestions under ``VALIDATION_ERROR``.
         """
         import json
         from pathlib import Path
@@ -487,10 +491,7 @@ class TransportResult:
             "succeeded or errored before reaching a transport."
         )
         expected_suggestion: str | None = None
-        if require_suggestion:
-            # Vendored fixture — same source as architecture suggestion guards.
-            # SDK enumMetadata can diverge on suggestion for a few codes; grading
-            # suggestion content must not follow that drift (#1812 B4).
+        if pin_enum_suggestion:
             fixture_meta = json.loads(Path("tests/fixtures/adcp_schemas_pinned/enums/error-code.json").read_text())[
                 "enumMetadata"
             ]
@@ -498,6 +499,9 @@ class TransportResult:
                 f"{code!r} has no suggestion in vendored error-code.json enumMetadata"
             )
             expected_suggestion = fixture_meta[code]["suggestion"]
+        elif require_suggestion:
+            suggestion = extract_wire_suggestion(envelope)
+            assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"
         assert_envelope_shape(
             envelope,
             code,
