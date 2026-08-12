@@ -168,11 +168,9 @@ def seeded_owned_a2a_handler(
     principal_id: str = OWNED_TASK_OWNER,
     record_owner: bool = True,
 ) -> AdCPRequestHandler:
-    """Minimal owned in-memory task handler (bypasses ``__init__`` for unit/wire)."""
-    handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+    """Minimal owned in-memory task handler (real ``__init__``, override ``tasks``)."""
+    handler = AdCPRequestHandler()
     handler.tasks = {task_id: Task(id=task_id, status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED))}
-    handler._task_push_configs = {}
-    handler._task_owners = {}
     if record_owner:
         record_a2a_task_owner(handler, task_id, tenant_id=tenant_id, principal_id=principal_id)
     return handler
@@ -195,6 +193,31 @@ def token_identity_resolver(
 def auth_headers_mapping(headers: Mapping[str, str]) -> MappingProxyType[str, str]:
     """Immutable header map for ``AuthContext`` (matches production typing)."""
     return MappingProxyType({k.lower(): v for k, v in headers.items()})
+
+
+def owned_task_owner_identity() -> ResolvedIdentity:
+    """Owner identity for OWNED_TASK_* fixtures (unit + wire)."""
+    from tests.factories.principal import PrincipalFactory
+
+    return PrincipalFactory.make_identity(principal_id=OWNED_TASK_OWNER, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
+
+
+def owned_task_sibling_identity() -> ResolvedIdentity:
+    """Same-tenant sibling identity for OWNED_TASK_* fixtures (unit + wire)."""
+    from tests.factories.principal import PrincipalFactory
+
+    return PrincipalFactory.make_identity(principal_id=OWNED_TASK_SIBLING, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
+
+
+def owned_task_other_tenant_identity() -> ResolvedIdentity:
+    """Cross-tenant identity reusing OWNED_TASK_OWNER principal_id."""
+    from tests.factories.principal import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
+        principal_id=OWNED_TASK_OTHER_PRINCIPAL,
+        tenant_id=OWNED_TASK_OTHER_TENANT,
+        protocol="a2a",
+    )
 
 
 def assert_no_identity_leak(message: str, data: object, needles: Iterable[str]) -> None:
@@ -223,8 +246,9 @@ def assert_task_not_found_nondisclosure(
     safe_id = _safe_id_for_log(task_id)
     assert exc.message == f"Task not found: {safe_id}"
     assert isinstance(exc.data, dict)
+    # Exact key set — membership-only checks miss unlisted leak keys.
+    assert set(exc.data) == {"task_id", "adcp_error", "errors"}
     assert exc.data.get("task_id") == safe_id
-    assert "adcp_error" in exc.data
     assert_no_identity_leak(exc.message, exc.data, forbidden_substrings)
 
 

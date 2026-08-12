@@ -332,7 +332,7 @@ class TestA2ARequestHandler:
 
         Auth is mocked so this grades the not-found shape after the identity
         gate (#1702), not an auth-failure collapse into the same error. Shape
-        matches ownership-deny via the shared nondisclosure oracle (Chris R5).
+        matches ownership-deny via the shared nondisclosure oracle.
         """
         with a2a_auth_as(self.handler, PrincipalFactory.make_identity(protocol="a2a")):
             with pytest.raises(TaskNotFoundError) as exc:
@@ -370,6 +370,27 @@ class TestA2ARequestHandler:
 
 class TestA2AServerIntegration:
     """Integration tests for complete A2A server setup."""
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize("method", ["tasks/get", "tasks/cancel"])
+    def test_unknown_task_id_returns_task_not_found_message_on_the_wire(self, method, live_server, test_auth_token):
+        """Live-server message oracle for the ownership/unknown-id branch.
+
+        Grades the buyer-visible message today (auth token reaches the gate).
+        Companion to the strict-xfail code check: an auth-gate regression that
+        exits before not-found would change this message and redden here, while
+        the code-only xfail would stay permanently red under v0.3 flattening.
+        """
+        response = requests.post(
+            f"{live_server['a2a']}/a2a",
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
+            headers={"Authorization": f"Bearer {test_auth_token}"},
+            timeout=5,
+        )
+        assert response.status_code == 200, f"JSON-RPC errors ride a 200 envelope: {response.status_code}"
+        data = response.json()
+        assert "error" in data, f"unknown task id must produce a JSON-RPC error: {data}"
+        assert data["error"]["message"] == "Task not found: task_does_not_exist"
 
     @pytest.mark.integration
     @pytest.mark.xfail(

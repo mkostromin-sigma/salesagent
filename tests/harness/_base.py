@@ -351,11 +351,14 @@ def _a2a_send_message_configuration(spec: dict[str, Any]) -> Any:
 def _clear_injected_identity(handler: AdCPRequestHandler) -> None:
     """Drop unit-mode identity lambdas so a later token dispatch cannot reuse them.
 
-    Security-critical: the set of neutralized attributes has one definition.
-    Graded by ``test_a2a_harness_identity_cleanup.py::test_token_mode_prepare_clears_unit_mode_identity_lambdas``.
+    Security-critical: any instance-dict callable that shadows a class method can
+    defeat the ownership gate (third-attribute injection). Clear all such shadows,
+    not only the two named unit-mode installs. Graded by
+    ``test_a2a_harness_identity_cleanup.py::test_token_mode_prepare_clears_unit_mode_identity_lambdas``.
     """
-    handler.__dict__.pop("_resolve_a2a_identity", None)
-    handler.__dict__.pop("_get_auth_token", None)
+    for key in list(handler.__dict__):
+        if callable(getattr(type(handler), key, None)):
+            handler.__dict__.pop(key, None)
 
 
 class _TestClock:
@@ -939,10 +942,12 @@ class BaseTestEnv:
             # None. Create+own co-location reads ``identity.tenant_id`` (#1702);
             # mocking None made unauth A2A BDD paths AttributeError into
             # SERVICE_UNAVAILABLE instead of AUTH_REQUIRED.
-            # Pin: @T-UC-011-list-unauth[a2a] and @T-UC-005-ext-a[a2a] — both
-            # invoke DISCOVERY_SKILLS, so execution passes the auth-required
-            # gate and reaches the create+own co-location (#1702 / R5-N5a).
-            # Use PrincipalFactory (not inline ResolvedIdentity) for the arch guard.
+            # Pin: @T-UC-011-list-unauth[a2a] grades this anonymous-identity
+            # fallback (deleting it reddens that scenario). @T-UC-005-ext-a[a2a]
+            # does not — it XFAILs with or without the fallback. Both invoke
+            # DISCOVERY_SKILLS past the auth-required gate into create+own
+            # co-location (#1702). Use PrincipalFactory (not inline
+            # ResolvedIdentity) for the arch guard.
             from tests.factories.principal import PrincipalFactory
 
             resolved = a2a_identity or PrincipalFactory.make_anonymous_a2a_identity(
@@ -971,7 +976,7 @@ class BaseTestEnv:
         method: str,
         task_id: str,
         *,
-        identity: Any = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | object = _NO_OVERRIDE,
     ) -> WireTask | None:
         """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
 
@@ -981,9 +986,9 @@ class BaseTestEnv:
 
         These are protocol methods, not AdCP skills: there is no artifact and no
         two-layer envelope. Results land on the grading surface —
-        ``last_a2a_task`` for the served Task, ``last_a2a_task_error`` for a
-        JSON-RPC error (unknown id AND ownership denial collapse to not-found
-        identically; unauthenticated callers get an auth-failure body).
+        ``last_a2a_wire_task`` for the served wire Task, ``last_a2a_task_error``
+        for a JSON-RPC error (unknown id AND ownership denial collapse to
+        not-found identically; unauthenticated callers get an auth-failure body).
 
         Denial altitude: POSTs through ``create_jsonrpc_routes(...,
         enable_v0_3_compat=True)`` — the same call production makes — on the
@@ -1046,7 +1051,7 @@ class BaseTestEnv:
         self,
         task_id: str,
         *,
-        identity: Any = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | object = _NO_OVERRIDE,
         state: TaskState | None = None,
         record_owner: bool = True,
     ) -> Task:

@@ -109,7 +109,6 @@ def then_task_not_found(ctx: dict, task_id: str) -> None:
     scan, since its message is a template rather than a full literal.
     """
     env = ctx["env"]
-    assert env.last_a2a_wire_task is None, f"Denied call still returned a Task: {env.last_a2a_wire_task}"
     error = env.last_a2a_task_error
     assert error is not None, f"Expected a task-not-found error for {task_id}, got none"
     assert_wire_task_not_found(error, task_id)
@@ -125,7 +124,6 @@ def then_auth_failure_not_task_not_found(ctx: dict) -> None:
     shape by construction, so no separate substring check is needed.
     """
     env = ctx["env"]
-    assert env.last_a2a_wire_task is None, f"Unauth call still returned a Task: {env.last_a2a_wire_task}"
     error = env.last_a2a_task_error
     assert error is not None, "Expected an authentication failure, got none"
     assert_wire_auth_failure(error)

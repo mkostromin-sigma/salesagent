@@ -245,6 +245,28 @@ def _safe_id_for_log(client_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.:-]", "?", client_id)[:100]
 
 
+def _missing_auth_token_error(
+    message: str = "Missing authentication token",
+    *,
+    adcp_message: str | None = None,
+) -> InvalidRequestError:
+    """InvalidRequestError carrying the AdCP AUTH_REQUIRED two-layer envelope.
+
+    Shared by ``_resolve_a2a_identity`` (require_valid_token + missing token)
+    and the ``on_message_send`` auth-required gate so every missing-token path
+    inherits the same buyer-facing envelope (recovery + suggestion).
+    """
+    return InvalidRequestError(
+        message=message,
+        data=build_two_layer_error_envelope(
+            AdCPAuthRequiredError(
+                adcp_message or message,
+                suggestion=AUTH_REQUIRED_SUGGESTION,
+            )
+        ),
+    )
+
+
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """Canonical InternalError shape for non-skill A2A boundary failures.
 
@@ -385,7 +407,7 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise InvalidRequestError(message="Missing authentication token")
+            raise _missing_auth_token_error()
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -399,7 +421,10 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+            raise InvalidRequestError(
+                message=str(e),
+                data=build_two_layer_error_envelope(e),
+            ) from e
 
         if require_valid_token:
             if not identity.principal_id:
@@ -698,14 +723,9 @@ class AdCPRequestHandler(RequestHandler):
             # matching REST's no-identity envelope (auth_context.py), which the
             # bare A2AError previously dropped. (#1417)
             if requires_auth and not auth_token:
-                raise InvalidRequestError(
-                    message="Missing authentication token - Bearer token required in Authorization header",
-                    data=build_two_layer_error_envelope(
-                        AdCPAuthRequiredError(
-                            "Authentication required - Bearer token required in Authorization header",
-                            suggestion=AUTH_REQUIRED_SUGGESTION,
-                        )
-                    ),
+                raise _missing_auth_token_error(
+                    "Missing authentication token - Bearer token required in Authorization header",
+                    adcp_message=("Authentication required - Bearer token required in Authorization header"),
                 )
 
             # SSRF-reject unsafe push URLs after the auth-required gate so callers
@@ -759,7 +779,9 @@ class AdCPRequestHandler(RequestHandler):
                 for invocation in skill_invocations:
                     skill_name = invocation["skill"]
                     parameters = invocation["parameters"]
-                    logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
+                    logger.info(
+                        "Processing explicit skill: %s with parameters: %s", _safe_id_for_log(skill_name), parameters
+                    )
 
                     try:
                         result = await self._handle_explicit_skill(
@@ -1106,7 +1128,7 @@ class AdCPRequestHandler(RequestHandler):
             )
 
             # Failure webhook before create+own: thread config explicitly so we
-            # never orphan ``_task_push_configs`` on a resolve failure (R5-A1).
+            # never orphan ``_task_push_configs`` on a resolve failure (#1702).
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
             del task.artifacts[:]
 
@@ -1212,15 +1234,20 @@ class AdCPRequestHandler(RequestHandler):
         task = self.tasks.get(task_id)
         expected_owner = _TaskOwner(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
         # Bind the ownership compare before the ``if`` so it runs on every
-        # call, not only when ``or`` short-circuits past it (error-handling.mdx
-        # § Side effects: resolve-then-authorize MUST be unconditional). Fail
-        # closed on null principal too (must not match a null-owner row).
+        # call, not only when ``or`` short-circuits past it
+        # (error-handling.mdx:209 — resolve-then-authorize MUST be unconditional).
+        # Fail closed on null principal OR null tenant (must not match a
+        # null-owner / null-tenant row).
         owner_ok = self._task_owners.get(task_id) == expected_owner
-        if task is None or not identity.principal_id or not owner_ok:
+        # ``task is None`` is fail-closed defence for an orphan owner row
+        # (owner recorded, task absent) — keep even if type-narrowing alone
+        # would also refuse; graded by the owner-without-task unit scenario.
+        if task is None or not identity.principal_id or not expected_owner.tenant_id or not owner_ok:
             # Wire must stay indistinguishable (existence oracle). Stdlib log may
             # branch for operators; side-effect sinks MUST stay symmetric
-            # (error-handling.mdx:206-207) — both omit tenant/principal so feeds
-            # self-skip (no asymmetric audit flood).
+            # (error-handling.mdx:206-207) — identical kwargs on both branches
+            # (caller's own tenant/principal) so audit/activity trails exist
+            # without creating an existence oracle across tenants.
             log_task_id = _safe_id_for_log(task_id)
             # Structurally identical traces on both branches (error-handling.mdx:207) —
             # do not log a branch-differentiating "ownership_miss" flag.
@@ -1232,11 +1259,13 @@ class AdCPRequestHandler(RequestHandler):
                 identity.principal_id,
             )
             # Telemetry uses typed AdCPError (WARNING branch). Identical kwargs on
-            # both branches — omit tenant_id/principal_id so sinks self-skip.
+            # both branches (caller's identity) so sinks write symmetrically.
             record_boundary_error(
                 "a2a",
                 operation,
                 AdCPTaskNotFoundError(message=_task_not_found_message(log_task_id)),
+                tenant_id=identity.tenant_id,
+                principal_id=identity.principal_id,
             )
             raise self._task_not_found(task_id)
         return task
@@ -1529,7 +1558,11 @@ class AdCPRequestHandler(RequestHandler):
                         message=f"Push notification config not found: {_safe_id_for_log(config_id)}"
                     )
 
-            logger.info("Deleted push notification config: %s for tenant %s", config_id, tool_context.tenant_id)
+            logger.info(
+                "Deleted push notification config: %s for tenant %s",
+                _safe_id_for_log(config_id),
+                tool_context.tenant_id,
+            )
             return None
 
         except A2AError:
@@ -1666,7 +1699,9 @@ class AdCPRequestHandler(RequestHandler):
         compat_result = normalize_request_params(skill_name, parameters)
         parameters = compat_result.params
 
-        logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
+        logger.info(
+            "Handling explicit skill: %s with parameters: %s", _safe_id_for_log(skill_name), list(parameters.keys())
+        )
 
         # Validate identity for non-discovery skills. Stay a JSON-RPC
         # InvalidRequestError (the skill never dispatches, so this is a

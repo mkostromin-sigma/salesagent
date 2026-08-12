@@ -176,14 +176,11 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "NOT_FOUND": "INVALID_REQUEST",
     # Entity-specific not-found codes the pinned spec enum does NOT define
     # (unlike CREATIVE_NOT_FOUND, which the enum defines and therefore passes
-    # through untranslated). The typed subclasses exist for
-    # recovery=correctable + guard-enforceability; the buyer-visible wire code
-    # is INVALID_REQUEST.
-    "FORMAT_NOT_FOUND": "INVALID_REQUEST",
-    # A task_id that exists only under a different account is AdCP 3.1.1's
-    # generic inaccessible-reference condition, not a malformed request —
-    # error-handling.mdx: typed parameters lacking a dedicated standard code
-    # MUST use REFERENCE_NOT_FOUND rather than minting a custom *_NOT_FOUND.
+    # through untranslated). Typed parameters lacking a dedicated standard
+    # code MUST use REFERENCE_NOT_FOUND rather than minting a custom
+    # *_NOT_FOUND (error-handling.mdx / AdCP 3.1.1) — covers FORMAT_NOT_FOUND
+    # and TASK_NOT_FOUND alike. Canonical mapping for merge with #1720.
+    "FORMAT_NOT_FOUND": "REFERENCE_NOT_FOUND",
     "TASK_NOT_FOUND": "REFERENCE_NOT_FOUND",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
@@ -241,7 +238,7 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     {
         "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
-        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
+        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → REFERENCE_NOT_FOUND
         "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → REFERENCE_NOT_FOUND
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
@@ -1027,11 +1024,12 @@ class AdCPCreativeNotFoundError(AdCPNotFoundError):
 
 
 class AdCPFormatNotFoundError(AdCPNotFoundError):
-    """Requested creative format does not exist on the agent (404, wire → INVALID_REQUEST).
+    """Requested creative format does not exist on the agent (404, wire → REFERENCE_NOT_FOUND).
 
     No standard ``FORMAT_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
-    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+    and translated to ``REFERENCE_NOT_FOUND`` at the wire boundary (same rule as
+    ``TASK_NOT_FOUND``). The gain over the bare ``AdCPNotFoundError`` is
+    recovery=correctable + a typed identity.
 
     Recovery=correctable: the buyer can correct by supplying a valid format_id
     (discoverable via list_creative_formats).

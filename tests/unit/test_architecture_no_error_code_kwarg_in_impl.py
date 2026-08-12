@@ -27,8 +27,11 @@ from tests.unit._architecture_helpers import assert_violations_match_allowlist, 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters", REPO_ROOT / "src" / "a2a_server"]
-# Prefer filtering _iter_adcp_error_calls() over a second rglob — A2A_SERVER_DIR
-# would restate SCAN_DIRS[2] byte-for-byte (KM Aug-05 extract-then-skip).
+# Prefer filtering _iter_adcp_error_calls() over a second rglob — a second
+# Path would restate SCAN_DIRS[2] byte-for-byte.
+# Scope limits (by design): only FunctionDef/AsyncFunctionDef bodies are
+# walked, so module/class-scope recovery= calls are invisible; ``**{"recovery":
+# ...}`` unpacking also escapes (kw.arg is None).
 A2A_SERVER_PREFIX = "src/a2a_server/"
 
 # The only sanctioned error_code= sites: the two boundary helpers that call
@@ -102,7 +105,7 @@ def _find_a2a_recovery_kwargs() -> list[tuple[str, str, int]]:
     """Find recovery= on AdCP*Error constructors under a2a_server (synthesize exempt).
 
     Filters the shared ``_iter_adcp_error_calls()`` walk — do not re-open-code
-    rglob/ast.parse for a narrower root (KM Aug-05).
+    rglob/ast.parse for a narrower root.
     """
     return [
         (rel, func, call.lineno)
@@ -154,7 +157,7 @@ class TestNoErrorCodeKwargInImpl:
         assert all_sites == KNOWN_VIOLATIONS, msg
 
     def test_no_recovery_kwargs_in_a2a_server_constructors(self):
-        """a2a_server AdCP*Error constructors must not hand-write recovery= (R5-F2)."""
+        """a2a_server AdCP*Error constructors must not hand-write recovery=."""
         sites = [f"  {rel}:{lineno} in {func}()" for rel, func, lineno in _find_a2a_recovery_kwargs()]
         assert not sites, (
             f"Found {len(sites)} recovery= site(s) on AdCP*Error constructors in a2a_server. "

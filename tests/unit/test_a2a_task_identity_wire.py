@@ -21,20 +21,18 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from tests.a2a_helpers import (
     OWNED_TASK_ID,
-    OWNED_TASK_OWNER,
     OWNED_TASK_OWNER_TOK,
-    OWNED_TASK_SIBLING,
     OWNED_TASK_SIBLING_TOK,
-    OWNED_TASK_TENANT,
     TASK_METHOD_MATRIX,
     assert_wire_auth_failure,
     assert_wire_task_not_found,
     auth_headers_mapping,
+    owned_task_owner_identity,
+    owned_task_sibling_identity,
     post_a2a_task_method,
     seeded_owned_a2a_handler,
     token_identity_resolver,
 )
-from tests.factories import PrincipalFactory
 
 
 class _AuthHeaderContextBuilder(ServerCallContextBuilder):
@@ -73,10 +71,8 @@ def test_sibling_wire_error_matches_unknown_id(method):
     must redden this: sibling would get a result while unknown still errors.
     """
     handler = seeded_owned_a2a_handler()
-    owner = PrincipalFactory.make_identity(principal_id=OWNED_TASK_OWNER, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
-    sibling = PrincipalFactory.make_identity(
-        principal_id=OWNED_TASK_SIBLING, tenant_id=OWNED_TASK_TENANT, protocol="a2a"
-    )
+    owner = owned_task_owner_identity()
+    sibling = owned_task_sibling_identity()
     resolve = token_identity_resolver({OWNED_TASK_SIBLING_TOK: sibling, OWNED_TASK_OWNER_TOK: owner})
 
     with (
