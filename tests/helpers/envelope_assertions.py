@@ -135,3 +135,9 @@ def assert_envelope_shape(
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")
         assert message_substr in actual, f"errors[0].message={actual!r} does not contain {message_substr!r}"
+
+    if suggestion is not None:
+        actual_suggestion = body["errors"][0].get("suggestion") or body["adcp_error"].get("suggestion")
+        assert actual_suggestion == suggestion, (
+            f"wire suggestion={actual_suggestion!r}, expected pinned {suggestion!r} for {code}"
+        )

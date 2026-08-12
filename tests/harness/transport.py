@@ -28,17 +28,13 @@ from tests.helpers import pinned_schema
 def _pinned_error_metadata() -> dict[str, dict[str, str]]:
     """code -> {recovery, suggestion} from the installed SDK's error-code enum.
 
-    Only the ``recovery`` field is actually read by this module (assert_wire_error
-    below) — verified safe to source from the SDK tree: the SDK's enum is a
-    strict superset of the older vendored fixture (92 vs 64 codes, fixture-only
-    set empty) and its ``recovery`` classification is IDENTICAL across every one
-    of the 64 shared codes (0 divergences). ``suggestion`` DOES diverge on 4
-    codes between the two sources — but this module never reads that field
-    (extract_wire_suggestion below reads the WIRE's own suggestion text, not
-    this metadata), so that divergence has no effect here. Consumers that DO
-    grade ``suggestion`` content (test_architecture_error_suggestion_enum_conformance.py)
-    stay on the vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources"
-    (which also cites the command to reproduce the 64-code fixture count).
+    ``assert_wire_error`` reads ``recovery`` from this SDK-sourced metadata
+    (safe: SDK enum is a strict recovery-identical superset of the vendored
+    fixture across all 64 shared codes). ``suggestion`` content, when
+    ``require_suggestion=True``, is graded against the *vendored* fixture
+    instead — SDK and fixture diverge on 4 suggestion texts, and wire grading
+    must not follow that drift (#1812 B4). See docs/adcp-spec-version.md
+    "Pinned schema sources".
     """
     return pinned_schema.load("error-code.json")["enumMetadata"]
 
@@ -465,7 +461,15 @@ class TransportResult:
         non-vacuous without per-scenario duplication. This is the single
         harness-provided way to verify an error on the wire — step definitions
         must not hand-roll envelope parsing.
+
+        When ``require_suggestion`` is True, the wire ``suggestion`` must equal
+        the vendored fixture ``enums/error-code.json`` enumMetadata text for
+        ``code`` (not a Python ClassVar) — closes #1812 B4 envelope-null /
+        ClassVar-swap mutations that sibling equality alone cannot catch.
         """
+        import json
+        from pathlib import Path
+
         from tests.helpers import assert_envelope_shape
 
         meta = _pinned_error_metadata()
@@ -482,7 +486,22 @@ class TransportResult:
             f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
             "succeeded or errored before reaching a transport."
         )
-        assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr)
+        expected_suggestion: str | None = None
         if require_suggestion:
-            suggestion = extract_wire_suggestion(envelope)
-            assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"
+            # Vendored fixture — same source as architecture suggestion guards.
+            # SDK enumMetadata can diverge on suggestion for a few codes; grading
+            # suggestion content must not follow that drift (#1812 B4).
+            fixture_meta = json.loads(Path("tests/fixtures/adcp_schemas_pinned/enums/error-code.json").read_text())[
+                "enumMetadata"
+            ]
+            assert code in fixture_meta and fixture_meta[code].get("suggestion"), (
+                f"{code!r} has no suggestion in vendored error-code.json enumMetadata"
+            )
+            expected_suggestion = fixture_meta[code]["suggestion"]
+        assert_envelope_shape(
+            envelope,
+            code,
+            recovery=expected_recovery,
+            message_substr=message_substr,
+            suggestion=expected_suggestion,
+        )

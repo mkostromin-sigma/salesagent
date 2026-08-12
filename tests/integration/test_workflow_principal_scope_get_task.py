@@ -284,3 +284,25 @@ def test_complete_task_non_string_error_message_a2a_no_sql_leak(integration_db):
         result.assert_wire_error("VALIDATION_ERROR")
         envelope = str(result.wire_error_envelope)
         assert not any(m in envelope for m in leak_markers), envelope
+
+
+def test_get_task_reference_not_found_wire_suggestion_a2a_and_mcp(integration_db):
+    """B4: REFERENCE_NOT_FOUND suggestion on the wire equals vendored enumMetadata.
+
+    Sibling equality alone stays green if ``build_two_layer_error_envelope``
+    nulls suggestion for both legs; pin absolute text on A2A + MCP.
+    """
+    from tests.harness.task_management import TaskEnv
+    from tests.harness.transport import Transport
+
+    with TaskEnv(tenant_id="pscope_rnfsugg", principal_id="wire_owner") as env:
+        tenant = TenantFactory(tenant_id="pscope_rnfsugg")
+        PrincipalFactory(
+            tenant=tenant,
+            principal_id="wire_owner",
+            platform_mappings={"mock": {"id": "wire_owner_adv"}},
+        )
+        env._commit_factory_data()
+        for transport in (Transport.A2A, Transport.MCP):
+            result = env.call_via(transport, tool="get_task", task_id="missing-task-id-b4")
+            result.assert_wire_error("REFERENCE_NOT_FOUND", require_suggestion=True)

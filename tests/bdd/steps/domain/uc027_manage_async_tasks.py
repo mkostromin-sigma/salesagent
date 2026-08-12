@@ -145,7 +145,9 @@ def then_wire_error_matches_unknown_task(ctx: dict) -> None:
     sibling_result = ctx["sibling_result"]
     unknown_result = ctx.get("unknown_result")
     assert sibling_result is not unknown_result, "sibling and unknown controls must be distinct captures"
-    sibling_result.assert_wire_error("REFERENCE_NOT_FOUND")
+    # require_suggestion pins wire text to vendored enumMetadata (B4) — sibling
+    # equality alone stays green if both envelopes lose suggestion together.
+    sibling_result.assert_wire_error("REFERENCE_NOT_FOUND", require_suggestion=True)
     assert unknown_result is not None, "Expected unknown-id dispatch TransportResult"
-    unknown_result.assert_wire_error("REFERENCE_NOT_FOUND")
+    unknown_result.assert_wire_error("REFERENCE_NOT_FOUND", require_suggestion=True)
     assert sibling_result.wire_error_envelope == unknown_result.wire_error_envelope
