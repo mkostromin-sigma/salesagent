@@ -33,7 +33,7 @@ _DEFAULT_AGENT_URL = "https://creative.test.example.com"
 # Independent oracle for the GEMINI misconfig advisory suggestion (must match
 # production ``_GEMINI_KEY_MISSING_SUGGESTION``; kept as a test literal so a
 # silent production-string drift still fails these pins).
-_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION = "Ask the seller to configure GEMINI_API_KEY in their agent settings"
+_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION = "Ask the seller to configure a Gemini API key for this account"
 
 
 def assert_gemini_key_missing_advisory(errs: list) -> None:

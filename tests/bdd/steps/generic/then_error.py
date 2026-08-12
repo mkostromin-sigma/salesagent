@@ -31,9 +31,11 @@ def _nested_creative_advisory_error(ctx: dict) -> dict | None:
     harness rather than reimplemented here. Soft ``None`` otherwise so
     envelope-less error Then steps (UC003/UC019) keep the reconstructed
     fallback — they never stash success-path wire.
+
+    When ``wire_response`` is a dict, ``ctx["transport"]`` MUST be set — defaulting
+    to ``Transport.IMPL`` would disarm the loud guards.
     """
     from tests.harness.transport import (
-        Transport,
         _response_has_failed_creative,
         _transport_has_no_wire,
         first_failed_creative_advisory,
@@ -42,8 +44,23 @@ def _nested_creative_advisory_error(ctx: dict) -> dict | None:
     wire = ctx.get("wire_response")
     transport = ctx.get("transport")
     response = ctx.get("response")
+    result = ctx.get("result")
+    wire_is_proxy = bool(getattr(result, "envelope", None) and result.envelope.get("wire_response_is_proxy"))
     if isinstance(wire, dict):
-        return first_failed_creative_advisory(wire, transport=transport or Transport.IMPL, response=response)
+        if transport is None:
+            raise AssertionError(
+                "wire_response present but ctx['transport'] unset — "
+                "refusing Transport.IMPL default that would disarm loud guards"
+            )
+        return first_failed_creative_advisory(
+            wire,
+            transport=transport,
+            response=response,
+            wire_is_proxy=wire_is_proxy,
+            # BDD grades proxy payload content (same serializer as REST) until #1919;
+            # integration callers that need real framing pass require_real_wire=True.
+            require_real_wire=False,
+        )
     # IMPL / unset: no success-path wire to require.
     if transport is None or _transport_has_no_wire(transport):
         return None

@@ -37,7 +37,8 @@ _SPEC_CODES = {
 # CREATIVE_* namespace (the exact bug this guard exists to catch, GH #1835).
 # A predicate rejects that by construction: only a string matching the pinned
 # shape can ever pass, regardless of what gets added at a call site.
-_SELLER_SPECIFIC_CODE_PATTERN = re.compile(r"^X_[A-Z][A-Z0-9]{1,19}_[A-Z][A-Z0-9_]{1,39}$")
+# fullmatch (not search+$) so a trailing newline cannot sneak past the shape.
+_SELLER_SPECIFIC_CODE_PATTERN = re.compile(r"X_[A-Z][A-Z0-9]{1,19}_[A-Z][A-Z0-9_]{1,39}")
 
 
 def _is_seller_specific_code(code: str) -> bool:
@@ -50,7 +51,7 @@ def _is_seller_specific_code(code: str) -> bool:
     construction or fails this guard — it cannot silently fork the vocabulary
     by landing a bare string in a membership set.
     """
-    return bool(_SELLER_SPECIFIC_CODE_PATTERN.match(code))
+    return bool(_SELLER_SPECIFIC_CODE_PATTERN.fullmatch(code))
 
 
 # All acceptable codes: wire-standard (SDK + spec supplement) + justified
@@ -75,9 +76,68 @@ _SCAN_DIRS = [
     _REPO_ROOT / "src/adapters",
 ]
 
+# Per-creative advisory factories that take ``code=`` literals (not Error(...)).
+# Without these, ``_failed_sync_result(code="CREATIVE_GEMINI_KEY_MISSING")`` is
+# invisible to the guard even though that is the production call site (#1835).
+_ADVISORY_FACTORIES = frozenset({"_failed_sync_result"})
+
 
 from tests.unit._architecture_helpers import collect_error_aliases as _collect_error_aliases  # noqa: E402
 from tests.unit._architecture_helpers import iter_call_expressions  # noqa: E402
+
+
+def _error_aliases_for_tree(tree: ast.AST) -> set[str]:
+    """Error aliases including ``from adcp.types import Error as …``.
+
+    Shared ``collect_error_aliases`` requires ``"error"`` in the import module
+    path; ``adcp.types`` re-exports ``Error`` without that token, so the alias
+    ``AdCPErrorDetail`` would otherwise never register.
+    """
+    aliases = set(_collect_error_aliases(tree))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        module = node.module or ""
+        if module != "adcp.types" and not module.startswith("adcp.types."):
+            continue
+        for alias in node.names:
+            if alias.name == "Error":
+                aliases.add(alias.asname or alias.name)
+    return aliases
+
+
+def _collect_error_code_literals_from_tree(tree: ast.AST, *, filename: str) -> list[tuple[str, int, str]]:
+    """Return (file, line, code) triples for non-compliant ``code=`` literals."""
+    violations: list[tuple[str, int, str]] = []
+    error_aliases = _error_aliases_for_tree(tree)
+
+    for node in iter_call_expressions(tree):
+        func = node.func
+        matched = False
+        if isinstance(func, ast.Name) and (func.id in error_aliases or func.id in _ADVISORY_FACTORIES):
+            matched = True
+        elif isinstance(func, ast.Attribute) and func.attr == "Error":
+            matched = True
+        if not matched:
+            continue
+
+        code_value = None
+        for kw in node.keywords:
+            if kw.arg == "code":
+                if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                    code_value = kw.value.value
+                else:
+                    logger.warning(
+                        "%s:%d: Error(code=<non-literal>) — cannot validate statically",
+                        filename,
+                        node.lineno,
+                    )
+                break
+
+        if code_value is not None and not _code_is_compliant(code_value):
+            violations.append((filename, node.lineno, code_value))
+
+    return violations
 
 
 def _collect_error_code_literals() -> list[tuple[str, int, str]]:
@@ -85,6 +145,7 @@ def _collect_error_code_literals() -> list[tuple[str, int, str]]:
 
     Tracks `from ... import Error as <alias>` so call sites that use the
     aliased name (e.g. ``AdCPErrorDetail(code=...)``) are also validated.
+    Also matches ``_failed_sync_result(code=...)`` advisory factory sites.
     """
     violations: list[tuple[str, int, str]] = []
 
@@ -97,36 +158,7 @@ def _collect_error_code_literals() -> list[tuple[str, int, str]]:
                 tree = ast.parse(source, filename=str(py_file))
             except SyntaxError:
                 continue
-
-            error_aliases = _collect_error_aliases(tree)
-
-            for node in iter_call_expressions(tree):  # Match calls to Error(...) / <alias>(...) / adcp.types.Error(...)
-                func = node.func
-                matched = False
-                if isinstance(func, ast.Name) and func.id in error_aliases:
-                    matched = True
-                elif isinstance(func, ast.Attribute) and func.attr == "Error":
-                    matched = True
-                if not matched:
-                    continue
-
-                # Extract the code= keyword argument
-                code_value = None
-                for kw in node.keywords:
-                    if kw.arg == "code":
-                        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                            code_value = kw.value.value
-                        else:
-                            # Non-literal code — skip with warning
-                            logger.warning(
-                                "%s:%d: Error(code=<non-literal>) — cannot validate statically",
-                                py_file,
-                                node.lineno,
-                            )
-                        break
-
-                if code_value is not None and not _code_is_compliant(code_value):
-                    violations.append((str(py_file), node.lineno, code_value))
+            violations.extend(_collect_error_code_literals_from_tree(tree, filename=str(py_file)))
 
     return violations
 
@@ -199,3 +231,65 @@ class TestSellerSpecificCodeShape:
 
     def test_rejects_lowercase(self):
         assert not _is_seller_specific_code("x_prebid_creative_gemini_key_missing")
+
+    def test_vendor_length_boundaries(self):
+        """VENDOR is ``[A-Z][A-Z0-9]{1,19}`` → 2..20 chars after ``X_`` before code."""
+        assert _is_seller_specific_code("X_" + "A" * 2 + "_CODE")
+        assert _is_seller_specific_code("X_" + "A" * 20 + "_CODE")
+        assert not _is_seller_specific_code("X_" + "A" * 1 + "_CODE")  # vendor too short
+        assert not _is_seller_specific_code("X_" + "A" * 21 + "_CODE")  # vendor too long
+
+    def test_code_length_boundaries(self):
+        """CODE is ``[A-Z][A-Z0-9_]{1,39}`` → 2..40 chars after the vendor underscore."""
+        assert _is_seller_specific_code("X_PREBID_" + "C" * 2)
+        assert _is_seller_specific_code("X_PREBID_" + "C" * 40)
+        assert not _is_seller_specific_code("X_PREBID_" + "C" * 1)  # code too short
+        assert not _is_seller_specific_code("X_PREBID_" + "C" * 41)  # code too long
+
+    def test_rejects_trailing_newline(self):
+        """``fullmatch`` must reject a trailing newline (``$`` would accept it)."""
+        assert not _is_seller_specific_code("X_PREBID_CREATIVE_GEMINI_KEY_MISSING\n")
+
+    def test_advisory_factory_literal_is_scanned(self):
+        """``_failed_sync_result(code=…)`` literals must be visible to the guard.
+
+        Without ``_ADVISORY_FACTORIES``, reverting
+        ``_gemini_key_missing_result`` to ``CREATIVE_GEMINI_KEY_MISSING`` stays
+        green — the exact blindness Chris measured on #1835.
+        """
+        source = (
+            "def _failed_sync_result(creative_id, msg, *, recovery, code):\n"
+            "    pass\n"
+            '_failed_sync_result("c1", "boom", recovery="terminal", '
+            'code="CREATIVE_GEMINI_KEY_MISSING")\n'
+        )
+        tree = ast.parse(source)
+        violations = _collect_error_code_literals_from_tree(tree, filename="<advisory>")
+        assert any(code == "CREATIVE_GEMINI_KEY_MISSING" for _, _, code in violations), violations
+
+    def test_adcp_types_error_alias_literal_is_scanned(self):
+        """``from adcp.types import Error as AdCPErrorDetail`` sites must register."""
+        source = (
+            "from adcp.types import Error as AdCPErrorDetail\n"
+            'AdCPErrorDetail(code="TOTALLY_BOGUS_CODE", message="x", recovery="terminal")\n'
+        )
+        tree = ast.parse(source)
+        violations = _collect_error_code_literals_from_tree(tree, filename="<alias>")
+        assert any(code == "TOTALLY_BOGUS_CODE" for _, _, code in violations), violations
+
+    def test_production_gemini_advisory_site_is_visible(self):
+        """Live ``_gemini_key_missing_result`` literal must appear in the scan."""
+        processing = _REPO_ROOT / "src/core/tools/creatives/_processing.py"
+        tree = ast.parse(processing.read_text(), filename=str(processing))
+        # Collect ALL code literals at advisory/Error sites (compliant + not)
+        error_aliases = _error_aliases_for_tree(tree)
+        seen: list[str] = []
+        for node in iter_call_expressions(tree):
+            func = node.func
+            matched = isinstance(func, ast.Name) and (func.id in error_aliases or func.id in _ADVISORY_FACTORIES)
+            if not matched:
+                continue
+            for kw in node.keywords:
+                if kw.arg == "code" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                    seen.append(kw.value.value)
+        assert "X_PREBID_CREATIVE_GEMINI_KEY_MISSING" in seen, seen

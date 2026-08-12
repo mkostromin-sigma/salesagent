@@ -12,7 +12,7 @@ import logging
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from adcp.types import CreativeAsset
 from pydantic import BaseModel
@@ -29,12 +29,18 @@ from ._assets import _build_creative_data, _extract_message_from_assets, _extrac
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
-    from src.core.schemas import FormatId
+
+
+class _FormatIdLike(Protocol):
+    """SDK FormatId / FormatReferenceStructuredObject / repo FormatId — all expose ``.id``."""
+
+    id: str
+
 
 logger = logging.getLogger(__name__)
 
 
-_GEMINI_KEY_MISSING_SUGGESTION = "Ask the seller to configure GEMINI_API_KEY in their agent settings"
+_GEMINI_KEY_MISSING_SUGGESTION = "Ask the seller to configure a Gemini API key for this account"
 
 
 def _failed_sync_result_from_error(creative_id: str, error: AdCPErrorDetail) -> SyncCreativeResult:
@@ -84,14 +90,15 @@ def _check_gemini_key_or_advisory(
     creative_id: str,
     *,
     action_verb: str,
-    creative_format: FormatId,
+    creative_format: _FormatIdLike,
     tenant: dict[str, Any],
 ) -> str | SyncCreativeResult:
     """Return the GEMINI API key, or a missing-key advisory result.
 
-    Prefer the tenant/account key (DB-backed, harness-controllable) and fall
-    back to the process-global settings key so a tenant that configured its
-    own key is not blocked by a missing server-wide ``GEMINI_API_KEY``.
+    Policy: tenant/account key first (DB column / admin AI settings), then
+    process-global ``get_config().gemini_api_key``. A tenant that configured
+    its own key must not be blocked by a missing server-wide env key — same
+    tenant-then-platform order as ``src/services/ai/factory.py``.
     """
     from src.core.config import get_config
 
@@ -99,7 +106,7 @@ def _check_gemini_key_or_advisory(
     if gemini_api_key:
         return gemini_api_key
     error_msg = f"Cannot {action_verb} generative creative {creative_format.id}: GEMINI_API_KEY not configured"
-    logger.error(f"[sync_creatives] {error_msg}")
+    logger.error("[sync_creatives] %s (creative %s)", error_msg, creative_id)
     return _gemini_key_missing_result(creative_id, error_msg)
 
 

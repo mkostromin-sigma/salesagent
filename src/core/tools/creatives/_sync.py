@@ -11,7 +11,12 @@ from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPError
+from src.core.exceptions import (
+    VALIDATION_ERROR_SUGGESTION,
+    AdCPError,
+    first_validation_error_field,
+    to_wire_error_code,
+)
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -187,8 +192,12 @@ def _sync_creatives_impl(
                     # Creative failed validation - add to failed list
                     creative_id = creative.creative_id or "unknown"
                     # Format ValidationError nicely for clients, pass through ValueError as-is
+                    field: str | None = None
+                    suggestion: str | None = None
                     if isinstance(validation_error, ValidationError):
                         error_msg = format_validation_error(validation_error, context=f"creative {creative_id}")
+                        field = first_validation_error_field(validation_error)
+                        suggestion = VALIDATION_ERROR_SUGGESTION
                     else:
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
@@ -199,6 +208,8 @@ def _sync_creatives_impl(
                             error_msg,
                             code="VALIDATION_ERROR",
                             recovery="correctable",
+                            field=field,
+                            suggestion=suggestion,
                         )
                     )
                     continue  # Skip to next creative

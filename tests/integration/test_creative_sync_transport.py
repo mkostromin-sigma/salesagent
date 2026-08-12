@@ -1174,14 +1174,31 @@ class TestGeminiKeyMissing:
         assert any("gemini" in e.lower() for e in _error_messages(errs))
         assert_gemini_key_missing_advisory(errs)
         # Wire transports must expose the nested advisory on the success-path body.
-        assert_wire_advisory(
-            result.wire_response,
-            "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
-            recovery="terminal",
-            suggestion=_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION,
-            transport=transport,
-            response=result.payload,
-        )
+        # CreativeSyncEnv A2A stashes a model_dump proxy (#1919) — refuse that as
+        # real-wire evidence; typed advisory above already graded the payload.
+        wire_is_proxy = bool(result.envelope.get("wire_response_is_proxy"))
+        if transport is not Transport.IMPL and not wire_is_proxy:
+            assert_wire_advisory(
+                result.wire_response,
+                "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
+                recovery="terminal",
+                suggestion=_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION,
+                transport=transport,
+                response=result.payload,
+                require_real_wire=True,
+            )
+        elif wire_is_proxy:
+            assert transport is Transport.A2A
+            with pytest.raises(AssertionError, match="model_dump proxy"):
+                assert_wire_advisory(
+                    result.wire_response,
+                    "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
+                    recovery="terminal",
+                    transport=transport,
+                    response=result.payload,
+                    wire_is_proxy=True,
+                    require_real_wire=True,
+                )
 
 
 # ---------------------------------------------------------------------------

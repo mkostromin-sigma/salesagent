@@ -2325,6 +2325,49 @@ class TestGenerativeCreativeBuild:
             assert any("GEMINI_API_KEY" in e.message for e in errs)
             assert_gemini_key_missing_advisory(errs)
 
+    @pytest.mark.parametrize(
+        ("tenant_key", "global_key", "expect_advisory"),
+        [
+            ("tenant-key", None, False),
+            (None, "global-key", False),
+            (None, None, True),
+        ],
+        ids=["tenant_only", "global_only", "neither"],
+    )
+    def test_gemini_key_prefers_tenant_then_global(self, tenant_key, global_key, expect_advisory):
+        """Tenant key wins over global; neither → X_PREBID advisory.
+
+        Deleting ``tenant.get("gemini_api_key") or`` must redden the tenant_only
+        arm — grades advisory **code**, not action (key-present arms may still
+        fail downstream with SERVICE_UNAVAILABLE under mocks).
+        """
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from src.core.tools.creatives._processing import _check_gemini_key_or_advisory
+
+        tenant: dict = {"tenant_id": "t1"}
+        if tenant_key is not None:
+            tenant["gemini_api_key"] = tenant_key
+        mock_config = MagicMock()
+        mock_config.gemini_api_key = global_key
+        fmt = SimpleNamespace(id="display_gen")
+
+        with patch("src.core.config.get_config", return_value=mock_config):
+            out = _check_gemini_key_or_advisory(
+                "c1",
+                action_verb="create",
+                creative_format=fmt,
+                tenant=tenant,
+            )
+
+        if expect_advisory:
+            assert not isinstance(out, str)
+            errs = out.errors or []
+            assert errs and errs[0].code == "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"
+        else:
+            assert out in {tenant_key, global_key}
+
 
 # ============================================================================
 # 10. CREATIVE WORKFLOW STEPS

@@ -2174,14 +2174,13 @@ def _infer_error_code_from_message(msg: str) -> str:
 def _infer_suggestion_from_message(msg: str) -> str | None:
     """Fallback suggestion for plain-string advisories (typed Errors promote as-is).
 
-    GEMINI path: reuse the production constant so inference cannot drift from
-    ``_gemini_key_missing_result`` once typed advisories are the primary path.
+    GEMINI path: pin the same buyer-facing literal as
+    ``tests.helpers.creative_test_helpers._EXPECTED_GEMINI_KEY_MISSING_SUGGESTION``
+    (independent of the production constant so drift still fails pins).
     """
-    from src.core.tools.creatives._processing import _GEMINI_KEY_MISSING_SUGGESTION
-
     lower = msg.lower()
     if "gemini_api_key" in lower:
-        return _GEMINI_KEY_MISSING_SUGGESTION
+        return "Ask the seller to configure a Gemini API key for this account"
     if "preview" in lower:
         return "Provide a media_url for the creative"
     return None
