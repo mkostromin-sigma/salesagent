@@ -247,6 +247,14 @@ def get_format(
 
     # Uniform response (AdCP 3.1.1): class default message; no buyer parameter
     # name here so field stays unset (do not bake format_id). Wire → REFERENCE_NOT_FOUND.
+    # Spec constrains the buyer-facing message only — keep identifiers in server logs.
+    logger.warning(
+        "FORMAT_NOT_FOUND: format_id=%r agent_url=%r tenant_id=%r product_id=%r",
+        format_id,
+        agent_url,
+        tenant_id,
+        product_id,
+    )
     raise AdCPFormatNotFoundError()
 
 

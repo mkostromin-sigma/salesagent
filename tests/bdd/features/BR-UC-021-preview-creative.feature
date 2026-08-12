@@ -200,18 +200,18 @@ Feature: BR-UC-021 Preview Creative
     # POST-F3: Item 1 succeeds despite item 2 failure
 
   @T-UC-021-ext-e @extension @ext-e @error @post-f1 @post-f2
-  Scenario: Format not found in creative agent registry -- FORMAT_NOT_FOUND
+  Scenario: Format not found in creative agent registry -- REFERENCE_NOT_FOUND
     Given a creative manifest with format_id.id "nonexistent_format" and a valid agent_url
     And the creative agent does not support the format "nonexistent_format"
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "FORMAT_NOT_FOUND"
-    And the error message should contain "nonexistent_format"
+    And the error code should be "REFERENCE_NOT_FOUND"
+    And the error message should be "Reference not found"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "format"
+    And the suggestion should contain "referenced identifier"
     # POST-F1: System state unchanged
-    # POST-F2: Buyer knows which format was not found
+    # POST-F2: Uniform response — no format_id leak in buyer message (AdCP 3.1.1)
     # POST-F3: Suggestion for recovery
 
   @T-UC-021-ext-f-format-id @extension @ext-f @error @post-f1 @post-f2 @br-rule-161

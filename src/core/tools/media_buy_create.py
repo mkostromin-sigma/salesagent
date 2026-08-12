@@ -1779,54 +1779,80 @@ async def _validate_and_convert_format_ids(
     for idx, fmt_id in enumerate(format_ids):
         # STRICT ENFORCEMENT: Reject plain strings
         if isinstance(fmt_id, str):
+            field_path = f"packages[{package_idx}].format_ids[{idx}]"
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Plain string format IDs are not supported. "
+                f"{field_path}: Plain string format IDs are not supported. "
                 f"Per AdCP spec, format_ids must be FormatId objects with {{agent_url, id}}. "
                 f'Example: {{"agent_url": "https://creative.adcontextprotocol.org", "id": "{fmt_id}"}}. '
                 f"Use list_creative_formats to discover available formats.",
+                field=field_path,
             )
+
+        field_path = f"packages[{package_idx}].format_ids[{idx}]"
 
         # Coerce to FormatId via Pydantic validation (handles dicts and FormatId objects)
         try:
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
+            logger.warning("%s: invalid format_id structure: %s", field_path, e)
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure: {e}",
+                f"{field_path}: Invalid format_id structure.",
+                field=field_path,
             ) from e
         agent_url = str(validated_fmt.agent_url).rstrip("/")
         format_id = validated_fmt.id
 
         if not agent_url or not format_id:
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: FormatId object missing required fields. "
-                f"Both agent_url and id are required. Got: agent_url={agent_url!r}, id={format_id!r}",
+                f"{field_path}: FormatId object missing required fields. Both agent_url and id are required.",
+                field=field_path,
             )
 
         # VALIDATION: Check agent is registered
         # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
         normalized_agent_url = normalize_agent_url(agent_url)
         if normalized_agent_url not in registered_agent_urls:
+            # Uniform response: do not leak the tenant's registered-agent inventory.
+            logger.warning(
+                "%s: creative agent not registered agent_url=%r registered=%s",
+                field_path,
+                agent_url,
+                sorted(registered_agent_urls),
+            )
             raise AdCPAuthorizationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Creative agent not registered: {agent_url}. "
-                f"Registered agents: {', '.join(sorted(registered_agent_urls))}. "
-                f"Contact your administrator to register this creative agent.",
+                f"{field_path}: Creative agent not registered.",
+                field=field_path,
             )
 
         # VALIDATION: Verify format exists on agent
         try:
             format_obj = await registry.get_format(agent_url, format_id)
             if not format_obj:
-                # Uniform response (AdCP 3.1.1): class default message; field names
-                # the array parameter itself (not an indexed path). Wire → REFERENCE_NOT_FOUND.
-                raise AdCPFormatNotFoundError(field="format_ids")
+                # Uniform response (AdCP 3.1.1): class default message; field is the
+                # indexed package path (buyer can locate which entry failed).
+                # Wire → REFERENCE_NOT_FOUND. Identifiers stay in server logs only.
+                logger.warning(
+                    "%s: FORMAT_NOT_FOUND format_id=%r agent_url=%r tenant_id=%r",
+                    field_path,
+                    format_id,
+                    agent_url,
+                    tenant_id,
+                )
+                raise AdCPFormatNotFoundError(field=field_path)
         except AdCPError:
             raise
         except Exception as e:
-            logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
-            raise AdCPAdapterError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "
-                f"agent_url={agent_url}, format_id={format_id!r}. Error: {e}",
+            logger.exception(
+                "%s: Error fetching format format_id=%r agent_url=%r: %s",
+                field_path,
+                format_id,
+                agent_url,
+                e,
             )
+            raise AdCPAdapterError(
+                f"{field_path}: Failed to verify format on agent.",
+                field=field_path,
+            ) from e
 
         # Format validated - add to results
         validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})

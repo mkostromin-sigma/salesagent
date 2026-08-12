@@ -526,8 +526,8 @@ class TestRESTBoundaryAdCPErrorTranslation:
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 404
             # AdCPNotFoundError's NOT_FOUND is INTERNAL_CODES; envelope translates
-            # to INVALID_REQUEST so the wire code stays in STANDARD_ERROR_CODES.
-            assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+            # to REFERENCE_NOT_FOUND so the wire code stays in STANDARD_ERROR_CODES.
+            assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
 
     def test_adcp_adapter_from_impl_returns_502(self):
         """AdCPAdapterError raised in _impl → REST returns 502 with transient recovery."""
@@ -800,7 +800,7 @@ class TestToDictRecoveryField:
         cases = [
             # Recovery follows the wire code : base
             # AdCPError→SERVICE_UNAVAILABLE=transient,
-            # AdCPNotFoundError→INVALID_REQUEST=correctable.
+            # AdCPNotFoundError→REFERENCE_NOT_FOUND=correctable.
             (AdCPError("internal"), "transient"),
             (AdCPValidationError("bad field"), "correctable"),
             (AdCPNotFoundError("missing"), "correctable"),
@@ -879,7 +879,7 @@ class TestCustomRecoveryOverrideMCPBoundary:
 
         assert_envelope_shape(
             exc_info.value,
-            "INVALID_REQUEST",
+            "REFERENCE_NOT_FOUND",
             check_mcp_tool_error=True,
             recovery="correctable",
             message_substr="temporarily missing",
@@ -1040,13 +1040,13 @@ class TestRecoveryRoundtrip:
 
         # AdCPError (INTERNAL_ERROR) and AdCPNotFoundError (NOT_FOUND) hold internal
         # codes; the boundary translates to STANDARD_ERROR_CODES (SERVICE_UNAVAILABLE
-        # and INVALID_REQUEST respectively). Other subclasses already use STANDARD codes.
+        # and REFERENCE_NOT_FOUND respectively). Other subclasses already use STANDARD codes.
         cases = [
             # Recovery matches the pinned classification of the WIRE code
             # : SERVICE_UNAVAILABLE=transient, INVALID_REQUEST=correctable.
             (AdCPError, "internal", "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
-            (AdCPNotFoundError, "missing", "INVALID_REQUEST", "correctable"),
+            (AdCPNotFoundError, "missing", "REFERENCE_NOT_FOUND", "correctable"),
             (AdCPConflictError, "dup", "CONFLICT", "transient"),
             (AdCPGoneError, "expired", "INVALID_STATE", "correctable"),
             (AdCPBudgetExhaustedError, "broke", "BUDGET_EXHAUSTED", "terminal"),
@@ -1151,7 +1151,7 @@ class TestRecoveryRoundtrip:
             # Recovery matches the pinned classification of the WIRE code .
             (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
-            (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "correctable"),
+            (AdCPNotFoundError, "missing", 404, "REFERENCE_NOT_FOUND", "correctable"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "transient"),
             (AdCPGoneError, "expired", 410, "INVALID_STATE", "correctable"),
             (AdCPBudgetExhaustedError, "broke", 422, "BUDGET_EXHAUSTED", "terminal"),

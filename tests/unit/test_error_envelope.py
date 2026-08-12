@@ -42,15 +42,15 @@ class TestEnvelopeShape:
     def test_wire_translation_applied(self):
         """Internal error_code is translated through ERROR_CODE_MAPPING.
 
-        NOT_FOUND is an INTERNAL_CODES entry mapped to INVALID_REQUEST (a
-        spec STANDARD code). AUTH_REQUIRED passes through unchanged — it is a
+        NOT_FOUND is an INTERNAL_CODES entry mapped to REFERENCE_NOT_FOUND (a
+        spec wire code via _SPEC_SUPPLEMENT_CODES). AUTH_REQUIRED passes through unchanged — it is a
         translation target, not a key, in ERROR_CODE_MAPPING.
         """
         exc = AdCPError("resource gone")
         exc.error_code = "NOT_FOUND"
         envelope = build_two_layer_error_envelope(exc)
-        assert envelope["adcp_error"]["code"] == "INVALID_REQUEST"
-        assert envelope["errors"][0]["code"] == "INVALID_REQUEST"
+        assert envelope["adcp_error"]["code"] == "REFERENCE_NOT_FOUND"
+        assert envelope["errors"][0]["code"] == "REFERENCE_NOT_FOUND"
 
     def test_message_present_in_both_layers(self):
         exc = AdCPValidationError("budget must be positive")

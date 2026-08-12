@@ -378,13 +378,11 @@ class TestFormatResolverIntegration:
                 product_id=None,
             )
 
-        error_msg = str(exc_info.value)
-        assert error_msg == "Reference not found"
-        assert "nonexistent_format_xyz" not in error_msg
-        assert "Unknown format_id" not in error_msg
-        assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
-        assert exc_info.value.wire_error_code == "REFERENCE_NOT_FOUND"
-        assert exc_info.value.recovery == "correctable"
-        assert exc_info.value.field is None
-        assert exc_info.value.details is None
+        from tests.helpers.format_not_found_assertions import assert_format_not_found_uniform
+
+        assert_format_not_found_uniform(
+            exc_info.value,
+            field=None,
+            forbidden_substrings=["nonexistent_format_xyz", "Unknown format_id"],
+        )
         assert isinstance(exc_info.value, AdCPNotFoundError)

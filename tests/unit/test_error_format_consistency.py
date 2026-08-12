@@ -558,7 +558,7 @@ class TestMCPRecoveryInErrorResponses:
             # INVALID_REQUEST=correctable.
             ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
-            ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "correctable"),
+            ("AdCPNotFoundError", "gone", "REFERENCE_NOT_FOUND", "correctable"),
             # The recovery-conformance oracle grades the CLASS ATTRIBUTE
             # (_default_recovery), not the MCP wire, so these two MUST stay here to pin
             # the real MCP ToolError recovery — matching the A2A table below. (#1417)

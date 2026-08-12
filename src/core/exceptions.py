@@ -173,14 +173,15 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # instead of a specific subclass. Mapped to the closest WIRE_STANDARD_CODES
     # entry so the wire stays spec-compliant. Raise sites can later migrate to
     # specific subclasses; the mappings stay as a safety net.
-    "NOT_FOUND": "INVALID_REQUEST",
-    # FORMAT_NOT_FOUND → REFERENCE_NOT_FOUND per AdCP 3.1.1: typed params without
-    # a dedicated standard *_NOT_FOUND MUST use REFERENCE_NOT_FOUND (error-handling
-    # L3 + enumMetadata). Internal class code stays FORMAT_NOT_FOUND for typed
-    # identity; wire translation is REFERENCE_NOT_FOUND.
+    # NOT_FOUND / FORMAT_NOT_FOUND: typed / generic referenced-identifier misses
+    # MUST use REFERENCE_NOT_FOUND (error-handling L3 since 3.0.0 + enumMetadata).
+    "NOT_FOUND": "REFERENCE_NOT_FOUND",
+    # Internal class code stays FORMAT_NOT_FOUND for typed identity; wire → REFERENCE_NOT_FOUND.
     "FORMAT_NOT_FOUND": "REFERENCE_NOT_FOUND",
-    # TASK_NOT_FOUND: still demoted to INVALID_REQUEST on tip (remap out of scope
-    # for this leaf; intended shape is a dedicated TASK_NOT_FOUND wire code).
+    # TASK_NOT_FOUND: still demoted to INVALID_REQUEST on tip. Mandated wire target
+    # is REFERENCE_NOT_FOUND (same MUST — do not mint a custom TASK_NOT_FOUND wire
+    # code). Remap + genericize workflow.py raise message together in a follow-up
+    # (code-only remap would leave a resource-qualified buyer message).
     "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
@@ -761,7 +762,7 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
 class AdCPNotFoundError(AdCPError):
     """Requested resource does not exist (404).
 
-    Recovery=correctable: the wire code is INVALID_REQUEST (via
+    Recovery=correctable: the wire code is REFERENCE_NOT_FOUND (via
     ERROR_CODE_MAPPING), whose pinned enumMetadata classification is
     correctable — recovery follows the wire code (#1430 review).
     """
@@ -775,7 +776,7 @@ class AdCPAccountNotFoundError(AdCPNotFoundError):
 
     Recovery=terminal per the pinned enumMetadata for ACCOUNT_NOT_FOUND —
     declared explicitly (the AdCPNotFoundError parent is correctable to
-    match its INVALID_REQUEST wire code).
+    match its REFERENCE_NOT_FOUND wire code).
     """
 
     _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"

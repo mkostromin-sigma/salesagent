@@ -22,7 +22,7 @@ OBLIGATION COVERAGE:
   UC-002-ALT-WITH-INLINE-CREATIVES-01, -02, -05
   UC-002-CC-ADAPTER-ATOMICITY-03, UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-03
   UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-03
-  UC-002-EXT-D-02, UC-002-EXT-F-01, -02, UC-002-EXT-H-02
+  UC-002-EXT-D-02, UC-002-EXT-F-01, -02
   UC-002-EXT-I-03, UC-002-EXT-J-02, UC-002-EXT-K-03
   UC-002-EXT-L-01, -02, -03, UC-002-EXT-M-01, -03
   UC-002-EXT-N-02, UC-002-EXT-O-01, UC-002-EXT-Q-01, -02
@@ -1636,7 +1636,8 @@ class TestExtensionObligations:
     async def test_unregistered_creative_agent_rejected(self):
         """Unregistered creative agent in format_ids is rejected.
 
-        Covers: UC-002-EXT-H-02
+        Characterizes unwired ``_validate_and_convert_format_ids`` only
+        (T-UC-002-ext-h-agent); UC-002-EXT-H-02 remains allowlisted until wired.
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
@@ -1687,11 +1688,13 @@ class TestExtensionObligations:
                     package_idx=0,
                 )
 
-            assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
-            assert exc_info.value.wire_error_code == "REFERENCE_NOT_FOUND"
-            assert str(exc_info.value) == "Reference not found"
-            assert exc_info.value.field == "format_ids"
-            assert exc_info.value.details is None
+            from tests.helpers.format_not_found_assertions import assert_format_not_found_uniform
+
+            assert_format_not_found_uniform(
+                exc_info.value,
+                field="packages[0].format_ids[0]",
+                forbidden_substrings=["nonexistent_format", "creative.example.com"],
+            )
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):

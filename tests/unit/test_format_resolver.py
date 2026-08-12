@@ -47,8 +47,8 @@ import pytest
 
 from src.core.exceptions import AdCPFormatNotFoundError, AdCPNotFoundError
 from src.core.schemas import Format
-from tests.helpers import pinned_schema
 from tests.helpers.adcp_factories import create_test_format_id
+from tests.helpers.format_not_found_assertions import assert_format_not_found_uniform
 
 
 def _make_format(format_id_str: str = "display_300x250", name: str = "Test", **kwargs) -> Format:
@@ -321,16 +321,11 @@ class TestGetFormat:
             with pytest.raises(AdCPFormatNotFoundError, match="Reference not found") as exc_info:
                 get_format("display_300x250", agent_url="https://agent.example.com", tenant_id="t1")
 
-            error_msg = str(exc_info.value)
-            assert "display_300x250" not in error_msg
-            assert "agent.example.com" not in error_msg
-            assert "t1" not in error_msg
-            assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
-            assert exc_info.value.wire_error_code == "REFERENCE_NOT_FOUND"
-            assert exc_info.value.recovery == "correctable"
-            assert exc_info.value.field is None
-            assert exc_info.value.details is None
-            assert exc_info.value.suggestion == pinned_schema.error_code_suggestion("REFERENCE_NOT_FOUND")
+            assert_format_not_found_uniform(
+                exc_info.value,
+                field=None,
+                forbidden_substrings=["display_300x250", "agent.example.com", "t1"],
+            )
 
     def test_not_found_error_no_agent_url_no_tenant(self):
         """AdCPFormatNotFoundError message is generic without agent_url and tenant_id."""
@@ -343,15 +338,11 @@ class TestGetFormat:
             with pytest.raises(AdCPFormatNotFoundError, match="Reference not found") as exc_info:
                 get_format("nonexistent")
 
-            error_msg = str(exc_info.value)
-            assert error_msg == "Reference not found"
-            assert "nonexistent" not in error_msg
-            assert "from agent" not in error_msg
-            assert "for tenant" not in error_msg
-            assert exc_info.value.recovery == "correctable"
-            assert exc_info.value.field is None
-            assert exc_info.value.details is None
-            assert exc_info.value.suggestion == pinned_schema.error_code_suggestion("REFERENCE_NOT_FOUND")
+            assert_format_not_found_uniform(
+                exc_info.value,
+                field=None,
+                forbidden_substrings=["nonexistent", "from agent", "for tenant"],
+            )
 
 
 # ---------------------------------------------------------------------------
