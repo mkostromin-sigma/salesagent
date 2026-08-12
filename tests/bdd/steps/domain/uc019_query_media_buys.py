@@ -171,18 +171,17 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     ctx["mock_today"] = today_str
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)
 
-    env = ctx.get("env")
-    if env is not None:
-        env._mock_time = fake_now
-        # Rebuild identities so all transports carry the simulation clock.
-        env._identity_cache.clear()
-        if "_identity" in env.__dict__:
-            del env.__dict__["_identity"]
-        # Eagerly stamp the default identity so in-process REST overrides /
-        # IMPL calls see mock_time even before the next identity_for().
-        _ = env.identity
-        if env.identity.testing_context is not None:
-            env.identity.testing_context.mock_time = fake_now
+    env = ctx["env"]
+    env._mock_time = fake_now
+    # Rebuild identities so all transports carry the simulation clock.
+    env._identity_cache.clear()
+    if "_identity" in env.__dict__:
+        del env.__dict__["_identity"]
+    # Eagerly stamp the default identity so in-process REST overrides /
+    # IMPL calls see mock_time even before the next identity_for().
+    _ = env.identity
+    if env.identity.testing_context is not None:
+        env.identity.testing_context.mock_time = fake_now
 
 
 # Pre-flight window (far future) for persisted-status seeds that carry no
