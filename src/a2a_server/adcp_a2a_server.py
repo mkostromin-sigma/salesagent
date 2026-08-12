@@ -1953,18 +1953,19 @@ class AdCPRequestHandler(RequestHandler):
         supplied falsy scalar like ``0`` into a masquerading empty string).
         Unknown buyer keys are rejected via L2 ``assert_known_task_params``.
         """
-        from src.core.tools.task_management import GET_TASK_BUYER_PARAMS, assert_known_task_params
+        from src.core.tools.task_management import (
+            GET_TASK_BUYER_PARAMS,
+            _require_task_id,
+            assert_known_task_params,
+        )
 
         with adcp_validation_boundary(context="get_task request"):
             assert_known_task_params(parameters, allowed=GET_TASK_BUYER_PARAMS)
-            # Forward the raw JSON value — ``get_task`` / ``_require_task_id`` owns
-            # type validation. Do not ``cast`` or coerce here (architecture guard
-            # bans ``typing.cast`` in this module). MCP keeps ``task_id: str`` for
-            # the advertised schema; A2A may still forward a non-str JSON value.
-            return await core_get_task(
-                task_id=parameters.get("task_id"),  # type: ignore[arg-type]
-                identity=identity,
-            )
+            # Validate at the shared L2 helper, then pass a typed ``str`` into
+            # ``get_task`` (MCP keeps ``task_id: str`` for the advertised schema;
+            # A2A may still receive a non-str JSON value here).
+            task_id = _require_task_id(parameters.get("task_id"))
+            return await core_get_task(task_id=task_id, identity=identity)
 
     async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit complete_task skill — principal-scoped durable completion.
@@ -1977,13 +1978,14 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.tools.task_management import (
             COMPLETE_TASK_BUYER_PARAMS,
+            _require_task_id,
             assert_known_task_params,
         )
 
         with adcp_validation_boundary(context="complete_task request"):
             assert_known_task_params(parameters, allowed=COMPLETE_TASK_BUYER_PARAMS)
             kwargs: dict[str, Any] = {
-                "task_id": parameters.get("task_id"),
+                "task_id": _require_task_id(parameters.get("task_id")),
                 "identity": identity,
             }
             for key in COMPLETE_TASK_BUYER_PARAMS:
