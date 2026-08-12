@@ -441,6 +441,8 @@ class BaseTestEnv:
         self._principal_id = principal_id
         self._tenant_id = tenant_id
         self._dry_run = dry_run
+        # Controllable simulation clock for Given "today is …" (e2e_rest X-Mock-Time).
+        self._mock_time: datetime | None = None
         # E2E mode: bind factories to the live server's DB so the HTTP-reached
         # server sees Given-step data. Explicit database_url wins; else the
         # e2e_config's postgres_url. None => normal cached/integration engine.
@@ -491,6 +493,7 @@ class BaseTestEnv:
 
         protocol = TRANSPORT_PROTOCOL[transport]
         if protocol not in self._identity_cache:
+            from src.core.testing_hooks import AdCPTestContext
             from tests.factories.principal import PrincipalFactory
 
             # In integration mode, commit factory data first so the token
@@ -507,6 +510,10 @@ class BaseTestEnv:
                 protocol=protocol,
                 dry_run=self._dry_run,
                 auth_token=auth_token,
+                testing_context=AdCPTestContext(
+                    dry_run=self._dry_run,
+                    mock_time=self._mock_time,
+                ),
                 **self._tenant_overrides,
             )
         return self._identity_cache[protocol]

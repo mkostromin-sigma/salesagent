@@ -197,7 +197,13 @@ def _get_media_buys_impl(
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
     # if no tenant resolved (the principal advisories above take precedence).
     tenant = require_tenant(identity, context=req.context)
-    today = datetime.now(UTC).date()
+    # Honor X-Mock-Time / testing_context.mock_time (parity with delivery
+    # _simulation_clock) so e2e_rest UC-019 date refinement is controllable.
+    today = (
+        testing_ctx.mock_time.date()
+        if testing_ctx is not None and testing_ctx.mock_time is not None
+        else datetime.now(UTC).date()
+    )
     tenant_id: str = tenant["tenant_id"]
 
     # Every non-fatal per-row advisory lands here — a degraded optional field and an

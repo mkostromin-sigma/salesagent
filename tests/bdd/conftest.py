@@ -2544,42 +2544,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     break
 
         # --- UC-019: e2e_rest xfails for datetime-mock-dependent tests ---
-        # These scenarios use `And today is "<date>"` which patches datetime
-        # in-process. The patch has no effect on Docker — real datetime.now()
-        # is used, so status assertions fail.
+        # Graduated (#1830): X-Mock-Time end-to-end (REST from_headers + list
+        # honors mock_time + RestE2EDispatcher header + given_today_is).
+        # Remaining e2e_rest UC-019 gaps below are adapter-mock / fixture-only.
         if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
-            _UC019_E2E_DATETIME_TAGS: set[str] = {
-                "T-UC-019-partition-status",
-                "T-UC-019-boundary-status",
-                "T-UC-019-inv-150-2",
-                "T-UC-019-inv-150-4",
-                "T-UC-019-inv-150-5",
-                # Default filter test creates flight dates relative to mock_today
-                # (default 2026-03-15), making both buys "completed" on real date.
-                "T-UC-019-inv-151-1",
-            }
             _UC019_E2E_MOCK_TAGS: set[str] = {
                 # Adapter mock (get_adapter patch) has no effect in Docker.
                 "T-UC-019-partition-snapshot",
                 "T-UC-019-boundary-snapshot",
             }
-            # Graduated e2e_rest examples that pass despite datetime/mock concern:
-            # These variants have expected status=completed, which matches the
-            # real date (all flight dates are in the past).
-            _UC019_E2E_DT_GRADUATED = {
-                ("T-UC-019-partition-status", "post_flight"),
-                ("T-UC-019-boundary-status", "day after end_date"),
-                ("T-UC-019-boundary-status", "start_date equals end_date and today is day after"),
-            }
-            _dt_graduated = any(tag in marker_names and substr in nodeid for tag, substr in _UC019_E2E_DT_GRADUATED)
-            _inv150_5_graduated = "T-UC-019-inv-150-5" in marker_names  # all examples pass
-            if marker_names & _UC019_E2E_DATETIME_TAGS and not _dt_graduated and not _inv150_5_graduated:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: datetime.now() mock has no effect in Docker — status computed from real date",
-                        strict=False,
-                    )
-                )
             _UC019_E2E_MOCK_GRADUATED = {
                 ("T-UC-019-partition-snapshot", "supported_but_unavailable"),
                 # Only "snapshot null" passes on e2e_rest: Docker's mock adapter

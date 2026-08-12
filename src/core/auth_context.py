@@ -76,12 +76,15 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
         return None
 
     from src.core.resolved_identity import resolve_identity
+    from src.core.testing_hooks import AdCPTestContext
 
+    headers = dict(auth_ctx.headers)
     identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
+        headers=headers,
         auth_token=auth_ctx.auth_token,
         require_valid_token=False,
         protocol="rest",
+        testing_context=AdCPTestContext.from_headers(headers),
     )
 
     if not identity.principal_id:
@@ -111,12 +114,15 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
         raise AdCPAuthRequiredError("Authentication required", suggestion=AUTH_REQUIRED_SUGGESTION)
 
     from src.core.resolved_identity import resolve_identity
+    from src.core.testing_hooks import AdCPTestContext
 
+    headers = dict(auth_ctx.headers)
     identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
+        headers=headers,
         auth_token=auth_ctx.auth_token,
         require_valid_token=True,
         protocol="rest",
+        testing_context=AdCPTestContext.from_headers(headers),
     )
 
     if not identity.principal_id:

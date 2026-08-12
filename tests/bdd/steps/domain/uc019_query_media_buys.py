@@ -158,26 +158,31 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
 
 @given(parsers.parse('today is "{today_str}"'))
 def given_today_is(ctx: dict, today_str: str) -> None:
-    """Override 'today' for status computation.
+    """Override 'today' for status computation via testing_context.mock_time.
 
-    Production code uses ``datetime.now(UTC).date()`` in
-    ``src.core.tools.media_buy_list`` (line 116). We patch ``datetime``
-    in that module so ``now()`` returns a datetime whose ``.date()``
-    yields the desired date.
+    Production ``get_media_buys`` honors ``identity.testing_context.mock_time``
+    (parity with delivery). For e2e_rest, RestE2EDispatcher forwards
+    ``X-Mock-Time`` from the same clock. Seed helpers still read
+    ``ctx["mock_today"]``.
     """
     from datetime import UTC, datetime
-    from unittest.mock import patch
 
     parsed = date.fromisoformat(today_str)
     ctx["mock_today"] = today_str
-
-    # Build a datetime that corresponds to the target date
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)
 
-    patcher = patch("src.core.tools.media_buy_list.datetime", wraps=datetime)
-    mock_dt = patcher.start()
-    mock_dt.now.return_value = fake_now
-    ctx.setdefault("_patchers", []).append(patcher)
+    env = ctx.get("env")
+    if env is not None:
+        env._mock_time = fake_now
+        # Rebuild identities so all transports carry the simulation clock.
+        env._identity_cache.clear()
+        if "_identity" in env.__dict__:
+            del env.__dict__["_identity"]
+        # Eagerly stamp the default identity so in-process REST overrides /
+        # IMPL calls see mock_time even before the next identity_for().
+        _ = env.identity
+        if env.identity.testing_context is not None:
+            env.identity.testing_context.mock_time = fake_now
 
 
 # Pre-flight window (far future) for persisted-status seeds that carry no
