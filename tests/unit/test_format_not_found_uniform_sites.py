@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 
 from src.core.exceptions import (
@@ -28,29 +26,11 @@ def test_explicit_message_overrides_format_not_found_default() -> None:
 @pytest.mark.asyncio
 async def test_validate_format_ids_raises_generic_not_leaky_message() -> None:
     """A1: restoring a leaky positional message at this site must redden offline."""
-    from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+    from tests.helpers.format_not_found_assertions import raise_format_not_found_from_validate_helper
 
-    mock_agent = MagicMock()
-    mock_agent.agent_url = "https://creative.example.com"
-
-    with (
-        patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls,
-        patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x),
-    ):
-        mock_registry = MagicMock()
-        mock_registry._get_tenant_agents.return_value = [mock_agent]
-        mock_registry.get_format = AsyncMock(return_value=None)
-        mock_registry_cls.return_value = mock_registry
-
-        with pytest.raises(AdCPFormatNotFoundError) as exc_info:
-            await _validate_and_convert_format_ids(
-                format_ids=[{"agent_url": "https://creative.example.com", "id": "nonexistent_format"}],
-                tenant_id="test_tenant",
-                package_idx=0,
-            )
-
+    exc = await raise_format_not_found_from_validate_helper()
     assert_format_not_found_uniform(
-        exc_info.value,
+        exc,
         field="packages[0].format_ids[0]",
         forbidden_substrings=[
             "nonexistent_format",

@@ -41,7 +41,7 @@ do not use the harness.
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -53,7 +53,6 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPCreativeRejectedError,
-    AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
@@ -1661,40 +1660,23 @@ class TestExtensionObligations:
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
-        """Helper raises typed format miss with generic message and field=format_ids.
+        """Helper raises typed format miss with generic message and indexed field path.
 
         Unwired from ``_create_media_buy_impl`` (T-UC-002-ext-h-agent). This
         characterizes ``_validate_and_convert_format_ids`` only — not create_media_buy
         buyer-wire coverage.
         """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from tests.helpers.format_not_found_assertions import (
+            assert_format_not_found_uniform,
+            raise_format_not_found_from_validate_helper,
+        )
 
-        mock_agent = MagicMock()
-        mock_agent.agent_url = "https://creative.example.com"
-
-        with (
-            patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls,
-            patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x),
-        ):
-            mock_registry = MagicMock()
-            mock_registry._get_tenant_agents.return_value = [mock_agent]
-            mock_registry.get_format = AsyncMock(return_value=None)  # Format not found
-            mock_registry_cls.return_value = mock_registry
-
-            with pytest.raises(AdCPFormatNotFoundError) as exc_info:
-                await _validate_and_convert_format_ids(
-                    format_ids=[{"agent_url": "https://creative.example.com", "id": "nonexistent_format"}],
-                    tenant_id="test_tenant",
-                    package_idx=0,
-                )
-
-            from tests.helpers.format_not_found_assertions import assert_format_not_found_uniform
-
-            assert_format_not_found_uniform(
-                exc_info.value,
-                field="packages[0].format_ids[0]",
-                forbidden_substrings=["nonexistent_format", "creative.example.com"],
-            )
+        exc = await raise_format_not_found_from_validate_helper()
+        assert_format_not_found_uniform(
+            exc,
+            field="packages[0].format_ids[0]",
+            forbidden_substrings=["nonexistent_format", "creative.example.com"],
+        )
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):
