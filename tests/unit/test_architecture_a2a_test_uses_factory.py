@@ -61,7 +61,7 @@ def test_a2a_test_files_use_principal_factory_make_identity():
 
 @pytest.mark.arch_guard
 def test_find_resolved_identity_calls_self_test() -> None:
-    """Matcher self-test for the A2A factory guard (R5-N5b).
+    """Matcher self-test for the A2A factory guard.
 
     Body hoisted to ``tests.unit._architecture_helpers`` — shared with the
     sister per-file cap guard's self-test so the detector's coverage isn't

@@ -120,7 +120,7 @@ def _is_a2a_test_file(path: Path) -> bool:
     Path-aware: unit/integration/e2e ``test_a2a*`` are skipped here so the
     factory guard owns them at zero tolerance. Architecture helpers named
     ``test_architecture_a2a*`` stay under THIS cap guard (the factory guard's
-    ``test_a2a*`` glob never matches that prefix — R5-F1).
+    ``test_a2a*`` glob never matches that prefix).
     Use repo-relative prefixes — never ``"unit" in path.parts`` on an absolute
     path (any ancestor named ``unit``/``integration``/``e2e`` would fail open).
     """
@@ -193,7 +193,7 @@ def test_resolved_identity_caps_only_shrink() -> None:
 
 @pytest.mark.arch_guard
 def test_is_a2a_test_file_anchored_rel_not_ancestor_name() -> None:
-    """Fail-open regression: only repo-relative suite prefixes count (R5-N5b)."""
+    """Fail-open regression: only repo-relative suite prefixes count."""
     assert _is_a2a_test_file(_REPO_ROOT / "tests" / "unit" / "test_a2a_x.py") is True
     assert _is_a2a_test_file(_REPO_ROOT / "tests" / "bdd" / "test_a2a_x.py") is False
     assert _is_a2a_test_file(_REPO_ROOT / "tests" / "unit" / "test_architecture_a2a_x.py") is False
@@ -201,7 +201,7 @@ def test_is_a2a_test_file_anchored_rel_not_ancestor_name() -> None:
 
 @pytest.mark.arch_guard
 def test_count_inline_resolved_identity_self_test() -> None:
-    """Matcher self-test: detects direct + attribute calls; factory yields 0 (R5-N5b).
+    """Matcher self-test: detects direct + attribute calls; factory yields 0.
 
     Body hoisted to ``tests.unit._architecture_helpers`` — shared with the
     sister A2A factory guard's self-test so the detector's coverage isn't

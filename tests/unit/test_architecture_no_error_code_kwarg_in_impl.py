@@ -27,12 +27,12 @@ from tests.unit._architecture_helpers import assert_violations_match_allowlist, 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters", REPO_ROOT / "src" / "a2a_server"]
-# Prefer filtering _iter_adcp_error_calls() over a second rglob — a second
-# Path would restate SCAN_DIRS[2] byte-for-byte.
+# Prefer filtering _iter_adcp_error_calls() over a second rglob — derive the
+# path-prefix from SCAN_DIRS[2] rather than restating it as a second literal.
 # Scope limits (by design): only FunctionDef/AsyncFunctionDef bodies are
 # walked, so module/class-scope recovery= calls are invisible; ``**{"recovery":
 # ...}`` unpacking also escapes (kw.arg is None).
-A2A_SERVER_PREFIX = "src/a2a_server/"
+A2A_SERVER_PREFIX = f"{SCAN_DIRS[2].relative_to(REPO_ROOT).as_posix()}/"
 
 # The only sanctioned error_code= sites: the two boundary helpers that call
 # AdCPError.synthesize(). Keyed by (relative_path, enclosing_function_name) so the
