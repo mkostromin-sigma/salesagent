@@ -135,7 +135,11 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
 
 
 class GetMediaBuysBody(SalesAgentBaseModel):
-    media_buy_ids: list[str] | None = None
+    # Keep media_buy_ids / status_filter as Any so mistyped values reach
+    # get_media_buys_raw → adcp_validation_boundary (VALIDATION_ERROR), matching
+    # MCP/A2A. FastAPI list[str] typing would reject at the route with
+    # INVALID_REQUEST and diverge from T-UC-019-ext-d / other transports.
+    media_buy_ids: Any = None
     status_filter: Any = None
     include_snapshot: bool = False
     account: dict[str, Any] | None = None
