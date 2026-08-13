@@ -141,6 +141,12 @@ class RequestCompatMiddleware(Middleware):
         if not self._is_typeadapter_validation_error(exc):
             raise
 
+        # FastMCP may surface omitted required args as TypeAdapter ValidationError
+        # (not ToolError). Keep A2A ≡ MCP wording via the same L2 message.
+        if tool_name in ("get_task", "complete_task") and self._is_missing_task_id_validation(exc):
+            await self._translate_missing_required(context, tool_name)
+            raise  # pragma: no cover
+
         if self._should_retry(exc):
             retried = await self._retry_deep_strip(context, call_next, tool_name, normalized, exc)
             if retried is not None:
@@ -241,6 +247,21 @@ class RequestCompatMiddleware(Middleware):
     def _is_typeadapter_validation_error(exc: Exception) -> bool:
         """Return True for FastMCP TypeAdapter validation failures."""
         return isinstance(exc, ValidationError) and exc.title.startswith("call[")
+
+    @staticmethod
+    def _is_missing_task_id_validation(exc: Exception) -> bool:
+        """True when TypeAdapter reports ``task_id`` as missing (not wrong-type)."""
+        if not isinstance(exc, ValidationError):
+            return False
+        for err in exc.errors():
+            loc = err.get("loc") or ()
+            if "task_id" not in loc and not (loc and loc[-1] == "task_id"):
+                continue
+            err_type = str(err.get("type", ""))
+            msg = str(err.get("msg", "")).lower()
+            if "missing" in err_type or "required" in msg or "missing" in msg:
+                return True
+        return False
 
     @staticmethod
     def _is_missing_required_argument_error(exc: Exception) -> bool:
