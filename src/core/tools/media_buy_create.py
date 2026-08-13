@@ -1756,9 +1756,9 @@ async def _validate_and_convert_format_ids(
         AdCPAdapterError: If the agent lookup itself fails.
 
     Note:
-        Currently unwired from ``_create_media_buy_impl`` (T-UC-002-ext-h-agent;
-        tracked in #1962). Callers are tests that characterize this helper; do
-        not treat them as create_media_buy buyer-wire coverage.
+        Called from ``_create_media_buy_impl`` when a request package supplies
+        ``format_ids`` (#1962). Product-fallback formats (no request format_ids)
+        skip this helper and are checked against the product catalog later.
     """
     from src.core.creative_agent_registry import CreativeAgentRegistry
 
@@ -1822,6 +1822,7 @@ async def _validate_and_convert_format_ids(
             raise AdCPAuthorizationError(
                 f"{field_path}: Creative agent not registered.",
                 field=field_path,
+                suggestion="Use a creative agent_url registered for this tenant (list_creative_formats).",
             )
 
         # VALIDATION: Verify format exists on agent
@@ -2899,6 +2900,19 @@ async def _create_media_buy_impl(
                             suggestion="Check targeting constraints.",
                             field="targeting_overlay",
                         )
+
+        # Wire format_ids validation into create (#1962 / UC-002-EXT-H-02/H-03):
+        # FormatId shape, registered creative agent, and format existence on agent.
+        # Runs only when the buyer supplies package.format_ids (product fallback
+        # formats are publisher-configured and checked later against the catalog).
+        if req.packages:
+            for package_idx, pkg in enumerate(req.packages):
+                if pkg.format_ids:
+                    await _validate_and_convert_format_ids(
+                        format_ids=list(pkg.format_ids),
+                        tenant_id=tenant["tenant_id"],
+                        package_idx=package_idx,
+                    )
 
     except (AdCPError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation

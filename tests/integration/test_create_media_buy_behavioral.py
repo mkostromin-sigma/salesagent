@@ -1631,40 +1631,44 @@ class TestExtensionObligations:
         assert any("key_value_pairs" in v for v in violations)
         assert any("managed" in v.lower() for v in violations)
 
-    @pytest.mark.asyncio
-    async def test_unregistered_creative_agent_rejected(self):
-        """Unregistered creative agent in format_ids is rejected.
+    def test_unregistered_creative_agent_rejected(self, integration_db):
+        """Unregistered creative agent in package format_ids is rejected on create.
 
-        Characterizes unwired ``_validate_and_convert_format_ids`` only
-        (T-UC-002-ext-h-agent); UC-002-EXT-H-02 remains allowlisted until wired.
+        Covers: UC-002-EXT-H-02
         """
-        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from src.core.exceptions import AdCPAuthorizationError
 
-        with patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls:
-            mock_registry = MagicMock()
-            mock_registry._get_tenant_agents.return_value = []  # No agents registered
-            mock_registry_cls.return_value = mock_registry
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "format_ids": [
+                        {"agent_url": "https://unknown-agent.example.com", "id": "banner_300x250"},
+                    ],
+                }
+            ]
+        )
 
-            with patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x):
-                from src.core.exceptions import AdCPAuthorizationError
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
+                env.call_impl(req=req)
 
-                with pytest.raises(AdCPAuthorizationError) as exc_info:
-                    await _validate_and_convert_format_ids(
-                        format_ids=[{"agent_url": "https://unknown-agent.example.com", "id": "banner_300x250"}],
-                        tenant_id="test_tenant",
-                        package_idx=0,
-                    )
-
-                assert "not registered" in str(exc_info.value).lower()
-                assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert "not registered" in str(exc_info.value).lower()
+            assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert exc_info.value.field == "packages[0].format_ids[0]"
+            assert exc_info.value.suggestion
+            assert "inventory" not in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
         """Helper raises typed format miss with generic message and indexed field path.
 
-        Unwired from ``_create_media_buy_impl`` (T-UC-002-ext-h-agent). This
-        characterizes ``_validate_and_convert_format_ids`` only — not create_media_buy
-        buyer-wire coverage.
+        Covers: UC-002-EXT-H-03 (uniform raise site; create wiring #1962 also
+        routes request format_ids through this helper).
         """
         from tests.helpers.format_not_found_assertions import (
             assert_format_not_found_uniform,
