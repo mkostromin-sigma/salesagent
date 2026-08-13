@@ -16,7 +16,7 @@ handles commit/rollback at the boundary.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session

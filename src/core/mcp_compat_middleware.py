@@ -52,120 +52,154 @@ class RequestCompatMiddleware(Middleware):
         arguments = context.message.arguments or {}
         tool_name = context.message.name
         normalized = dict(arguments)
-        modified = False
-
-        # Step 1: Translate deprecated fields (no-op on empty args)
-        if arguments:
-            compat_result = normalize_request_params(tool_name, normalized)
-            normalized = compat_result.params
-            if compat_result.translations_applied:
-                modified = True
-
-            # Durable task tools: reject unknown keys via the same L2 helper the
-            # tools use (A2A ≡ MCP). Do not strip — stripping would fork the wire.
-            if tool_name in ("get_task", "complete_task"):
-                from src.core.exceptions import AdCPValidationError
-                from src.core.tools.task_management import (
-                    COMPLETE_TASK_BUYER_PARAMS,
-                    GET_TASK_BUYER_PARAMS,
-                    assert_known_task_params,
-                )
-
-                allowed = GET_TASK_BUYER_PARAMS if tool_name == "get_task" else COMPLETE_TASK_BUYER_PARAMS
-                try:
-                    assert_known_task_params(normalized, allowed=allowed)
-                except AdCPValidationError as typed:
-                    await self._record_boundary(context, tool_name, typed)
-                    _translate_to_tool_error(typed)
-                    raise
-
-            # Step 2: Strip unknown fields (schema-aware, production only)
-            # In dev mode, unknown fields reach TypeAdapter and fail loudly —
-            # this is how we detect that the seller agent doesn't support a
-            # field the spec requires. In production, strip silently to avoid
-            # rejecting callers using newer schema versions.
-            from src.core.config import is_production
-
-            if is_production() and tool_name not in ("get_task", "complete_task"):
-                known_params = await self._get_known_params(context, tool_name)
-                if known_params is not None:
-                    normalized, stripped = strip_unknown_params(normalized, known_params)
-                    if stripped:
-                        modified = True
-                        logger.warning(
-                            "Stripped unknown fields from %s: %s",
-                            tool_name,
-                            ", ".join(stripped),
-                        )
-
-            if modified:
-                new_message = CallToolRequestParams(
-                    name=tool_name,
-                    arguments=normalized,
-                )
-                context = context.copy(message=new_message)
-
-        # Step 3: Dispatch — TypeAdapter + missing-required ToolError → AdCP envelope
+        context = await self._normalize_arguments(context, tool_name, normalized, bool(arguments))
         try:
             return await call_next(context)
         except Exception as exc:
-            if RequestCompatMiddleware._is_missing_required_argument_error(exc):
-                from src.core.exceptions import VALIDATION_ERROR_SUGGESTION, AdCPValidationError
-                from src.core.tools.task_management import TASK_ID_REQUIRED_MESSAGE
+            return await self._handle_call_tool_error(context, call_next, tool_name, normalized, exc)
 
-                # Uniform message with L2 require_task_id for durable task tools;
-                # other tools keep a generic missing-arg wording (no FastMCP text).
-                if tool_name in ("get_task", "complete_task"):
-                    missing_typed = AdCPValidationError(
-                        TASK_ID_REQUIRED_MESSAGE,
-                        field="task_id",
-                        suggestion=VALIDATION_ERROR_SUGGESTION,
+    async def _normalize_arguments(
+        self,
+        context: MiddlewareContext,
+        tool_name: str,
+        normalized: dict[str, Any],
+        has_arguments: bool,
+    ) -> MiddlewareContext:
+        """Translate deprecated fields, enforce task unknown-key, optional strip."""
+        if not has_arguments:
+            return context
+        modified = False
+        compat_result = normalize_request_params(tool_name, normalized)
+        normalized.clear()
+        normalized.update(compat_result.params)
+        if compat_result.translations_applied:
+            modified = True
+
+        await self._reject_unknown_task_params(context, tool_name, normalized)
+
+        from src.core.config import is_production
+
+        if is_production() and tool_name not in ("get_task", "complete_task"):
+            known_params = await self._get_known_params(context, tool_name)
+            if known_params is not None:
+                stripped_params, stripped = strip_unknown_params(normalized, known_params)
+                normalized.clear()
+                normalized.update(stripped_params)
+                if stripped:
+                    modified = True
+                    logger.warning(
+                        "Stripped unknown fields from %s: %s",
+                        tool_name,
+                        ", ".join(stripped),
                     )
-                else:
-                    missing_typed = AdCPValidationError(
-                        "Missing required argument",
-                        suggestion=VALIDATION_ERROR_SUGGESTION,
-                    )
-                await self._record_boundary(context, tool_name, missing_typed)
-                _translate_to_tool_error(missing_typed)
+
+        if modified:
+            return context.copy(
+                message=CallToolRequestParams(name=tool_name, arguments=normalized),
+            )
+        return context
+
+    async def _reject_unknown_task_params(
+        self,
+        context: MiddlewareContext,
+        tool_name: str,
+        normalized: dict[str, Any],
+    ) -> None:
+        """A2A ≡ MCP unknown-key gate for durable task tools (no silent strip)."""
+        if tool_name not in ("get_task", "complete_task"):
+            return
+        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.task_management import (
+            COMPLETE_TASK_BUYER_PARAMS,
+            GET_TASK_BUYER_PARAMS,
+            assert_known_task_params,
+        )
+
+        allowed = GET_TASK_BUYER_PARAMS if tool_name == "get_task" else COMPLETE_TASK_BUYER_PARAMS
+        try:
+            assert_known_task_params(normalized, allowed=allowed)
+        except AdCPValidationError as validation_exc:
+            await self._record_boundary(context, tool_name, validation_exc)
+            _translate_to_tool_error(validation_exc)
+            raise
+
+    async def _handle_call_tool_error(
+        self,
+        context: MiddlewareContext,
+        call_next,
+        tool_name: str,
+        normalized: dict[str, Any],
+        exc: Exception,
+    ) -> ToolResult:
+        """Translate missing-required / TypeAdapter failures into AdCP envelopes."""
+        if RequestCompatMiddleware._is_missing_required_argument_error(exc):
+            await self._translate_missing_required(context, tool_name)
+            raise  # pragma: no cover
+
+        if not self._is_typeadapter_validation_error(exc):
+            raise
+
+        if self._should_retry(exc):
+            retried = await self._retry_deep_strip(context, call_next, tool_name, normalized, exc)
+            if retried is not None:
+                return retried
+            # retry path may replace exc via deep-strip failure — fall through
+            # with the latest TypeAdapter error still in ``exc`` when strip noop.
+
+        adcp_typed = normalize_to_adcp_error(exc)
+        await self._record_boundary(context, tool_name, adcp_typed)
+        _translate_to_tool_error(exc)
+        raise  # pragma: no cover
+
+    async def _translate_missing_required(self, context: MiddlewareContext, tool_name: str) -> None:
+        from src.core.exceptions import VALIDATION_ERROR_SUGGESTION, AdCPValidationError
+        from src.core.tools.task_management import TASK_ID_REQUIRED_MESSAGE
+
+        if tool_name in ("get_task", "complete_task"):
+            missing_typed = AdCPValidationError(
+                TASK_ID_REQUIRED_MESSAGE,
+                field="task_id",
+                suggestion=VALIDATION_ERROR_SUGGESTION,
+            )
+        else:
+            missing_typed = AdCPValidationError(
+                "Missing required argument",
+                suggestion=VALIDATION_ERROR_SUGGESTION,
+            )
+        await self._record_boundary(context, tool_name, missing_typed)
+        _translate_to_tool_error(missing_typed)
+
+    async def _retry_deep_strip(
+        self,
+        context: MiddlewareContext,
+        call_next,
+        tool_name: str,
+        normalized: dict[str, Any],
+        exc: Exception,
+    ) -> ToolResult | None:
+        tool_schema = await self._get_tool_schema(context, tool_name)
+        if tool_schema is None:
+            return None
+        stripped = deep_strip_to_schema(normalized, tool_schema)
+        if stripped == normalized:
+            return None
+        logger.warning(
+            "TypeAdapter rejected %s — retrying with deep-stripped arguments (production forward-compat): %s",
+            tool_name,
+            _summarize_error(exc),
+        )
+        stripped_context = context.copy(
+            message=CallToolRequestParams(name=tool_name, arguments=stripped),
+        )
+        try:
+            return await call_next(stripped_context)
+        except Exception as retry_exc:
+            if not self._is_typeadapter_validation_error(retry_exc):
                 raise
-
-            if not self._is_typeadapter_validation_error(exc):
-                raise
-
-            if self._should_retry(exc):
-                # Deep-strip unknown fields at every nesting level using the tool's
-                # JSON Schema. TypeAdapter rejects unknown fields in objects with
-                # additionalProperties: false. Our Pydantic models (extra='ignore')
-                # would accept them — stripping bridges the gap.
-                tool_schema = await self._get_tool_schema(context, tool_name)
-                if tool_schema is not None:
-                    stripped = deep_strip_to_schema(normalized, tool_schema)
-                    if stripped != normalized:
-                        logger.warning(
-                            "TypeAdapter rejected %s — retrying with deep-stripped arguments "
-                            "(production forward-compat): %s",
-                            tool_name,
-                            _summarize_error(exc),
-                        )
-                        stripped_message = CallToolRequestParams(
-                            name=tool_name,
-                            arguments=stripped,
-                        )
-                        stripped_context = context.copy(message=stripped_message)
-                        try:
-                            return await call_next(stripped_context)
-                        except Exception as retry_exc:
-                            if not self._is_typeadapter_validation_error(retry_exc):
-                                raise
-                            exc = retry_exc
-
-            # Normalize once for the audit record, then pass the raw exception to
-            # _translate_to_tool_error so the emitted AdCPToolError keeps it as
-            # __cause__. The translator intentionally normalizes it a second time.
-            typed = normalize_to_adcp_error(exc)
-            await self._record_boundary(context, tool_name, typed)
-            _translate_to_tool_error(exc)
+            adcp_typed = normalize_to_adcp_error(retry_exc)
+            await self._record_boundary(context, tool_name, adcp_typed)
+            _translate_to_tool_error(retry_exc)
+            raise
 
     async def _record_boundary(self, context: MiddlewareContext, tool_name: str, typed: AdCPError) -> None:
         tenant_id = None
