@@ -14,23 +14,24 @@ production auth chain before the ownership gate decides.
 
 from __future__ import annotations
 
-from typing import Any
-
+from a2a.types import TaskState
 from pytest_bdd import given, parsers, then, when
 
-from tests.a2a_helpers import assert_wire_no_identity_leak, assert_wire_task_not_found
+from tests.a2a_helpers import (
+    assert_wire_auth_failure,
+    assert_wire_no_identity_leak,
+    assert_wire_task_not_found,
+)
 
-_OWNED_TASK_STATE_BY_NAME = {
-    "WORKING": "TASK_STATE_WORKING",
-    "CANCELED": "TASK_STATE_CANCELED",
+_OWNED_TASK_STATE_BY_NAME: dict[str, TaskState.ValueType] = {
+    "WORKING": TaskState.TASK_STATE_WORKING,
+    "CANCELED": TaskState.TASK_STATE_CANCELED,
 }
 
 
-def _task_state(name: str) -> Any:
-    """Resolve a Gherkin state word to the a2a ``TaskState`` enum member."""
-    from a2a.types import TaskState
-
-    return getattr(TaskState, _OWNED_TASK_STATE_BY_NAME[name])
+def _task_state(name: str) -> TaskState.ValueType:
+    """Resolve a Gherkin state word to the a2a ``TaskState`` enum value."""
+    return _OWNED_TASK_STATE_BY_NAME[name]
 
 
 @given(parsers.parse('an in-memory A2A task "{task_id}" owned by the owning principal'))
@@ -107,8 +108,7 @@ def then_auth_failure_not_task_not_found(ctx: dict) -> None:
     assert env.last_a2a_task is None, f"Unauth call still returned a Task: {env.last_a2a_task}"
     error = env.last_a2a_task_error
     assert error is not None, "Expected an authentication failure, got none"
-    assert error.get("message") == "Missing authentication token", f"expected auth-failure message, got {error!r}"
-    assert "Task not found" not in str(error.get("message", ""))
+    assert_wire_auth_failure(error)
 
 
 @then(parsers.parse('the stored task "{task_id}" should be in state {state}'))

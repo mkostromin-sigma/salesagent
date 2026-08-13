@@ -44,6 +44,8 @@ from tests.a2a_helpers import (
     OWNED_TASK_SIBLING_TOK,
     OWNED_TASK_TENANT,
     TASK_METHOD_MATRIX,
+    TASK_METHOD_PAIRS,
+    TASK_METHOD_WITH_OPS,
     a2a_auth_as,
     assert_task_not_found_nondisclosure,
     auth_operation_wire_phrase,
@@ -152,7 +154,7 @@ def test_internal_error_for_sql_normalized_exception_stays_out_of_message():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
-    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
+    TASK_METHOD_PAIRS,
 )
 async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
     """Real constructor create→poll: owner allowed; sibling/other-tenant denied."""
@@ -205,7 +207,7 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
-    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
+    TASK_METHOD_PAIRS,
 )
 async def test_owner_can_access_owned_in_memory_task(request_cls, method_name):
     """The recorded owner authenticates and is served / can cancel."""
@@ -225,7 +227,7 @@ async def test_owner_can_access_owned_in_memory_task(request_cls, method_name):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name, operation",
-    [(row[0], row[1], row[3]) for row in TASK_METHOD_MATRIX],
+    TASK_METHOD_WITH_OPS,
 )
 async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name, operation, caplog):
     """Same-tenant sibling must not read or cancel — identical to unknown id."""
@@ -275,7 +277,7 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name, wire_message",
-    [(row[0], row[1], auth_operation_wire_phrase(row[3])) for row in TASK_METHOD_MATRIX],
+    [(row.request_cls, row.method_name, auth_operation_wire_phrase(row.operation)) for row in TASK_METHOD_MATRIX],
 )
 async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_cls, method_name, wire_message):
     """DB/infra failure during identity resolve must not collapse to TaskNotFoundError.
@@ -309,7 +311,7 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_c
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
-    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
+    TASK_METHOD_PAIRS,
 )
 async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name):
     """Ownership compare with real ``_get_auth_token`` (only resolve_identity patched).
@@ -338,7 +340,7 @@ async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
-    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
+    TASK_METHOD_PAIRS,
 )
 async def test_unauthenticated_poller_raises_invalid_request(request_cls, method_name):
     """Missing token raises InvalidRequestError — must not collapse to TaskNotFoundError."""
@@ -354,7 +356,7 @@ async def test_unauthenticated_poller_raises_invalid_request(request_cls, method
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
-    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
+    TASK_METHOD_PAIRS,
 )
 async def test_null_principal_denied_against_null_owner_row(request_cls, method_name):
     """Null-principal identity must not match a (None, None) owner row (R5-A2)."""

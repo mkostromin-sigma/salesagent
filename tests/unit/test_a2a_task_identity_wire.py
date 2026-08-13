@@ -11,6 +11,7 @@ on the wire (code/message shape).
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -20,7 +21,7 @@ from tests.a2a_helpers import (
     OWNED_TASK_ID,
     OWNED_TASK_OWNER_TOK,
     OWNED_TASK_SIBLING_TOK,
-    TASK_METHOD_MATRIX,
+    TASK_JSONRPC_METHODS,
     XAdcpAuthContextBuilder,
     assert_wire_auth_failure,
     assert_wire_task_not_found,
@@ -30,7 +31,7 @@ from tests.a2a_helpers import (
 )
 
 
-def _post_task(handler: AdCPRequestHandler, *, method: str, task_id: str, token: str | None) -> dict:
+def _post_task(handler: AdCPRequestHandler, *, method: str, task_id: str, token: str | None) -> dict[str, Any]:
     """Thin wrapper: auth-header shaping only; POST boundary is shared."""
     headers = {"x-adcp-auth": token} if token is not None else {}
     return post_a2a_task_method(
@@ -42,7 +43,7 @@ def _post_task(handler: AdCPRequestHandler, *, method: str, task_id: str, token:
     )
 
 
-@pytest.mark.parametrize("method", [row[2] for row in TASK_METHOD_MATRIX])
+@pytest.mark.parametrize("method", TASK_JSONRPC_METHODS)
 def test_sibling_wire_error_matches_unknown_id(method):
     """Sibling ownership miss and unknown id share wire code/message shape.
 
@@ -72,7 +73,7 @@ def test_sibling_wire_error_matches_unknown_id(method):
     assert owner_body["result"]["id"] == OWNED_TASK_ID
 
 
-@pytest.mark.parametrize("method", [row[2] for row in TASK_METHOD_MATRIX])
+@pytest.mark.parametrize("method", TASK_JSONRPC_METHODS)
 def test_unauthenticated_wire_is_auth_failure_not_task_not_found(method):
     """No Authorization → auth-failure shape, distinct from not-found on the wire."""
     handler = seeded_owned_a2a_handler()

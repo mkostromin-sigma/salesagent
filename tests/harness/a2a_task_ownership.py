@@ -22,7 +22,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from src.core.resolved_identity import ResolvedIdentity
 from tests.a2a_helpers import (
@@ -34,9 +34,19 @@ from tests.a2a_helpers import (
 )
 from tests.harness._base import IntegrationEnv
 
+if TYPE_CHECKING:
+    from src.core.database.models import Principal, Tenant
+
 OWNER_ROLE = "owner"
 SIBLING_ROLE = "sibling"
 OTHER_TENANT_ROLE = "other_tenant"
+
+# Role → (tenant_id, principal_id) built once from the shared OWNED_TASK_* vocabulary.
+_ROLE_TARGETS: dict[str, tuple[str, str]] = {
+    OWNER_ROLE: (OWNED_TASK_TENANT, OWNED_TASK_OWNER),
+    SIBLING_ROLE: (OWNED_TASK_TENANT, OWNED_TASK_SIBLING),
+    OTHER_TENANT_ROLE: (OWNED_TASK_OTHER_TENANT, OWNED_TASK_OTHER_PRINCIPAL),
+}
 
 
 class A2ATaskOwnershipEnv(IntegrationEnv):
@@ -44,22 +54,13 @@ class A2ATaskOwnershipEnv(IntegrationEnv):
 
     EXTERNAL_PATCHES: dict[str, str] = {}
 
-    # Shared with unit/wire altitudes (tests/a2a_helpers.py) — one vocabulary.
-    OWNER_TENANT_ID = OWNED_TASK_TENANT
-    OWNER_PRINCIPAL_ID = OWNED_TASK_OWNER
-    SIBLING_PRINCIPAL_ID = OWNED_TASK_SIBLING
-    OTHER_TENANT_ID = OWNED_TASK_OTHER_TENANT
-    # Same principal_id under another tenant so cross-tenant scenarios grade the
-    # tenant half of ``_TaskOwner`` (principal-only mutation must redden).
-    OTHER_PRINCIPAL_ID = OWNED_TASK_OTHER_PRINCIPAL
-
-    def __init__(self, **kwargs: Any) -> None:
-        kwargs.setdefault("tenant_id", self.OWNER_TENANT_ID)
-        kwargs.setdefault("principal_id", self.OWNER_PRINCIPAL_ID)
-        super().__init__(**kwargs)
+    def __init__(self, **kwargs: object) -> None:
+        kwargs.setdefault("tenant_id", OWNED_TASK_TENANT)
+        kwargs.setdefault("principal_id", OWNED_TASK_OWNER)
+        super().__init__(**kwargs)  # type: ignore[arg-type]
         self._role_identities: dict[str, ResolvedIdentity] = {}
 
-    def setup_principals(self) -> tuple[Any, Any]:
+    def setup_principals(self) -> tuple[Tenant, Principal]:
         """Seed the owner tenant + all three principals, each with a real access token.
 
         Returns the (tenant, owner principal) pair for the owning tenant.
@@ -67,9 +68,9 @@ class A2ATaskOwnershipEnv(IntegrationEnv):
         from tests.factories import PrincipalFactory, TenantFactory
 
         tenant, owner = self.setup_default_data()
-        PrincipalFactory(tenant=tenant, principal_id=self.SIBLING_PRINCIPAL_ID)
-        other_tenant = TenantFactory(tenant_id=self.OTHER_TENANT_ID)
-        PrincipalFactory(tenant=other_tenant, principal_id=self.OTHER_PRINCIPAL_ID)
+        PrincipalFactory(tenant=tenant, principal_id=OWNED_TASK_SIBLING)
+        other_tenant = TenantFactory(tenant_id=OWNED_TASK_OTHER_TENANT)
+        PrincipalFactory(tenant=other_tenant, principal_id=OWNED_TASK_OTHER_PRINCIPAL)
         self._commit_factory_data()
         return tenant, owner
 
@@ -83,13 +84,8 @@ class A2ATaskOwnershipEnv(IntegrationEnv):
         """
         from tests.harness.transport import Transport
 
-        role_targets = {
-            OWNER_ROLE: (self.OWNER_TENANT_ID, self.OWNER_PRINCIPAL_ID),
-            SIBLING_ROLE: (self.OWNER_TENANT_ID, self.SIBLING_PRINCIPAL_ID),
-            OTHER_TENANT_ROLE: (self.OTHER_TENANT_ID, self.OTHER_PRINCIPAL_ID),
-        }
         if role not in self._role_identities:
-            tenant_id, principal_id = role_targets[role]
+            tenant_id, principal_id = _ROLE_TARGETS[role]
             self.switch_tenant(tenant_id)
             self.switch_principal(principal_id)
             try:
@@ -100,6 +96,6 @@ class A2ATaskOwnershipEnv(IntegrationEnv):
                 )
                 self._role_identities[role] = identity
             finally:
-                self.switch_tenant(self.OWNER_TENANT_ID)
-                self.switch_principal(self.OWNER_PRINCIPAL_ID)
+                self.switch_tenant(OWNED_TASK_TENANT)
+                self.switch_principal(OWNED_TASK_OWNER)
         return self._role_identities[role]

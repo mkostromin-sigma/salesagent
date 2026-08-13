@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NamedTuple
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
@@ -52,13 +52,32 @@ OWNED_TASK_FORBIDDEN_SUBSTRINGS: tuple[str, ...] = (
 
 type TaskRequestCls = type[GetTaskRequest] | type[CancelTaskRequest]
 
+
+class TaskMethodRow(NamedTuple):
+    """One A2A task method row — named columns so consumers never index positionally."""
+
+    request_cls: TaskRequestCls
+    method_name: str
+    jsonrpc_method: str
+    operation: str
+
+
 # request_cls / method_name / JSON-RPC method / _authenticate operation id —
 # one vocabulary for unit + wire. Wire phrase = ``op.replace("_", " ") + " failed"``
 # (same transform production ``_authenticate`` uses).
-TASK_METHOD_MATRIX: tuple[tuple[TaskRequestCls, str, str, str], ...] = (
-    (GetTaskRequest, "on_get_task", "tasks/get", "get_task"),
-    (CancelTaskRequest, "on_cancel_task", "tasks/cancel", "cancel_task"),
+TASK_METHOD_MATRIX: tuple[TaskMethodRow, ...] = (
+    TaskMethodRow(GetTaskRequest, "on_get_task", "tasks/get", "get_task"),
+    TaskMethodRow(CancelTaskRequest, "on_cancel_task", "tasks/cancel", "cancel_task"),
 )
+
+# Hot slices — one home so unit/wire sites do not re-project by index.
+TASK_METHOD_PAIRS: tuple[tuple[TaskRequestCls, str], ...] = tuple(
+    (row.request_cls, row.method_name) for row in TASK_METHOD_MATRIX
+)
+TASK_METHOD_WITH_OPS: tuple[tuple[TaskRequestCls, str, str], ...] = tuple(
+    (row.request_cls, row.method_name, row.operation) for row in TASK_METHOD_MATRIX
+)
+TASK_JSONRPC_METHODS: tuple[str, ...] = tuple(row.jsonrpc_method for row in TASK_METHOD_MATRIX)
 
 
 def auth_operation_wire_phrase(operation: str) -> str:
