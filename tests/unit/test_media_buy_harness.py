@@ -74,3 +74,27 @@ class TestMediaBuyListEnvExists:
         from tests.harness.media_buy_list import MediaBuyListEnv
 
         assert MediaBuyListEnv is not None
+
+    def test_call_mcp_uses_client_pipeline_not_legacy_wrapper(self):
+        """UC-019 wire_field needs MCP structured_content stashed as wire_response.
+
+        Legacy ``_run_mcp_wrapper`` never set ``_last_wire_response``; list env
+        must use ``_run_mcp_client`` like create/dual.
+        """
+        from unittest.mock import patch
+
+        from src.core.schemas._base import GetMediaBuysResponse
+        from tests.harness.media_buy_list import MediaBuyListEnv
+
+        env = MediaBuyListEnv.__new__(MediaBuyListEnv)
+        with (
+            patch.object(MediaBuyListEnv, "_run_mcp_client", return_value="wired") as mock_client,
+            patch.object(MediaBuyListEnv, "_run_mcp_wrapper") as mock_wrapper,
+        ):
+            assert env.call_mcp(status_filter=["active"]) == "wired"
+            mock_client.assert_called_once_with(
+                "get_media_buys",
+                GetMediaBuysResponse,
+                status_filter=["active"],
+            )
+            mock_wrapper.assert_not_called()
