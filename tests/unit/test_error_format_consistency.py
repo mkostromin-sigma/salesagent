@@ -590,11 +590,14 @@ class TestMCPRecoveryInErrorResponses:
 
         from tests.helpers import assert_envelope_shape
 
+        # REFERENCE_NOT_FOUND: buyer message is forced from WIRE_STANDARD_CODES
+        # (uniform-response seam) — positional ``msg`` must not appear on the wire.
+        wire_message = "Reference not found" if expected_code == "REFERENCE_NOT_FOUND" else msg
         assert_envelope_shape(
             exc_info.value,
             expected_code,
             recovery=expected_recovery,
-            message_substr=msg,
+            message_substr=wire_message,
             check_mcp_tool_error=True,
         )
 
