@@ -1000,7 +1000,7 @@ Source: UC-002-ext-h.md
 **When** the system validates format IDs
 **Then** it returns wire error `REFERENCE_NOT_FOUND` with generic message `"Reference not found"` (uniform response — no `format_id` / `agent_url` in message or details)
 **And** `error.field` names the `packages[i].format_ids[j]` path
-**Note:** Helper `_validate_and_convert_format_ids` is currently unwired from `_create_media_buy_impl` (T-UC-002-ext-h-agent; #1962); covered as backlog until wired.
+**Note:** `create_media_buy` wiring of `_validate_and_convert_format_ids` remains #1962; uniform raise + wire envelope is graded via `tests/unit/test_format_not_found_uniform_sites.py` (Covers: UC-002-EXT-H-03) and the UC-021 binder (`tests/bdd/test_uc021_preview_creative.py`) for the preview path.
 **Priority:** P1
 
 #### Scenario: FormatId Object Missing Required Fields

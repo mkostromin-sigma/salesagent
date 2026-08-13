@@ -453,8 +453,10 @@ class AdCPError(Exception):
     # "provide valid credentials") sets this so no raise site can forget the
     # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
     _default_suggestion: ClassVar[str | None] = None
-    # Optional class-level message default: empty ``message`` falls back here so
-    # raise sites cannot omit (or drift from) the canonical buyer-facing text.
+    # Optional class-level message default: omitted ``message`` (None) falls
+    # back here so raise sites cannot omit (or drift from) the canonical
+    # buyer-facing text. Explicit ``""`` is preserved (None-sentinel, same as
+    # ``suggestion`` / ``error_code`` / ``recovery``).
     _default_message: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
@@ -464,7 +466,7 @@ class AdCPError(Exception):
 
     def __init__(
         self,
-        message: str = "",
+        message: str | None = None,
         *,
         error_code: str | None = None,
         status_code: int | None = None,
@@ -478,7 +480,7 @@ class AdCPError(Exception):
         # sanctioned ``synthesize()`` classmethod for boundary fallback paths
         # that need a wire code the typed class hierarchy doesn't model.
         # Direct raises use a typed subclass and inherit its ``_default_*``.
-        resolved_message = message or type(self)._default_message or ""
+        resolved_message = message if message is not None else (type(self)._default_message or "")
         super().__init__(resolved_message)
         self.message = resolved_message
         self.details = details

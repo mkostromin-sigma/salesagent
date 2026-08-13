@@ -8,12 +8,14 @@ from src.core.exceptions import (
     REFERENCE_NOT_FOUND_MESSAGE,
     AdCPError,
     AdCPFormatNotFoundError,
+    build_two_layer_error_envelope,
 )
+from tests.helpers.envelope_assertions import assert_envelope_shape
 from tests.helpers.format_not_found_assertions import assert_format_not_found_uniform
 
 
 def test_adcp_error_empty_message_defaults_to_empty_string() -> None:
-    """Operand 3 of ``message or _default_message or ""`` is graded (E4)."""
+    """None-sentinel: omitted message resolves to ``""`` when no class default (E4)."""
     assert AdCPError().message == ""
 
 
@@ -25,7 +27,10 @@ def test_explicit_message_overrides_format_not_found_default() -> None:
 
 @pytest.mark.asyncio
 async def test_validate_format_ids_raises_generic_not_leaky_message() -> None:
-    """A1: restoring a leaky positional message at this site must redden offline."""
+    """A1: restoring a leaky positional message at this site must redden offline.
+
+    Covers: UC-002-EXT-H-03
+    """
     from tests.helpers.format_not_found_assertions import raise_format_not_found_from_validate_helper
 
     exc = await raise_format_not_found_from_validate_helper()
@@ -39,6 +44,15 @@ async def test_validate_format_ids_raises_generic_not_leaky_message() -> None:
             "agent_url=",
         ],
     )
+    envelope = build_two_layer_error_envelope(exc)
+    assert_envelope_shape(
+        envelope,
+        "REFERENCE_NOT_FOUND",
+        recovery="correctable",
+        message_substr=REFERENCE_NOT_FOUND_MESSAGE,
+    )
+    assert envelope["adcp_error"]["message"] == REFERENCE_NOT_FOUND_MESSAGE
+    assert envelope["errors"][0]["message"] == REFERENCE_NOT_FOUND_MESSAGE
     # Mutation: a leaky raise with the old message must not satisfy equality.
     leaky = AdCPFormatNotFoundError(
         "Format not found on agent. agent_url=https://creative.example.com, format_id='nonexistent_format'",
