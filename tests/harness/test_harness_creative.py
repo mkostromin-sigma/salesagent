@@ -138,7 +138,7 @@ class TestCreativeSyncEnvContract:
         _clear_gemini_api_key_e2e(env)
 
         assert tenant_row.gemini_api_key is None
-        env._commit_factory_data.assert_called_once()
+        env._commit_factory_data.assert_called_once_with()
         assert env.identity.tenant["gemini_api_key"] is None
 
     def test_setup_generative_build_e2e_unsupported(self):

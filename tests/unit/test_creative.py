@@ -1816,6 +1816,11 @@ class TestGenerativeCreativeBuild:
         Note: mock_format_obj.format_id uses _adcp_format_id() (the library type)
         to match the CreativeAsset.format_id type from _make_creative_asset().
         FormatId equality requires same type instances.
+
+        ``gemini_key`` is returned for the caller to put on the **tenant**
+        dict — production creative-sync advisories are account-scoped and do
+        not read ``get_config().gemini_api_key``. The config mock is still
+        populated so unrelated surfaces stay consistent in the patch stack.
         """
         mock_format_obj = MagicMock()
         mock_format_obj.format_id = _adcp_format_id()
@@ -1826,6 +1831,16 @@ class TestGenerativeCreativeBuild:
         mock_config.gemini_api_key = gemini_key
 
         return mock_format_obj, mock_config
+
+    @staticmethod
+    def _tenant(*, gemini_key: str | None = "test-gemini-key") -> dict:
+        """Tenant dict for generative unit tests (account-scoped GEMINI key)."""
+        return {
+            "tenant_id": "t1",
+            "approval_mode": "auto-approve",
+            "slack_webhook_url": None,
+            "gemini_api_key": gemini_key,
+        }
 
     def test_format_with_output_format_ids_classified_as_generative(self):
         """Format with output_format_ids is classified as a generative creative.
@@ -1839,7 +1854,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -1890,7 +1905,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -1949,7 +1964,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -1999,7 +2014,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -2051,7 +2066,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -2106,7 +2121,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -2162,7 +2177,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _update_existing_creative
 
         mock_session = MagicMock()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         mock_existing = MagicMock()
@@ -2223,7 +2238,7 @@ class TestGenerativeCreativeBuild:
         from src.core.tools.creatives._processing import _create_new_creative
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant()
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
         with (
@@ -2287,7 +2302,7 @@ class TestGenerativeCreativeBuild:
         from tests.helpers.creative_test_helpers import assert_gemini_key_missing_advisory
 
         mock_session = _make_mock_creative_repo()
-        tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
+        tenant = self._tenant(gemini_key=None)
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session, gemini_key=None)
 
         with (
