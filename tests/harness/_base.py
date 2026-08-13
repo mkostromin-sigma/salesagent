@@ -1194,7 +1194,7 @@ class BaseTestEnv:
         method: str,
         task_id: str,
         *,
-        identity: Any = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | _NoOverride = _NO_OVERRIDE,
     ) -> Task | None:
         """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
 
@@ -1274,7 +1274,7 @@ class BaseTestEnv:
         self,
         task_id: str,
         *,
-        identity: Any = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | _NoOverride = _NO_OVERRIDE,
         state: TaskState | None = None,
         record_owner: bool = True,
     ) -> Task:
@@ -1310,15 +1310,6 @@ class BaseTestEnv:
                 principal_id=owner.principal_id,
             )
         return task
-
-    def a2a_task_state(self, task_id: str) -> TaskState | None:
-        """State of the seeded in-memory task, or None if the handler has no such id.
-
-        Public read-back accessor: a denied ``tasks/cancel`` must leave the stored
-        Task untouched, and step functions must not reach into ``handler.tasks``.
-        """
-        task = self.a2a_handler.tasks.get(task_id)
-        return task.status.state if task is not None else None
 
     def _run_mcp_client(
         self,

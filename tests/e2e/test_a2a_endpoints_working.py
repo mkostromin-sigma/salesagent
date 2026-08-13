@@ -459,6 +459,11 @@ class TestA2AServerIntegration:
         assert response.status_code == 200, f"JSON-RPC errors ride a 200 envelope: {response.status_code}"
         data = response.json()
         assert "error" in data, f"unknown task id must produce a JSON-RPC error: {data}"
+        # Branch-reached: token/init_db drift must not silently exit at the auth
+        # gate and still xfail on a non--32001 code for the wrong reason (#1720).
+        assert data["error"]["message"] != "Missing authentication token", (
+            f"unknown-id tripwire exited at auth instead of the ownership branch: {data['error']!r}"
+        )
         assert data["error"]["code"] == -32001, (
             f"A2A spec defines -32001 (TaskNotFoundError) for an unknown task id, got "
             f"{data['error']['code']} — see #1670"

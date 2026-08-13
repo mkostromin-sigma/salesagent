@@ -11,6 +11,7 @@ on the wire (code/message shape).
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -63,7 +64,7 @@ def _post_task(handler: AdCPRequestHandler, *, method: str, task_id: str, token:
     )
 
 
-@pytest.mark.parametrize("method", [row[2] for row in TASK_METHOD_MATRIX])
+@pytest.mark.parametrize("method", TASK_JSONRPC_METHODS)
 def test_sibling_wire_error_matches_unknown_id(method):
     """Sibling ownership miss and unknown id share wire code/message shape.
 
@@ -95,7 +96,7 @@ def test_sibling_wire_error_matches_unknown_id(method):
     assert owner_body["result"]["id"] == OWNED_TASK_ID
 
 
-@pytest.mark.parametrize("method", [row[2] for row in TASK_METHOD_MATRIX])
+@pytest.mark.parametrize("method", TASK_JSONRPC_METHODS)
 def test_unauthenticated_wire_is_auth_failure_not_task_not_found(method):
     """No Authorization → auth-failure shape, distinct from not-found on the wire."""
     handler = seeded_owned_a2a_handler()

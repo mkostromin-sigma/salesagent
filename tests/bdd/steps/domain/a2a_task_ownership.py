@@ -125,8 +125,7 @@ def then_auth_failure_not_task_not_found(ctx: dict) -> None:
     assert env.last_a2a_task is None, f"Unauth call still returned a Task: {env.last_a2a_task}"
     error = env.last_a2a_task_error
     assert error is not None, "Expected an authentication failure, got none"
-    assert error.get("message") == "Missing authentication token", f"expected auth-failure message, got {error!r}"
-    assert "Task not found" not in str(error.get("message", ""))
+    assert_wire_auth_failure(error)
 
 
 @then("the A2A task response should be an authentication failure, not task-not-found")
