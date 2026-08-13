@@ -1422,6 +1422,17 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     return AdCPError(str(exc) or type(exc).__name__)
 
 
+# SSOT for buyer-wire SQL/bind-param disclosure markers (tests import this).
+SQL_LEAK_MARKERS: tuple[str, ...] = (
+    "[parameters:",
+    "SQL:",
+    "psycopg2",
+    "asyncpg",
+    "can't adapt type",
+    "workflow_steps",
+)
+
+
 def _leaks_sql_or_bind_params(exc: BaseException) -> bool:
     """True when ``str(exc)`` would disclose SQL / bind params to the buyer."""
     try:
@@ -1432,5 +1443,4 @@ def _leaks_sql_or_bind_params(exc: BaseException) -> bool:
     except ImportError:  # pragma: no cover - sqlalchemy is a hard dep
         pass
     text = str(exc)
-    markers = ("[parameters:", "SQL:", "psycopg2", "asyncpg", "can't adapt type")
-    return any(marker in text for marker in markers)
+    return any(marker in text for marker in SQL_LEAK_MARKERS)

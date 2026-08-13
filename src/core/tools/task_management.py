@@ -35,15 +35,24 @@ _SERVER_OWNED_TASK_PARAMS = frozenset({"context", "identity"})
 
 def _buyer_param_names(fn: Any) -> frozenset[str]:
     """Buyer-forwardable names from an L2 tool signature (minus server-owned)."""
-    return frozenset(inspect.signature(fn).parameters) - _SERVER_OWNED_TASK_PARAMS
+    names: set[str] = set()
+    for name, param in inspect.signature(fn).parameters.items():
+        if name in _SERVER_OWNED_TASK_PARAMS:
+            continue
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            continue
+        names.add(name)
+    return frozenset(names)
 
 
 def assert_known_task_params(parameters: Mapping[str, Any], *, allowed: frozenset[str]) -> None:
-    """Reject unknown buyer keys at L2 so A2A cannot silently drop typos.
+    """Reject unknown buyer keys so A2A/MCP cannot silently drop typos.
 
-    MCP TypeAdapter already rejects unexpected kwargs; A2A hand-rolls a key
-    allowlist. Sharing this check keeps both transports on the same policy —
-    a typo'd ``statas`` must not default ``status`` to ``completed``.
+    Called from A2A skill handlers (raw skill dict) and from
+    ``RequestCompatMiddleware`` for ``get_task`` / ``complete_task`` (MCP
+    arguments dict) — FastMCP cannot register ``**kwargs`` tools, so the
+    unknown-key gate cannot live inside the tool body. A typo'd ``statas``
+    must not default ``status`` to ``completed``.
     """
     unknown = sorted(set(parameters) - allowed)
     if unknown:
@@ -53,7 +62,11 @@ def assert_known_task_params(parameters: Mapping[str, Any], *, allowed: frozense
         )
 
 
-def _require_task_id(task_id: Any) -> str:
+TASK_ID_REQUIRED_MESSAGE = "task_id is required"
+TASK_ID_TYPE_MESSAGE = "task_id must be a string"
+
+
+def require_task_id(task_id: Any) -> str:
     """Validate presence *and* type of ``task_id`` for both durable task tools.
 
     A2A forwards raw skill parameters, so ``task_id`` can arrive as any JSON
@@ -64,14 +77,27 @@ def _require_task_id(task_id: Any) -> str:
     leaks the query. Shared by ``get_task`` / ``complete_task`` so both tools
     reject the same shapes at L2. Wire grading covers truthy non-strings on
     both A2A and MCP via TaskEnv (unit covers the in-process path).
+
+    Absent/empty → ``TASK_ID_REQUIRED_MESSAGE``; present wrong type →
+    ``TASK_ID_TYPE_MESSAGE`` (mirrors ``_require_error_message``).
     """
-    if not isinstance(task_id, str) or not task_id:
+    if task_id is None or (isinstance(task_id, str) and not task_id):
         raise AdCPValidationError(
-            "task_id is required",
+            TASK_ID_REQUIRED_MESSAGE,
+            field="task_id",
+            suggestion=VALIDATION_ERROR_SUGGESTION,
+        )
+    if not isinstance(task_id, str):
+        raise AdCPValidationError(
+            TASK_ID_TYPE_MESSAGE,
             field="task_id",
             suggestion=VALIDATION_ERROR_SUGGESTION,
         )
     return task_id
+
+
+# Back-compat alias for any lingering private imports (tests / call sites).
+_require_task_id = require_task_id
 
 
 def _require_error_message(error_message: Any) -> str | None:
@@ -184,7 +210,7 @@ async def list_tasks(
 
 
 async def get_task(
-    task_id: str,
+    task_id: Any,
     context: Context | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> dict[str, Any]:
@@ -204,7 +230,7 @@ async def get_task(
     identity = require_identity(identity)
     tenant = require_tenant(identity)
     principal_id = require_principal_id(identity)  # F-03: authenticated principal + ownership key
-    task_id = _require_task_id(task_id)
+    task_id = require_task_id(task_id)
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -244,7 +270,7 @@ async def get_task(
 
 
 async def complete_task(
-    task_id: str,
+    task_id: Any,
     status: str = "completed",
     response_data: dict[str, Any] | None = None,
     error_message: str | None = None,
@@ -270,7 +296,7 @@ async def complete_task(
     identity = require_identity(identity)
     tenant = require_tenant(identity)
     principal_id = require_principal_id(identity)  # F-03: an authenticated principal is required
-    task_id = _require_task_id(task_id)
+    task_id = require_task_id(task_id)
     error_message = _require_error_message(error_message)
 
     if status not in ["completed", "failed"]:

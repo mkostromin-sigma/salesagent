@@ -471,8 +471,6 @@ class TransportResult:
         ClassVar-swap mutations. Do **not** use this for request-validation
         paths that emit field-specific suggestions under ``VALIDATION_ERROR``.
         """
-        import json
-        from pathlib import Path
 
         from tests.helpers import assert_envelope_shape
 
@@ -492,13 +490,7 @@ class TransportResult:
         )
         expected_suggestion: str | None = None
         if pin_enum_suggestion:
-            fixture_meta = json.loads(Path("tests/fixtures/adcp_schemas_pinned/enums/error-code.json").read_text())[
-                "enumMetadata"
-            ]
-            assert code in fixture_meta and fixture_meta[code].get("suggestion"), (
-                f"{code!r} has no suggestion in vendored error-code.json enumMetadata"
-            )
-            expected_suggestion = fixture_meta[code]["suggestion"]
+            expected_suggestion = pinned_schema.vendored_enum_suggestion(code)
         elif require_suggestion:
             suggestion = extract_wire_suggestion(envelope)
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"

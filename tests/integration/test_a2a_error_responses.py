@@ -713,11 +713,9 @@ class TestA2AErrorPropagation:
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         # B4: pin wire suggestion to vendored enumMetadata via assert_envelope_shape
         # (not the Python ClassVar — ClassVar swap / envelope-null must redden).
-        import json
-        from pathlib import Path
+        from tests.helpers import pinned_schema
 
-        meta = json.loads(Path("tests/fixtures/adcp_schemas_pinned/enums/error-code.json").read_text())["enumMetadata"]
-        expected_suggestion = meta["VALIDATION_ERROR"]["suggestion"]
+        expected_suggestion = pinned_schema.vendored_enum_suggestion("VALIDATION_ERROR")
         assert_envelope_shape(
             artifact_data,
             "VALIDATION_ERROR",

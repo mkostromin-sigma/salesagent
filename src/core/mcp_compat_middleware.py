@@ -10,7 +10,7 @@ envelopes (same seam as TypeAdapter failures). Runs after MCPAuthMiddleware.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
@@ -20,6 +20,9 @@ from pydantic import ValidationError
 from src.core.exceptions import normalize_to_adcp_error
 from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
 from src.core.tool_error_logging import _translate_to_tool_error, record_boundary_error
+
+if TYPE_CHECKING:
+    from src.core.exceptions import AdCPError
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,24 @@ class RequestCompatMiddleware(Middleware):
             if compat_result.translations_applied:
                 modified = True
 
+            # Durable task tools: reject unknown keys via the same L2 helper the
+            # tools use (A2A ≡ MCP). Do not strip — stripping would fork the wire.
+            if tool_name in ("get_task", "complete_task"):
+                from src.core.exceptions import AdCPValidationError
+                from src.core.tools.task_management import (
+                    COMPLETE_TASK_BUYER_PARAMS,
+                    GET_TASK_BUYER_PARAMS,
+                    assert_known_task_params,
+                )
+
+                allowed = GET_TASK_BUYER_PARAMS if tool_name == "get_task" else COMPLETE_TASK_BUYER_PARAMS
+                try:
+                    assert_known_task_params(normalized, allowed=allowed)
+                except AdCPValidationError as typed:
+                    await self._record_boundary(context, tool_name, typed)
+                    _translate_to_tool_error(typed)
+                    raise
+
             # Step 2: Strip unknown fields (schema-aware, production only)
             # In dev mode, unknown fields reach TypeAdapter and fail loudly —
             # this is how we detect that the seller agent doesn't support a
@@ -65,7 +86,7 @@ class RequestCompatMiddleware(Middleware):
             # rejecting callers using newer schema versions.
             from src.core.config import is_production
 
-            if is_production():
+            if is_production() and tool_name not in ("get_task", "complete_task"):
                 known_params = await self._get_known_params(context, tool_name)
                 if known_params is not None:
                     normalized, stripped = strip_unknown_params(normalized, known_params)
@@ -90,13 +111,24 @@ class RequestCompatMiddleware(Middleware):
         except Exception as exc:
             if RequestCompatMiddleware._is_missing_required_argument_error(exc):
                 from src.core.exceptions import VALIDATION_ERROR_SUGGESTION, AdCPValidationError
+                from src.core.tools.task_management import TASK_ID_REQUIRED_MESSAGE
 
-                missing_typed = AdCPValidationError(
-                    str(exc),
-                    suggestion=VALIDATION_ERROR_SUGGESTION,
-                )
+                # Uniform message with L2 require_task_id for durable task tools;
+                # other tools keep a generic missing-arg wording (no FastMCP text).
+                if tool_name in ("get_task", "complete_task"):
+                    missing_typed = AdCPValidationError(
+                        TASK_ID_REQUIRED_MESSAGE,
+                        field="task_id",
+                        suggestion=VALIDATION_ERROR_SUGGESTION,
+                    )
+                else:
+                    missing_typed = AdCPValidationError(
+                        "Missing required argument",
+                        suggestion=VALIDATION_ERROR_SUGGESTION,
+                    )
                 await self._record_boundary(context, tool_name, missing_typed)
                 _translate_to_tool_error(missing_typed)
+                raise
 
             if not self._is_typeadapter_validation_error(exc):
                 raise
@@ -135,7 +167,7 @@ class RequestCompatMiddleware(Middleware):
             await self._record_boundary(context, tool_name, typed)
             _translate_to_tool_error(exc)
 
-    async def _record_boundary(self, context: MiddlewareContext, tool_name: str, typed) -> None:
+    async def _record_boundary(self, context: MiddlewareContext, tool_name: str, typed: AdCPError) -> None:
         tenant_id = None
         principal_id = None
         if context.fastmcp_context is not None:

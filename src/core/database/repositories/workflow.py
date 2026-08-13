@@ -16,13 +16,16 @@ handles commit/rollback at the boundary.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Final
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
+
+# Sentinel for resolve-then-authorize miss branch — never a real principal_id.
+_MISSING_OWNER: Final[object] = object()
 
 
 class WorkflowRepository:
@@ -105,10 +108,9 @@ class WorkflowRepository:
 
         # Step 2 — authorize with equal-shape work on both hit and miss.
         # Sentinel is never a real principal_id, so miss always denies.
-        _MISSING_OWNER = object()
         if row is None:
             step: WorkflowStep | None = None
-            owner: Any = _MISSING_OWNER
+            owner: str | object = _MISSING_OWNER
         else:
             step, owner = row
 

@@ -42,15 +42,12 @@ def _assert_same_not_found(
     TASK_NOT_FOUND taxonomy, plus the generic (non resource-qualified) message
     and the pinned enum suggestion (not the Python ClassVar constant).
     """
-    import json
-    from pathlib import Path
+    from tests.helpers import pinned_schema
 
     assert sibling_exc.value.wire_error_code == missing_exc.value.wire_error_code == "REFERENCE_NOT_FOUND"
     assert sibling_exc.value.error_code == missing_exc.value.error_code == "TASK_NOT_FOUND"
     assert str(sibling_exc.value) == str(missing_exc.value) == "Reference not found"
-    pinned = json.loads(Path("tests/fixtures/adcp_schemas_pinned/enums/error-code.json").read_text())["enumMetadata"][
-        "REFERENCE_NOT_FOUND"
-    ]["suggestion"]
+    pinned = pinned_schema.vendored_enum_suggestion("REFERENCE_NOT_FOUND")
     assert sibling_exc.value.suggestion == missing_exc.value.suggestion == pinned
 
 
@@ -207,13 +204,7 @@ def test_get_task_a2a_and_mcp_success_path(integration_db):
     from tests.harness.task_management import GetTaskWireResponse, TaskEnv
 
     with TaskEnv(tenant_id="pscope_wire_ok", principal_id="wire_owner") as env:
-        tenant = TenantFactory(tenant_id="pscope_wire_ok")
-        PrincipalFactory(
-            tenant=tenant,
-            principal_id="wire_owner",
-            platform_mappings={"mock": {"id": "wire_owner_adv"}},
-        )
-        env._commit_factory_data()
+        env.setup_owner_principal(principal_id="wire_owner")
         step_id = env.seed_owner_task(principal_id="wire_owner", status="completed")
         a2a = env.call_a2a(tool="get_task", task_id=step_id)
         assert isinstance(a2a, GetTaskWireResponse)
@@ -232,19 +223,14 @@ def test_get_task_truthy_non_string_task_id_a2a_and_mcp(integration_db):
     Use ``call_via`` (not ``call_a2a``/``call_mcp``): those raise the
     reconstructed ``AdCPError``; the dispatcher captures ``wire_error_envelope``.
     """
+    from src.core.exceptions import SQL_LEAK_MARKERS
     from tests.harness.task_management import TaskEnv
     from tests.harness.transport import Transport
 
-    leak_markers = ("UPDATE", "SELECT", "[parameters:", "psycopg2", "workflow_steps")
+    leak_markers = ("UPDATE", "SELECT", *SQL_LEAK_MARKERS)
 
     with TaskEnv(tenant_id="pscope_nonstr", principal_id="wire_owner") as env:
-        tenant = TenantFactory(tenant_id="pscope_nonstr")
-        PrincipalFactory(
-            tenant=tenant,
-            principal_id="wire_owner",
-            platform_mappings={"mock": {"id": "wire_owner_adv"}},
-        )
-        env._commit_factory_data()
+        env.setup_owner_principal(principal_id="wire_owner")
 
         for bad_id in (123, True, ["x"]):
             a2a = env.call_via(Transport.A2A, tool="get_task", task_id=bad_id)
@@ -260,19 +246,14 @@ def test_get_task_truthy_non_string_task_id_a2a_and_mcp(integration_db):
 
 def test_complete_task_non_string_error_message_a2a_no_sql_leak(integration_db):
     """A1 sibling-sweep: non-string error_message must not put SQL on the A2A wire."""
+    from src.core.exceptions import SQL_LEAK_MARKERS
     from tests.harness.task_management import TaskEnv
     from tests.harness.transport import Transport
 
-    leak_markers = ("UPDATE", "SELECT", "[parameters:", "psycopg2", "can't adapt type")
+    leak_markers = ("UPDATE", "SELECT", *SQL_LEAK_MARKERS)
 
     with TaskEnv(tenant_id="pscope_errmsg", principal_id="wire_owner") as env:
-        tenant = TenantFactory(tenant_id="pscope_errmsg")
-        PrincipalFactory(
-            tenant=tenant,
-            principal_id="wire_owner",
-            platform_mappings={"mock": {"id": "wire_owner_adv"}},
-        )
-        env._commit_factory_data()
+        env.setup_owner_principal(principal_id="wire_owner")
         step_id = env.seed_owner_task(principal_id="wire_owner", status="requires_approval")
         result = env.call_via(
             Transport.A2A,
@@ -296,13 +277,44 @@ def test_get_task_reference_not_found_wire_suggestion_a2a_and_mcp(integration_db
     from tests.harness.transport import Transport
 
     with TaskEnv(tenant_id="pscope_rnfsugg", principal_id="wire_owner") as env:
-        tenant = TenantFactory(tenant_id="pscope_rnfsugg")
-        PrincipalFactory(
-            tenant=tenant,
-            principal_id="wire_owner",
-            platform_mappings={"mock": {"id": "wire_owner_adv"}},
-        )
-        env._commit_factory_data()
+        env.setup_owner_principal(principal_id="wire_owner")
         for transport in (Transport.A2A, Transport.MCP):
             result = env.call_via(transport, tool="get_task", task_id="missing-task-id-b4")
             result.assert_wire_error("REFERENCE_NOT_FOUND", pin_enum_suggestion=True)
+
+
+def test_get_task_omitted_task_id_a2a_and_mcp(integration_db):
+    """Omitted task_id → VALIDATION_ERROR with uniform L2 message on A2A + MCP."""
+    from src.core.tools.task_management import TASK_ID_REQUIRED_MESSAGE
+    from tests.harness.task_management import TaskEnv
+    from tests.harness.transport import Transport
+
+    with TaskEnv(tenant_id="pscope_omit", principal_id="wire_owner") as env:
+        env.setup_owner_principal(principal_id="wire_owner")
+        for transport in (Transport.A2A, Transport.MCP):
+            # Empty buyer args — MCP hits FastMCP missing-required seam; A2A hits L2.
+            result = env.call_via(transport, tool="get_task")
+            result.assert_wire_error("VALIDATION_ERROR")
+            envelope = result.wire_error_envelope or {}
+            # two-layer envelope: errors[0].message
+            errors = envelope.get("errors") or []
+            msg = errors[0].get("message", "") if errors else str(envelope)
+            assert TASK_ID_REQUIRED_MESSAGE in msg, (transport, msg, envelope)
+
+
+def test_complete_task_unknown_key_a2a_and_mcp(integration_db):
+    """Unknown buyer key (typo ``statas``) → VALIDATION_ERROR on A2A and MCP."""
+    from tests.harness.task_management import TaskEnv
+    from tests.harness.transport import Transport
+
+    with TaskEnv(tenant_id="pscope_unk", principal_id="wire_owner") as env:
+        env.setup_owner_principal(principal_id="wire_owner")
+        step_id = env.seed_owner_task(principal_id="wire_owner", status="requires_approval")
+        for transport in (Transport.A2A, Transport.MCP):
+            result = env.call_via(
+                transport,
+                tool="complete_task",
+                task_id=step_id,
+                statas="completed",  # typo — must not default status
+            )
+            result.assert_wire_error("VALIDATION_ERROR")

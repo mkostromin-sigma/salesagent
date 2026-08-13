@@ -16,21 +16,17 @@ between the constant and the spec — this oracle grounds it in the pinned enum.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from src.core import exceptions
 from src.core.exceptions import AdCPError, translate_error_code
+from tests.helpers import pinned_schema
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
-
-_PINNED_ENUM_PATH = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
 
 
 def _pinned_suggestion_by_code() -> dict[str, str]:
-    """Return ``{error_code: suggestion}`` from the pinned enumMetadata block."""
-    meta = json.loads(_PINNED_ENUM_PATH.read_text())["enumMetadata"]
+    """Return ``{error_code: suggestion}`` from the vendored enumMetadata block."""
+    meta = pinned_schema.load_vendored("error-code.json")["enumMetadata"]
     return {
         code: entry["suggestion"] for code, entry in meta.items() if isinstance(entry, dict) and entry.get("suggestion")
     }

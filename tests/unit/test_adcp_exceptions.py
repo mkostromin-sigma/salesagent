@@ -886,3 +886,39 @@ class TestRetryAfterSerializerParity:
         exc = AdCPRateLimitError("slow down", retry_after=7)
         envelope = build_two_layer_error_envelope(exc)
         assert envelope["adcp_error"]["retry_after"] == 7
+
+
+class TestSqlLeakScrubber:
+    """Grade normalize_to_adcp_error SQL/bind-param disclosure gate (KM Aug-12)."""
+
+    def test_normalize_scrubs_dbapi_error(self):
+        from sqlalchemy.exc import DBAPIError
+
+        from src.core.exceptions import SQL_LEAK_MARKERS, normalize_to_adcp_error
+
+        # DBAPIError(statement, params, orig) — statement text must not reach buyer.
+        orig = Exception("driver boom")
+        exc = DBAPIError("SELECT * FROM workflow_steps WHERE id=%(id)s", {"id": "x"}, orig)
+        typed = normalize_to_adcp_error(exc)
+        assert str(typed) == "An unexpected error occurred"
+        assert not any(m in str(typed) for m in SQL_LEAK_MARKERS)
+
+    def test_normalize_scrubs_plain_exception_with_marker(self):
+        from src.core.exceptions import SQL_LEAK_MARKERS, normalize_to_adcp_error
+
+        exc = Exception("can't adapt type 'dict' [parameters: {'x': 1}]")
+        typed = normalize_to_adcp_error(exc)
+        assert str(typed) == "An unexpected error occurred"
+        assert not any(m in str(typed) for m in SQL_LEAK_MARKERS)
+
+    def test_orm_validate_error_message_rejects_non_string(self):
+        from src.core.json_validators import JSONValidatorMixin
+
+        mixin = JSONValidatorMixin()
+        try:
+            mixin.validate_error_message("error_message", {"x": 1})
+            raised = False
+        except ValueError as exc:
+            raised = True
+            assert "must be a string" in str(exc)
+        assert raised

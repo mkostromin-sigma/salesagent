@@ -14,7 +14,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories import PrincipalFactory, TenantFactory
+from tests.factories import PrincipalFactory
 
 _OWNER = "owner_principal"
 _SIBLING = "sibling_principal"
@@ -32,11 +32,11 @@ def _dispatch_task_as(ctx: dict, principal_key: str, tool: str, **extra: Any) ->
 @given("an owner principal and a sibling principal in the same tenant")
 def given_owner_and_sibling_principals(ctx: dict) -> None:
     """Two principals in one fresh tenant (sibling-principal isolation precondition)."""
+
     env = ctx["env"]
     tenant_id = f"uc027_iso_{uuid4().hex[:8]}"
-    tenant = TenantFactory(tenant_id=tenant_id)
     env.switch_tenant(tenant_id)
-    PrincipalFactory(tenant=tenant, principal_id=_OWNER)
+    tenant = env.setup_owner_principal(principal_id=_OWNER, tenant_id=tenant_id)
     PrincipalFactory(tenant=tenant, principal_id=_SIBLING)
     env._commit_factory_data()
     ctx["tenant"] = tenant

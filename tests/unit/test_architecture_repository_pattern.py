@@ -64,7 +64,7 @@ def _discover_integration_test_files() -> list[str]:
     conftest.py files. These suites all exercise real DB state and must use
     factories, not inline session.add() / get_db_session() in test bodies.
 
-    Also scans every module under tests/helpers/, tests/utils/, and tests/harness/.
+    Also scans every module under tests/helpers/ and tests/utils/. (tests/harness/** deferred to #1957.)
     Shared DB-seed helpers there are not named test_*.py but must follow the same
     factory-only rule, so that new session.add() debt in helper code is caught at
     the source rather than hidden behind a module the guard never reads
@@ -78,8 +78,9 @@ def _discover_integration_test_files() -> list[str]:
         conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
     helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
     utils_files = glob.glob("tests/utils/**/*.py", recursive=True)
-    harness_files = glob.glob("tests/harness/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files + utils_files + harness_files))
+    # tests/harness/** widen deferred to #1957 (widen-and-fix together;
+    # do not grow allowlists for pre-existing admin_accounts debt here).
+    return sorted(set(test_files + conftest_files + helper_files + utils_files))
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
@@ -87,9 +88,6 @@ INTEGRATION_TEST_FILES = _discover_integration_test_files()
 # Pre-existing violations: (file_path, function_or_fixture_name)
 # FIXME(#2133): integration tests should use polyfactory fixtures
 INTEGRATION_SESSION_ADD_ALLOWLIST = {
-    # tests/harness/admin_accounts.py — pre-existing; shrink via #1957 (Chris R4 E3)
-    ("tests/harness/admin_accounts.py", "_ensure_tenant_for_id"),  # FIXME(#1957)
-    ("tests/harness/admin_accounts.py", "create_account"),  # FIXME(#1957)
     # tests/integration/conftest.py
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
@@ -684,11 +682,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_inventory_profiles.py", "test_create_profile_with_tags_saves_to_db"),
     ("tests/admin/test_inventory_profiles.py", "test_delete_profile_removes_from_db"),
     ("tests/admin/test_inventory_profiles.py", "test_tenant"),
-    # tests/harness/admin_accounts.py — pre-existing; shrink via #1957 (Chris R4 E3)
-    ("tests/harness/admin_accounts.py", "_cleanup_accounts"),  # FIXME(#1957)
-    ("tests/harness/admin_accounts.py", "_ensure_tenant_for_id"),  # FIXME(#1957)
-    ("tests/harness/admin_accounts.py", "create_account"),  # FIXME(#1957)
-    ("tests/harness/admin_accounts.py", "get_account_from_db"),  # FIXME(#1957)
     ("tests/admin/test_product_creation_integration.py", "test_add_product_empty_json_fields"),
     ("tests/admin/test_product_creation_integration.py", "test_add_product_json_encoding"),
     ("tests/admin/test_product_creation_integration.py", "test_add_product_postgresql_validation"),

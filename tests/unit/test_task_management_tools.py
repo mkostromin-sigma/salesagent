@@ -322,15 +322,15 @@ class TestCompleteTaskTool:
 
     @pytest.mark.parametrize("bad_id", [123, True, ["x"], {"id": "x"}])
     async def test_require_task_id_rejects_truthy_non_string(self, mock_uow, mock_workflow_repo, sample_tenant, bad_id):
-        """Type half of _require_task_id — not just falsy presence (KM Aug-05)."""
+        """Type half of require_task_id — present wrong type ≠ presence (KM Aug-12)."""
         from src.core.exceptions import AdCPValidationError
         from src.core.tools.task_management import complete_task, get_task
 
         identity = self._make_identity(sample_tenant)
         with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
-            with pytest.raises(AdCPValidationError, match="task_id is required") as get_exc:
+            with pytest.raises(AdCPValidationError, match="task_id must be a string") as get_exc:
                 await get_task(task_id=bad_id, identity=identity)
-            with pytest.raises(AdCPValidationError, match="task_id is required") as complete_exc:
+            with pytest.raises(AdCPValidationError, match="task_id must be a string") as complete_exc:
                 await complete_task(task_id=bad_id, identity=identity)
         assert get_exc.value.field == complete_exc.value.field == "task_id"
         mock_workflow_repo.get_by_step_id_or_raise.assert_not_called()

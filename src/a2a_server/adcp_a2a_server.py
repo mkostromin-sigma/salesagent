@@ -1947,52 +1947,33 @@ class AdCPRequestHandler(RequestHandler):
         a typed task_id that does not exist or is not accessible by the caller
         MUST emit REFERENCE_NOT_FOUND uniformly (sibling principal = unknown id).
 
-        Input contract (task_id presence *and* type) lives in ``get_task`` so
-        A2A and MCP emit the same wire error; this handler is a pure
-        forwarder and must not coerce the raw value (``or ""`` would turn a
-        supplied falsy scalar like ``0`` into a masquerading empty string).
-        Unknown buyer keys are rejected via L2 ``assert_known_task_params``.
+        Unknown-key rejection shares ``assert_known_task_params`` with MCP
+        middleware. Presence/type lives only in ``require_task_id`` inside
+        ``get_task`` — forward the raw value (do not coerce with ``or ""``).
         """
-        from src.core.tools.task_management import (
-            GET_TASK_BUYER_PARAMS,
-            _require_task_id,
-            assert_known_task_params,
-        )
+        from src.core.tools.task_management import GET_TASK_BUYER_PARAMS, assert_known_task_params
 
         with adcp_validation_boundary(context="get_task request"):
             assert_known_task_params(parameters, allowed=GET_TASK_BUYER_PARAMS)
-            # Validate at the shared L2 helper, then pass a typed ``str`` into
-            # ``get_task`` (MCP keeps ``task_id: str`` for the advertised schema;
-            # A2A may still receive a non-str JSON value here).
-            task_id = _require_task_id(parameters.get("task_id"))
-            return await core_get_task(task_id=task_id, identity=identity)
+            return await core_get_task(task_id=parameters.get("task_id"), identity=identity)
 
     async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit complete_task skill — principal-scoped durable completion.
 
-        Forward only declared L2 buyer kwargs (derived from
-        ``inspect.signature(complete_task)`` minus server-owned names). Never
-        splat the buyer namespace — unknown keys (e.g. typo ``statas``) must
-        raise ``VALIDATION_ERROR``, not silently default ``status``.
-        ``context`` is FastMCP transport-owned and is never buyer-forwarded.
+        Reject unknown buyer keys via shared ``assert_known_task_params``, then
+        forward only declared L2 buyer kwargs with raw ``task_id`` (presence/type
+        enforced once inside ``complete_task``).
         """
-        from src.core.tools.task_management import (
-            COMPLETE_TASK_BUYER_PARAMS,
-            _require_task_id,
-            assert_known_task_params,
-        )
+        from src.core.tools.task_management import COMPLETE_TASK_BUYER_PARAMS, assert_known_task_params
 
         with adcp_validation_boundary(context="complete_task request"):
             assert_known_task_params(parameters, allowed=COMPLETE_TASK_BUYER_PARAMS)
-            kwargs: dict[str, Any] = {
-                "task_id": _require_task_id(parameters.get("task_id")),
-                "identity": identity,
-            }
+            kwargs: dict[str, Any] = {"identity": identity}
             for key in COMPLETE_TASK_BUYER_PARAMS:
-                if key == "task_id":
-                    continue
                 if key in parameters:
                     kwargs[key] = parameters[key]
+            # Ensure task_id key exists even when omitted so require_task_id sees None.
+            kwargs.setdefault("task_id", parameters.get("task_id"))
             return await core_complete_task(**kwargs)
 
     # Signals skill handlers removed - should come from dedicated signals agents
