@@ -1169,7 +1169,7 @@ class AdCPRequestHandler(RequestHandler):
         yield result
 
     @staticmethod
-    def _task_not_found(task_id: str) -> TaskNotFoundError:
+    def _task_not_found_error(task_id: str) -> TaskNotFoundError:
         """Build the TaskNotFoundError raised for unknown or unauthorized task ids.
 
         Called via ``_get_owned_in_memory_task_or_raise`` for get/cancel when the
@@ -1226,7 +1226,7 @@ class AdCPRequestHandler(RequestHandler):
 
         Auth failures (``InvalidRequestError`` / ``A2AError``) propagate — they
         must not collapse to ``TaskNotFoundError``. Only ownership miss or
-        unknown id raises ``TaskNotFoundError`` via ``_task_not_found`` (identical
+        unknown id raises ``TaskNotFoundError`` via ``_task_not_found_error`` (identical
         shape, so this cannot be used as an existence oracle). #1702
         """
         identity = self._authenticate(context, operation=operation)
@@ -1267,7 +1267,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=identity.tenant_id,
                 principal_id=identity.principal_id,
             )
-            raise self._task_not_found(task_id)
+            raise self._task_not_found_error(task_id)
         return task
 
     async def on_get_task(
@@ -1280,7 +1280,7 @@ class AdCPRequestHandler(RequestHandler):
         Authenticates the poller and checks ownership before serving an
         in-memory hit — see ``_get_owned_in_memory_task_or_raise`` (#1702).
         Wire error code for unknown/unauthorized ids is built by
-        ``_task_not_found`` (#1670 for why the wire code is still -32603).
+        ``_task_not_found_error`` (#1670 for why the wire code is still -32603).
         """
         return self._get_owned_in_memory_task_or_raise(params.id, context, operation="get_task")
 
@@ -1295,7 +1295,7 @@ class AdCPRequestHandler(RequestHandler):
         in-memory task is the same not-found condition as an unknown id, not a
         silent no-op. See ``_get_owned_in_memory_task_or_raise`` (#1702).
         Wire error code for unknown/unauthorized ids is built by
-        ``_task_not_found`` (#1670 for why the wire code is still -32603).
+        ``_task_not_found_error`` (#1670 for why the wire code is still -32603).
         """
         task = self._get_owned_in_memory_task_or_raise(params.id, context, operation="cancel_task")
         # CopyFrom mutates the stored Task in place — self.tasks already holds

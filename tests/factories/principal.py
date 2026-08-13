@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from enum import Enum, auto
+from typing import Any, Literal
 
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
@@ -12,7 +13,14 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.core import TenantFactory
 
-_UNSET = object()
+
+class _Sentinel(Enum):
+    """Typed omitted-arg sentinel (distinct from explicit ``None``)."""
+
+    USE_DEFAULT = auto()
+
+
+_UNSET = _Sentinel.USE_DEFAULT
 
 
 class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -37,7 +45,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         dry_run: bool = False,
         auth_token: str | None = None,
         tenant: Any = _UNSET,
-        testing_context: Any = _UNSET,
+        testing_context: AdCPTestContext | None | Literal[_Sentinel.USE_DEFAULT] = _UNSET,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
         """Build a ResolvedIdentity without DB persistence.

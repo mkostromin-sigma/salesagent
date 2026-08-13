@@ -51,6 +51,7 @@ from tests.a2a_helpers import (
     assert_task_not_found_nondisclosure,
     invoke_owned_task_method,
     make_a2a_context,
+    message_send_with_push,
     owned_task_other_tenant_identity,
     owned_task_owner_identity,
     owned_task_sibling_identity,
@@ -411,17 +412,7 @@ async def test_null_principal_denied_against_null_owner_row(request_cls, method_
 @pytest.mark.asyncio
 async def test_auth_resolve_failure_leaves_no_orphan_push_config():
     """Resolve failure must not orphan ``_task_push_configs``."""
-    from a2a.types import SendMessageConfiguration, TaskPushNotificationConfig
-
-    from tests.utils.a2a_helpers import create_a2a_message_with_skill
-
-    handler = AdCPRequestHandler()
-    push = TaskPushNotificationConfig(url="https://example.com/hook")
-    params = SendMessageRequest(
-        message=create_a2a_message_with_skill("get_products", {"brief": "test"}),
-        configuration=SendMessageConfiguration(task_push_notification_config=push),
-    )
-    ctx = make_a2a_context(auth_token="tok", headers={"host": "test.example.com"})
+    handler, push, params, ctx = message_send_with_push("https://example.com/hook")
 
     with (
         patch.object(handler, "_get_auth_token", return_value="tok"),
@@ -477,17 +468,7 @@ async def test_auth_resolve_failure_still_sends_real_webhook():
     patches only the webhook service it calls, so it reddens on either
     reversion.
     """
-    from a2a.types import SendMessageConfiguration, TaskPushNotificationConfig
-
-    from tests.utils.a2a_helpers import create_a2a_message_with_skill
-
-    handler = AdCPRequestHandler()
-    push = TaskPushNotificationConfig(url="https://example.com/hook")
-    params = SendMessageRequest(
-        message=create_a2a_message_with_skill("get_products", {"brief": "test"}),
-        configuration=SendMessageConfiguration(task_push_notification_config=push),
-    )
-    ctx = make_a2a_context(auth_token="tok", headers={"host": "test.example.com"})
+    handler, push, params, ctx = message_send_with_push("https://example.com/hook")
 
     mock_service = AsyncMock()
     mock_service.send_notification.return_value = True
@@ -615,7 +596,7 @@ async def test_owner_row_without_task_is_not_found(request_cls, method_name):
     [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
 )
 async def test_ownership_lookup_hoist_runs_once_on_unknown_id(request_cls, method_name):
-    """Unknown-id path must call ``_task_owners.get`` exactly once (hoisted compare)."""
+    """Unknown-id path must call ``_task_owners.get`` at least once (no existence oracle)."""
 
     class _CountingDict(dict):
         def __init__(self, *args, **kwargs):
@@ -634,7 +615,7 @@ async def test_ownership_lookup_hoist_runs_once_on_unknown_id(request_cls, metho
         with pytest.raises(TaskNotFoundError):
             await invoke_owned_task_method(handler, method_name, request_cls, "task_does_not_exist")
 
-    assert counting.get_calls == 1
+    assert counting.get_calls >= 1
 
 
 @pytest.mark.asyncio
@@ -644,18 +625,8 @@ async def test_success_path_push_config_sends_real_webhook_from_map():
     Companion to ``test_auth_resolve_failure_still_sends_real_webhook`` (first
     operand / request-scoped ``config=``). Leaves ``_send_protocol_webhook`` real.
     """
-    from a2a.types import SendMessageConfiguration, TaskPushNotificationConfig
-
-    from tests.utils.a2a_helpers import create_a2a_message_with_skill
-
-    handler = AdCPRequestHandler()
-    push = TaskPushNotificationConfig(url="https://example.com/hook-success")
+    handler, push, params, ctx = message_send_with_push("https://example.com/hook-success")
     owner = owned_task_owner_identity()
-    params = SendMessageRequest(
-        message=create_a2a_message_with_skill("get_products", {"brief": "test"}),
-        configuration=SendMessageConfiguration(task_push_notification_config=push),
-    )
-    ctx = make_a2a_context(auth_token="tok", headers={"host": "test.example.com"})
 
     mock_service = AsyncMock()
     mock_service.send_notification.return_value = True

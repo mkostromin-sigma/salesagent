@@ -37,6 +37,15 @@ class JsonRpcError(TypedDict):
     data: object | None
 
 
+class JsonRpcEnvelope(TypedDict, total=False):
+    """Fixed JSON-RPC success/error envelope from ``post_a2a_task_method``."""
+
+    jsonrpc: str
+    id: int | str | None
+    result: dict[str, Any]
+    error: JsonRpcError
+
+
 # Shared ownership fixtures for unit + in-process wire altitudes (#1702 / #1720 / #1780).
 OWNED_TASK_TENANT = "tenant_a"
 OWNED_TASK_OWNER = "principal_owner"
@@ -72,7 +81,7 @@ def post_a2a_task_method(
     task_id: str,
     context_builder: ServerCallContextBuilder,
     headers: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
+) -> JsonRpcEnvelope:
     """One production JSON-RPC POST for ``tasks/get`` / ``tasks/cancel``.
 
     Shared boundary for the harness (``tests.harness._base.run_a2a_task_method``)
@@ -100,7 +109,8 @@ def post_a2a_task_method(
             headers=dict(headers) if headers else {},
         )
         assert response.status_code == 200, f"JSON-RPC {method} returned HTTP {response.status_code}: {response.text}"
-        return response.json()
+        body: JsonRpcEnvelope = response.json()
+        return body
 
 
 def make_a2a_context(
@@ -195,29 +205,60 @@ def auth_headers_mapping(headers: Mapping[str, str]) -> MappingProxyType[str, st
     return MappingProxyType({k.lower(): v for k, v in headers.items()})
 
 
-def owned_task_owner_identity() -> ResolvedIdentity:
-    """Owner identity for OWNED_TASK_* fixtures (unit + wire)."""
+def message_send_with_push(
+    url: str,
+) -> tuple[AdCPRequestHandler, Any, Any, ServerCallContext]:
+    """Shared create-with-push-config fixture for ownership unit tests.
+
+    Returns ``(handler, push, params, ctx)`` so each test keeps only its
+    distinct patches/asserts. ``push`` / ``params`` stay ``Any`` at this
+    altitude to avoid pulling SendMessage* into the module import graph for
+    non-push callers; the concrete types are ``TaskPushNotificationConfig``
+    and ``SendMessageRequest``.
+    """
+    from a2a.types import SendMessageConfiguration, SendMessageRequest, TaskPushNotificationConfig
+
+    from tests.utils.a2a_helpers import create_a2a_message_with_skill
+
+    handler = AdCPRequestHandler()
+    push = TaskPushNotificationConfig(url=url)
+    params = SendMessageRequest(
+        message=create_a2a_message_with_skill("get_products", {"brief": "test"}),
+        configuration=SendMessageConfiguration(task_push_notification_config=push),
+    )
+    ctx = make_a2a_context(auth_token="tok", headers={"host": "test.example.com"})
+    return handler, push, params, ctx
+
+
+# One role→(tenant_id, principal_id) table for unit + harness altitudes (#1780).
+ROLE_TARGETS: dict[str, tuple[str, str]] = {
+    "owner": (OWNED_TASK_TENANT, OWNED_TASK_OWNER),
+    "sibling": (OWNED_TASK_TENANT, OWNED_TASK_SIBLING),
+    "other_tenant": (OWNED_TASK_OTHER_TENANT, OWNED_TASK_OTHER_PRINCIPAL),
+}
+
+
+def owned_task_identity(role: str) -> ResolvedIdentity:
+    """Build ``ResolvedIdentity`` for an ownership role (unit + wire altitudes)."""
     from tests.factories.principal import PrincipalFactory
 
-    return PrincipalFactory.make_identity(principal_id=OWNED_TASK_OWNER, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
+    tenant_id, principal_id = ROLE_TARGETS[role]
+    return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, protocol="a2a")
+
+
+def owned_task_owner_identity() -> ResolvedIdentity:
+    """Owner identity for OWNED_TASK_* fixtures (unit + wire)."""
+    return owned_task_identity("owner")
 
 
 def owned_task_sibling_identity() -> ResolvedIdentity:
     """Same-tenant sibling identity for OWNED_TASK_* fixtures (unit + wire)."""
-    from tests.factories.principal import PrincipalFactory
-
-    return PrincipalFactory.make_identity(principal_id=OWNED_TASK_SIBLING, tenant_id=OWNED_TASK_TENANT, protocol="a2a")
+    return owned_task_identity("sibling")
 
 
 def owned_task_other_tenant_identity() -> ResolvedIdentity:
     """Cross-tenant identity reusing OWNED_TASK_OWNER principal_id."""
-    from tests.factories.principal import PrincipalFactory
-
-    return PrincipalFactory.make_identity(
-        principal_id=OWNED_TASK_OTHER_PRINCIPAL,
-        tenant_id=OWNED_TASK_OTHER_TENANT,
-        protocol="a2a",
-    )
+    return owned_task_identity("other_tenant")
 
 
 def assert_no_identity_leak(message: str, data: object, needles: Iterable[str]) -> None:

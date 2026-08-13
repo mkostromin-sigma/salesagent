@@ -31,6 +31,7 @@ from tests.a2a_helpers import (
     OWNED_TASK_OWNER,
     OWNED_TASK_SIBLING,
     OWNED_TASK_TENANT,
+    ROLE_TARGETS,
 )
 from tests.harness._base import IntegrationEnv
 
@@ -83,13 +84,8 @@ class A2ATaskOwnershipEnv(IntegrationEnv):
         """
         from tests.harness.transport import Transport
 
-        role_targets = {
-            OWNER_ROLE: (self.OWNER_TENANT_ID, self.OWNER_PRINCIPAL_ID),
-            SIBLING_ROLE: (self.OWNER_TENANT_ID, self.SIBLING_PRINCIPAL_ID),
-            OTHER_TENANT_ROLE: (self.OTHER_TENANT_ID, self.OTHER_PRINCIPAL_ID),
-        }
         if role not in self._role_identities:
-            tenant_id, principal_id = role_targets[role]
+            tenant_id, principal_id = ROLE_TARGETS[role]
             self.switch_tenant(tenant_id)
             self.switch_principal(principal_id)
             try:

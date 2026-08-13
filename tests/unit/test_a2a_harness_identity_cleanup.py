@@ -57,15 +57,31 @@ def test_token_mode_prepare_clears_unit_mode_identity_lambdas() -> None:
         assert {k for k in handler.__dict__ if callable(getattr(type(handler), k, None))} == set()
 
 
-def test_a2a_task_slots_are_distinct_typed_attributes() -> None:
-    """Protobuf and wire Task slots must stay separate attributes (wrong-class write cannot hide)."""
+def test_a2a_wire_task_slot_populated_without_proto_slot() -> None:
+    """Served wire Task lands in ``last_a2a_wire_task``; protobuf slot stays empty.
+
+    Replaces the tautological "two attributes are distinct storage" asserts with a
+    real dispatch read-back so a crossed wire/proto assignment reddens.
+    """
+    from a2a.types import Task, TaskState, TaskStatus
+
+    from src.a2a_server.adcp_a2a_server import _TaskOwner
+    from tests.a2a_helpers import OWNED_TASK_ID, owned_task_owner_identity
+
     with _A2APrepareEnv(use_real_db=False) as env:
-        assert hasattr(env, "_last_a2a_task")
-        assert hasattr(env, "_last_a2a_wire_task")
-        assert env._last_a2a_task is None
-        assert env._last_a2a_wire_task is None
-        # Distinct storage: writing one must not populate the other.
-        sentinel = object()
-        env._last_a2a_wire_task = sentinel  # type: ignore[assignment]
-        assert env._last_a2a_task is None
-        assert env.last_a2a_wire_task is sentinel
+        handler = env.a2a_handler
+        owner = owned_task_owner_identity()
+        handler.tasks[OWNED_TASK_ID] = Task(
+            id=OWNED_TASK_ID,
+            context_id="ctx",
+            status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+        )
+        handler._task_owners[OWNED_TASK_ID] = _TaskOwner(
+            tenant_id=owner.tenant_id or "",
+            principal_id=owner.principal_id or "",
+        )
+        served = env.run_a2a_task_method("tasks/get", OWNED_TASK_ID, identity=owner)
+        assert served is not None
+        assert env.last_a2a_wire_task is not None
+        assert env.last_a2a_wire_task.id == OWNED_TASK_ID
+        assert env.last_a2a_task is None

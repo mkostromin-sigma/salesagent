@@ -538,7 +538,7 @@ class BaseTestEnv:
     def _resolve_dispatch_identity(
         self,
         transport: Transport,
-        identity: ResolvedIdentity | None | object = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | Literal[_Sentinel.USE_DEFAULT] = _NO_OVERRIDE,
     ) -> ResolvedIdentity | None:
         """Override-or-default identity for a dispatcher.
 
@@ -547,7 +547,6 @@ class BaseTestEnv:
         """
         if identity is _NO_OVERRIDE:
             return self.identity_for(transport)
-        assert identity is None or isinstance(identity, ResolvedIdentity)
         return identity
 
     def _resolve_auth_token(self) -> str | None:
@@ -976,7 +975,7 @@ class BaseTestEnv:
         method: str,
         task_id: str,
         *,
-        identity: ResolvedIdentity | None | object = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | Literal[_Sentinel.USE_DEFAULT] = _NO_OVERRIDE,
     ) -> WireTask | None:
         """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
 
@@ -1036,7 +1035,7 @@ class BaseTestEnv:
             context_builder=_PreparedContextBuilder(),
         )
         if "error" in body:
-            self._last_a2a_task_error = body["error"]
+            self._last_a2a_task_error = body.get("error")
             return None
 
         # Success: grade the served Task from the live wire result (v0.3 compat
@@ -1051,7 +1050,7 @@ class BaseTestEnv:
         self,
         task_id: str,
         *,
-        identity: ResolvedIdentity | None | object = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | Literal[_Sentinel.USE_DEFAULT] = _NO_OVERRIDE,
         state: TaskState | None = None,
         record_owner: bool = True,
     ) -> Task:
