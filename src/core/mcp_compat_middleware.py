@@ -69,7 +69,9 @@ class RequestCompatMiddleware(Middleware):
         if not has_arguments:
             return context
         modified = False
-        compat_result = normalize_request_params(tool_name, normalized)
+        # Pass a copy into the normalizer: it may return the same dict object it
+        # was given. Clearing ``normalized`` in that case would wipe the result.
+        compat_result = normalize_request_params(tool_name, dict(normalized))
         normalized.clear()
         normalized.update(compat_result.params)
         if compat_result.translations_applied:
@@ -82,7 +84,7 @@ class RequestCompatMiddleware(Middleware):
         if is_production() and tool_name not in ("get_task", "complete_task"):
             known_params = await self._get_known_params(context, tool_name)
             if known_params is not None:
-                stripped_params, stripped = strip_unknown_params(normalized, known_params)
+                stripped_params, stripped = strip_unknown_params(dict(normalized), known_params)
                 normalized.clear()
                 normalized.update(stripped_params)
                 if stripped:
@@ -95,7 +97,7 @@ class RequestCompatMiddleware(Middleware):
 
         if modified:
             return context.copy(
-                message=CallToolRequestParams(name=tool_name, arguments=normalized),
+                message=CallToolRequestParams(name=tool_name, arguments=dict(normalized)),
             )
         return context
 
