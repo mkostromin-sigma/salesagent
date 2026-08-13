@@ -990,7 +990,7 @@ Source: UC-002-ext-h.md
 **When** the system validates format IDs
 **Then** it returns error with a generic message (no registered-agent inventory leak) and `error.field` naming the `packages[i].format_ids[j]` path
 **And** error code is `AUTH_REQUIRED` (authorization — agent not registered for the tenant)
-**Note:** Helper `_validate_and_convert_format_ids` is currently unwired from `_create_media_buy_impl` (T-UC-002-ext-h-agent); covered as backlog until wired.
+**Note:** Helper `_validate_and_convert_format_ids` is currently unwired from `_create_media_buy_impl` (T-UC-002-ext-h-agent; #1962); covered as backlog until wired.
 **Priority:** P1
 
 #### Scenario: Format Not Found on Registered Agent
@@ -1000,7 +1000,7 @@ Source: UC-002-ext-h.md
 **When** the system validates format IDs
 **Then** it returns wire error `REFERENCE_NOT_FOUND` with generic message `"Reference not found"` (uniform response — no `format_id` / `agent_url` in message or details)
 **And** `error.field` names the `packages[i].format_ids[j]` path
-**Note:** Helper `_validate_and_convert_format_ids` is currently unwired from `_create_media_buy_impl` (T-UC-002-ext-h-agent); covered as backlog until wired.
+**Note:** Helper `_validate_and_convert_format_ids` is currently unwired from `_create_media_buy_impl` (T-UC-002-ext-h-agent; #1962); covered as backlog until wired.
 **Priority:** P1
 
 #### Scenario: FormatId Object Missing Required Fields

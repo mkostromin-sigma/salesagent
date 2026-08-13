@@ -8,6 +8,8 @@ Validates that:
 
 """
 
+import json
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -444,6 +446,14 @@ def exc_handler_test_app():
     def raise_format_not_found():
         raise AdCPFormatNotFoundError(field="format_ids")
 
+    @_app.get("/test-exc/format-not-found-override")
+    def raise_format_not_found_override():
+        # Positional override must NOT reach the wire (uniform-response seam).
+        raise AdCPFormatNotFoundError(
+            "Format not found. format_id=secret_xyz, tenant=acme",
+            field="format_ids",
+        )
+
     @_app.get("/test-exc/task-not-found")
     def raise_task_not_found():
         raise AdCPTaskNotFoundError("Task nonexistent not found")
@@ -560,6 +570,22 @@ class TestFastAPIExceptionHandlers:
         assert body["adcp_error"].get("field") == "format_ids"
         assert body["errors"][0].get("details") is None
         assert body["adcp_error"].get("details") is None
+
+    def test_format_not_found_positional_override_stripped_on_wire(self, exc_handler_test_app):
+        """Production handler: leaking positional must not appear under REFERENCE_NOT_FOUND.
+
+        Grades build_two_layer_error_envelope's uniform-response seam through the
+        real adcp_error_handler (not a test-authored copy).
+        """
+        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
+        response = client.get("/test-exc/format-not-found-override")
+        assert response.status_code == 404
+        body = response.json()
+        assert_envelope_shape(body, "REFERENCE_NOT_FOUND", recovery="correctable", message_substr="Reference not found")
+        assert body["errors"][0]["message"] == "Reference not found"
+        assert body["adcp_error"]["message"] == "Reference not found"
+        assert "secret_xyz" not in body["errors"][0]["message"]
+        assert "acme" not in json.dumps(body)
 
     def test_task_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPTaskNotFoundError → 404, wire INVALID_REQUEST, correctable.

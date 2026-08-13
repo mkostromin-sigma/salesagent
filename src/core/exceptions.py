@@ -180,7 +180,7 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "FORMAT_NOT_FOUND": "REFERENCE_NOT_FOUND",
     # TASK_NOT_FOUND: still demoted to INVALID_REQUEST on tip. Mandated wire target
     # is REFERENCE_NOT_FOUND (same MUST — do not mint a custom TASK_NOT_FOUND wire
-    # code). Remap + genericize workflow.py raise message together in a follow-up
+    # code). Remap + genericize workflow.py raise message together in #1963
     # (code-only remap would leave a resource-qualified buyer message).
     "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
@@ -1280,10 +1280,21 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     so they always land in ``WIRE_STANDARD_CODES`` (the SDK's
     ``STANDARD_ERROR_CODES`` plus the pinned-spec supplement, e.g.
     ``CREATIVE_NOT_FOUND``).
+
+    Uniform-response wire codes (``REFERENCE_NOT_FOUND``): the buyer-facing
+    ``message`` is taken from ``WIRE_STANDARD_CODES``, not ``exc.message``.
+    Raise-site positionals must not override the generic message on the wire
+    (AdCP L3 inaccessible-references rule; review A1 / KM finding 2).
     """
+    wire_code = exc.wire_error_code
+    wire_entry = WIRE_STANDARD_CODES.get(wire_code)
+    if wire_code == "REFERENCE_NOT_FOUND" and wire_entry and wire_entry.get("message"):
+        buyer_message = wire_entry["message"]
+    else:
+        buyer_message = exc.message
     payload = adcp_error(
-        exc.wire_error_code,
-        exc.message,
+        wire_code,
+        buyer_message,
         recovery=exc.recovery,
         field=exc.field,
         suggestion=exc.suggestion,

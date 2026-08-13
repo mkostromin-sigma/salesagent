@@ -1756,9 +1756,9 @@ async def _validate_and_convert_format_ids(
         AdCPAdapterError: If the agent lookup itself fails.
 
     Note:
-        Currently unwired from ``_create_media_buy_impl`` (T-UC-002-ext-h-agent).
-        Callers are tests that characterize this helper; do not treat them as
-        create_media_buy buyer-wire coverage.
+        Currently unwired from ``_create_media_buy_impl`` (T-UC-002-ext-h-agent;
+        tracked in #1962). Callers are tests that characterize this helper; do
+        not treat them as create_media_buy buyer-wire coverage.
     """
     from src.core.creative_agent_registry import CreativeAgentRegistry
 
