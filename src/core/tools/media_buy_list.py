@@ -197,12 +197,11 @@ def _get_media_buys_impl(
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
     # if no tenant resolved (the principal advisories above take precedence).
     tenant = require_tenant(identity, context=req.context)
-    # Honor X-Mock-Time for reference date + simulate=True so list status
-    # agrees with delivery under the same mock clock (jump_to_event remains
-    # delivery-only).
-    from src.core.testing_hooks import reference_today
+    # Shared mock/wall clock with delivery / apply_testing_hooks (resolve_now).
+    # jump_to_event stays buy-scoped in delivery's _simulation_clock.
+    from src.core.testing_hooks import resolve_now
 
-    today = reference_today(testing_ctx)
+    today = resolve_now(testing_ctx).date()
     simulate = testing_ctx is not None and testing_ctx.mock_time is not None
     tenant_id: str = tenant["tenant_id"]
 

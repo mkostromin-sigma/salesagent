@@ -104,14 +104,11 @@ class AdCPTestContext(BaseModel):
     def reference_today(self) -> date:
         """UTC calendar date used for flight-window refinement under testing hooks.
 
-        When ``mock_time`` is set (``X-Mock-Time``), return that date; otherwise
-        wall-clock UTC today. Shared by ``get_media_buys`` (and callers that need
-        the same mock/wall date). Delivery still uses ``_simulation_clock`` for
-        the full datetime + ``simulate`` flag (including ``jump_to_event``).
+        Delegates to module-level :func:`resolve_now` so list, delivery, and
+        ``apply_testing_hooks`` share one mock/wall clock. Delivery still uses
+        ``_simulation_clock`` for buy-scoped ``jump_to_event``.
         """
-        if self.mock_time is not None:
-            return self.mock_time.date()
-        return datetime.now(UTC).date()
+        return resolve_now(self).date()
 
     @classmethod
     def from_headers(cls, headers: dict[str, str]) -> "AdCPTestContext | None":
@@ -229,15 +226,25 @@ TestContext = AdCPTestContext  # Intermediate name (was briefly used)
 TestingHookContext = AdCPTestContext  # Another intermediate name
 
 
+def resolve_now(testing_ctx: AdCPTestContext | None) -> datetime:
+    """Effective ``datetime`` under testing hooks: ``mock_time`` or wall-clock UTC.
+
+    Single source for the non-buy-scoped clock. ``jump_to_event`` stays
+    buy-scoped in delivery's ``_simulation_clock`` (needs flight windows).
+    Callers that only need a calendar date use :func:`reference_today`.
+    """
+    if testing_ctx is not None and testing_ctx.mock_time is not None:
+        return testing_ctx.mock_time
+    return datetime.now(UTC)
+
+
 def reference_today(testing_ctx: AdCPTestContext | None) -> date:
     """Mock/wall UTC date for list-style status refinement.
 
-    Mirrors ``AdCPTestContext.reference_today`` when a context is present;
-    wall-clock UTC today when ``testing_ctx`` is None or has no ``mock_time``.
+    ``resolve_now(testing_ctx).date()`` — same clock as delivery's mock_time
+    branch and ``apply_testing_hooks`` progress math.
     """
-    if testing_ctx is not None and testing_ctx.mock_time is not None:
-        return testing_ctx.mock_time.date()
-    return datetime.now(UTC).date()
+    return resolve_now(testing_ctx).date()
 
 
 class NextEventCalculator:
@@ -665,7 +672,7 @@ def apply_testing_hooks(
         end_date = campaign_info.get("end_date")
         start_date = _ensure_aware(start_date) if start_date else start_date
         end_date = _ensure_aware(end_date) if end_date else end_date
-        current_time = testing_ctx.mock_time or datetime.now(UTC)
+        current_time = resolve_now(testing_ctx)
 
         if start_date and end_date:
             progress = TimeSimulator.calculate_campaign_progress(start_date, end_date, current_time)

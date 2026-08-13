@@ -173,9 +173,6 @@ def given_today_is(ctx: dict, today_str: str) -> None:
 
     env = ctx["env"]
     env.set_mock_time(fake_now)
-    # Eagerly build default identity so in-process calls see mock_time
-    # before the next identity_for() without private cache surgery.
-    _ = env.identity
 
 
 # Pre-flight window (far future) for persisted-status seeds that carry no
@@ -1310,10 +1307,7 @@ def _get_media_buys(ctx: dict) -> list:
     resp = payload_or_none(ctx)
     if resp is None and "error" in ctx:
         raise AssertionError(f"Expected a response but got error: {ctx['error']}")
-    assert resp is not None, "Expected a response"
-    buys = getattr(resp, "media_buys", None)
-    if buys is None and hasattr(resp, "model_dump"):
-        buys = resp.model_dump().get("media_buys", [])
+    buys = wire_field(ctx, "media_buys")
     return buys or []
 
 

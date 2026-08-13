@@ -220,6 +220,31 @@ class TestApplyTestingHookHeaders:
         assert headers["x-mock-time"] == "2026-03-14T12:00:00Z"
 
 
+class TestResolveNowSharedClock:
+    """resolve_now is the single mock/wall clock for list + hooks + delivery mock branch."""
+
+    def test_resolve_now_prefers_mock_time(self):
+        from src.core.testing_hooks import resolve_now
+
+        mock_time = datetime(2026, 3, 15, 12, 0, 0, tzinfo=UTC)
+        assert resolve_now(AdCPTestContext(mock_time=mock_time)) == mock_time
+
+    def test_resolve_now_wall_clock_when_no_mock(self):
+        from src.core.testing_hooks import resolve_now
+
+        before = datetime.now(UTC)
+        got = resolve_now(AdCPTestContext(dry_run=True))
+        after = datetime.now(UTC)
+        assert before <= got <= after
+
+    def test_reference_today_delegates_to_resolve_now(self):
+        from src.core.testing_hooks import reference_today, resolve_now
+
+        mock_time = datetime(2026, 3, 15, 12, 0, 0, tzinfo=UTC)
+        tc = AdCPTestContext(mock_time=mock_time)
+        assert reference_today(tc) == resolve_now(tc).date() == date(2026, 3, 15)
+
+
 class TestResolveIdentityFromContextUsesHeaders:
     """MCP Client path: testing_context from resolved headers, not a re-fetch."""
 
@@ -230,6 +255,7 @@ class TestResolveIdentityFromContextUsesHeaders:
             "x-adcp-auth": "tok",
             "x-mock-time": "2026-03-15T12:00:00Z",
         }
+        expected_tc = AdCPTestContext.from_headers(headers)
         mock_identity = PrincipalFactory.make_identity(protocol="mcp")
         with (
             patch("src.core.transport_helpers.get_http_headers", return_value=headers),
@@ -238,9 +264,14 @@ class TestResolveIdentityFromContextUsesHeaders:
         ):
             resolve_identity_from_context(MagicMock(), require_valid_token=False, protocol="mcp")
 
-        testing_ctx = mock_resolve.call_args.kwargs.get("testing_context")
-        assert testing_ctx is not None
-        assert testing_ctx.mock_time == datetime(2026, 3, 15, 12, 0, 0, tzinfo=UTC)
+        mock_resolve.assert_called_once_with(
+            headers=headers,
+            require_valid_token=False,
+            protocol="mcp",
+            testing_context=expected_tc,
+        )
+        assert expected_tc is not None
+        assert expected_tc.mock_time == datetime(2026, 3, 15, 12, 0, 0, tzinfo=UTC)
 
 
 class TestHarnessRealTokenAppliesTestingHookHeaders:

@@ -126,8 +126,11 @@ def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt:
     ``default_dt`` is the real reference datetime used when no simulation is
     active.
     """
+    from src.core.testing_hooks import resolve_now
+
     if testing_ctx.mock_time:
-        return testing_ctx.mock_time, True
+        # Same mock clock as list / apply_testing_hooks (resolve_now).
+        return resolve_now(testing_ctx), True
     if testing_ctx.jump_to_event:
         simulated = TimeSimulator.jump_to_event_time(
             testing_ctx.jump_to_event,
