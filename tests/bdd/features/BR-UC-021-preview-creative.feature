@@ -373,7 +373,7 @@ Feature: BR-UC-021 Preview Creative
     # POST-F3: Item 1 succeeds despite item 2 agent failure
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/preview-creative-request.json
 
-  @T-UC-021-ext-j-timeout @extension @ext-j @error @timeout @br-rule-168
+  @T-UC-021-ext-j-timeout @extension @ext-j @error @br-rule-168
   Scenario: Creative agent timeout -- SERVICE_UNAVAILABLE after 30s
     Given a creative manifest with format_id pointing to a creative agent that responds slowly
     And the creative agent does not respond within 30 seconds
