@@ -1308,7 +1308,7 @@ def _get_media_buys(ctx: dict) -> list:
     if resp is None and "error" in ctx:
         raise AssertionError(f"Expected a response but got error: {ctx['error']}")
     buys = wire_field(ctx, "media_buys")
-    return buys or []
+    return wire_objects(buys or [])
 
 
 @then(parsers.parse('the response should include media buy "{mb_id}" with status "{status}"'))
