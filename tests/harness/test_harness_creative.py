@@ -171,6 +171,18 @@ class TestCreativeSyncEnvContract:
             assert env.identity.tenant["gemini_api_key"] is None
             assert env.mock["config"].return_value.gemini_api_key == "global-only-key"
 
+    def test_set_gemini_keys_applies_to_later_transport_identities(self):
+        """call_via builds per-protocol identities after setup — key must survive."""
+        from tests.harness.creative_sync import CreativeSyncEnv
+        from tests.harness.transport import Transport
+
+        with _unit_mode(CreativeSyncEnv)() as env:
+            env.set_gemini_keys(tenant="shared-key", global_key=None)
+            a2a = env.identity_for(Transport.A2A)
+            rest = env.identity_for(Transport.REST)
+            assert a2a.tenant["gemini_api_key"] == "shared-key"
+            assert rest.tenant["gemini_api_key"] == "shared-key"
+
     def test_call_a2a_stashes_wire_response(self, monkeypatch):
         """_raw() A2A path must stash model_dump wire for nested-advisory grading."""
         from unittest.mock import MagicMock

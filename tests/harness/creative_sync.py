@@ -188,14 +188,33 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         """Set tenant and process-global GEMINI keys independently.
 
         Production creative-sync advisories read only
-        ``tenant["gemini_api_key"]`` (account-scoped). The config mock remains
-        writable so unrelated surfaces and regression arms can still set a
-        process-global key that must *not* rescue a keyless tenant.
+        ``tenant["gemini_api_key"]`` (account-scoped). ``call_via`` builds a
+        per-protocol identity via ``identity_for`` *after* setup, and MCP/REST
+        with a real auth token re-load the tenant from the DB — so this setter
+        MUST (1) stash the key in ``_tenant_overrides`` and clear the identity
+        cache, (2) update any already-cached tenant dicts, and (3) persist the
+        DB column when a session is bound. The config mock remains writable so
+        regression arms can still set a process-global key that must *not*
+        rescue a keyless tenant.
         """
         self.mock["config"].return_value.gemini_api_key = global_key
-        tenant_dict = getattr(self.identity, "tenant", None)
-        if isinstance(tenant_dict, dict):
-            tenant_dict["gemini_api_key"] = tenant
+        # Future identity_for builds (all protocols) pick this up via make_tenant.
+        self._tenant_overrides["gemini_api_key"] = tenant
+        for ident in self._identity_cache.values():
+            tenant_dict = getattr(ident, "tenant", None)
+            if isinstance(tenant_dict, dict):
+                tenant_dict["gemini_api_key"] = tenant
+        # Drop cached identities so the next call_via rebuilds with overrides.
+        self._identity_cache.clear()
+        if self.use_real_db and self._session is not None:
+            from sqlalchemy import select
+
+            from src.core.database.models import Tenant
+
+            row = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+            if row is not None:
+                row.gemini_api_key = tenant
+                self._commit_factory_data()
 
     @realize_e2e(_clear_gemini_api_key_e2e)
     def clear_gemini_api_key(self) -> None:
