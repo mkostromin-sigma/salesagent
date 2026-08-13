@@ -21,6 +21,7 @@ from src.core.database.repositories.creative import (
     CreativeRepository,
 )
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.uow import MediaBuyUoW
 from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
 from src.core.utils import utc_flight_end, utc_flight_start
 
@@ -196,6 +197,26 @@ def mark_media_buy_adapter_failed(
             session.commit()
 
 
+def _execute_media_buy_adapter(
+    media_buy_id: str,
+    tenant_id: str,
+    *,
+    failure_status: str,
+) -> tuple[bool, str | None]:
+    """Execute adapter creation and single-home its persisted failure outcome."""
+    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+    if not success:
+        mark_media_buy_adapter_failed(
+            media_buy_id,
+            tenant_id,
+            error_msg=error_msg,
+            status=failure_status,
+        )
+    return success, error_msg
+
+
 def finalize_media_buy_approval(
     session: Session,
     tenant_id: str,
@@ -229,12 +250,9 @@ def finalize_media_buy_approval(
     webhook_media_buy_status = resolve_canonical_status(media_buy, datetime.now(UTC).date())
     session.commit()
 
-    from src.core.tools.media_buy_create import execute_approved_media_buy
-
     logger.info("[APPROVAL] Executing adapter creation for approved media buy %s", media_buy_id)
-    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
+    success, error_msg = _execute_media_buy_adapter(media_buy_id, tenant_id, failure_status="failed")
     if not success:
-        mark_media_buy_adapter_failed(media_buy_id, tenant_id, error_msg=error_msg)
         return FinalizeOutcome(
             kind="adapter_failed",
             error_msg=error_msg,
@@ -246,6 +264,37 @@ def finalize_media_buy_approval(
         kind="finalized",
         webhook_media_buy_status=webhook_media_buy_status,
     )
+
+
+def finalize_media_buy_after_creative_approval(
+    media_buy_id: str,
+    tenant_id: str,
+    *,
+    approved_by: str,
+) -> FinalizeOutcome:
+    """Own the creatives unblock sequence: execute first, then stamp on success.
+
+    Unlike approve routes, this batch path has no optimistic status to roll
+    back. Adapter failure therefore remains recoverable at
+    ``pending_creatives`` so a later creative approval can retry it.
+    """
+    logger.info("[CREATIVE APPROVAL] Executing adapter creation for unblocked media buy %s", media_buy_id)
+    success, error_msg = _execute_media_buy_adapter(
+        media_buy_id,
+        tenant_id,
+        failure_status="pending_creatives",
+    )
+    if not success:
+        return FinalizeOutcome(kind="adapter_failed", error_msg=error_msg)
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        media_buy = uow.media_buys.get_by_id(media_buy_id)
+        if media_buy:
+            apply_creative_finalize_ready(media_buy, approved_by=approved_by)
+
+    logger.info("[CREATIVE APPROVAL] Media buy %s successfully created in adapter", media_buy_id)
+    return FinalizeOutcome(kind="finalized")
 
 
 def _coerce_flight_boundary(

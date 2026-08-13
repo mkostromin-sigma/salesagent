@@ -44,7 +44,8 @@ from flask import Blueprint, jsonify, redirect, render_template, request, url_fo
 from src.admin.utils import echo_context, require_tenant_access, session_operator_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
-from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
+from src.core.tools.media_buy_create import push_creative_to_existing_buy
+from src.services.media_buy_creative_readiness import finalize_media_buy_after_creative_approval
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
@@ -582,44 +583,11 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         # Execute adapter creation for unblocked media buys
         for action in media_buy_actions:
-            logger.info(
-                f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
-            )
-
-            approval = execute_approved_media_buy(
+            finalize_media_buy_after_creative_approval(
                 action["media_buy_id"],
                 tenant_id,
-                approved_by="system",
-                approved_at=datetime.now(UTC),
+                approved_by=user_email,
             )
-
-            if success:
-                # Update media buy status in a separate UoW
-                from src.services.media_buy_creative_readiness import (
-                    apply_creative_finalize_ready,
-                )
-
-                with AdminCreativeUoW(tenant_id) as uow2:
-                    assert uow2.media_buys is not None
-                    mb = uow2.media_buys.get_by_id(action["media_buy_id"])
-                    if mb:
-                        apply_creative_finalize_ready(mb, approved_by=user_email)
-                    # auto-commits
-
-                logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")
-            else:
-                # Execute-then-stamp batch: keep recoverable pending_creatives;
-                # status + [APPROVAL] log tag decided in the shared applier.
-                from src.services.media_buy_creative_readiness import (
-                    mark_media_buy_adapter_failed,
-                )
-
-                mark_media_buy_adapter_failed(
-                    action["media_buy_id"],
-                    tenant_id,
-                    error_msg=error_msg,
-                    status="pending_creatives",
-                )
 
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are

@@ -6,8 +6,7 @@ Requires PostgreSQL (integration_db fixture).
 
 import uuid
 from datetime import UTC, datetime
-from typing import NamedTuple
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 from sqlalchemy import delete, select
@@ -346,7 +345,7 @@ class TestCreativeApprovalRetroactivePush:
             patch(_SIDE_EFFECTS_PATCH),
             patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
             patch(
-                "src.admin.blueprints.creatives.execute_approved_media_buy",
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
                 return_value=(True, None),
             ),
         ):
@@ -372,7 +371,7 @@ class TestCreativeApprovalRetroactivePush:
             patch(_SIDE_EFFECTS_PATCH),
             patch(_PUSH_PATCH, return_value=(True, None)),
             patch(
-                "src.admin.blueprints.creatives.execute_approved_media_buy",
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
                 return_value=(True, None),
             ) as mock_execute,
         ):
@@ -391,6 +390,75 @@ class TestCreativeApprovalRetroactivePush:
             assert buy is not None
             # Session operator — not the creative-row body field.
             assert buy.approved_by == "test@example.com"
+
+    def test_approve_creative_adapter_failure_stays_recoverable(self, client, test_tenant, factory_session):
+        """Execute-first failure keeps the buy pending and the batch response successful."""
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="pending_creatives")
+        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)),
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=(False, "adapter boom"),
+            ),
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        assert response.get_json() == {"success": True, "status": "approved"}
+        with MediaBuyUoW(test_tenant) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(media_buy_id)
+            assert buy is not None
+            assert buy.status == "pending_creatives"
+
+    def test_approve_creative_routes_each_unblocked_buy_through_orchestrator(
+        self, client, test_tenant, factory_session
+    ):
+        """The batch loop delegates each ready buy without hand-sequencing finalize."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        buy_1, package_1 = _create_active_media_buy(
+            factory_session,
+            test_tenant,
+            status="pending_creatives",
+        )
+        buy_2, package_2 = _create_active_media_buy(
+            factory_session,
+            test_tenant,
+            status="pending_creatives",
+        )
+        _create_assignment(factory_session, test_tenant, creative_id, buy_1, package_1)
+        _create_assignment(factory_session, test_tenant, creative_id, buy_2, package_2)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)),
+            patch(
+                "src.admin.blueprints.creatives.finalize_media_buy_after_creative_approval",
+            ) as mock_finalize,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        assert mock_finalize.call_args_list == [
+            call(buy_1, test_tenant, approved_by="test@example.com"),
+            call(buy_2, test_tenant, approved_by="test@example.com"),
+        ]
 
     def test_push_failure_returns_200_with_warnings(self, client, test_tenant, factory_session):
         """Push failure is non-fatal: response is 200 with a warnings field."""

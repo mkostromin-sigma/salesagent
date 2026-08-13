@@ -12,6 +12,7 @@ from src.services.media_buy_creative_readiness import (
     compute_media_buy_status_from_flight_dates,
     evaluate_creative_finalize_readiness,
     evaluate_creative_finalize_readiness_for_session,
+    finalize_media_buy_after_creative_approval,
     log_creative_finalize_hold,
     mark_media_buy_adapter_failed,
     stamp_media_buy_approval,
@@ -355,7 +356,72 @@ class TestFinalizeMediaBuyApproval:
         ):
             outcome = finalize_media_buy_approval(session, "t1", media_buy, approved_by="op@example.com")
 
-        mock_fail.assert_called_once_with("mb_fail", "t1", error_msg="boom")
+        mock_fail.assert_called_once_with("mb_fail", "t1", error_msg="boom", status="failed")
+        assert outcome.kind == "adapter_failed"
+        assert outcome.error_msg == "boom"
+
+
+class TestFinalizeMediaBuyAfterCreativeApproval:
+    def test_success_executes_before_stamping_in_separate_uow(self):
+        media_buy = MagicMock()
+        mock_uow = MagicMock()
+        mock_uow.__enter__.return_value = mock_uow
+        mock_uow.__exit__.return_value = None
+        mock_uow.media_buys.get_by_id.return_value = media_buy
+
+        with (
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=(True, None),
+            ) as mock_execute,
+            patch(
+                "src.services.media_buy_creative_readiness.MediaBuyUoW",
+                return_value=mock_uow,
+            ),
+            patch(
+                "src.services.media_buy_creative_readiness.apply_creative_finalize_ready",
+            ) as mock_ready,
+            patch(
+                "src.services.media_buy_creative_readiness.mark_media_buy_adapter_failed",
+            ) as mock_fail,
+        ):
+            outcome = finalize_media_buy_after_creative_approval(
+                "mb_ok",
+                "t1",
+                approved_by="op@example.com",
+            )
+
+        mock_execute.assert_called_once_with("mb_ok", "t1")
+        mock_uow.media_buys.get_by_id.assert_called_once_with("mb_ok")
+        mock_ready.assert_called_once_with(media_buy, approved_by="op@example.com")
+        mock_fail.assert_not_called()
+        assert outcome.kind == "finalized"
+
+    def test_failure_keeps_recoverable_pending_creatives_without_stamping(self):
+        with (
+            patch(
+                "src.core.tools.media_buy_create.execute_approved_media_buy",
+                return_value=(False, "boom"),
+            ) as mock_execute,
+            patch("src.services.media_buy_creative_readiness.MediaBuyUoW") as mock_uow,
+            patch(
+                "src.services.media_buy_creative_readiness.mark_media_buy_adapter_failed",
+            ) as mock_fail,
+        ):
+            outcome = finalize_media_buy_after_creative_approval(
+                "mb_fail",
+                "t1",
+                approved_by="op@example.com",
+            )
+
+        mock_execute.assert_called_once_with("mb_fail", "t1")
+        mock_fail.assert_called_once_with(
+            "mb_fail",
+            "t1",
+            error_msg="boom",
+            status="pending_creatives",
+        )
+        mock_uow.assert_not_called()
         assert outcome.kind == "adapter_failed"
         assert outcome.error_msg == "boom"
 
