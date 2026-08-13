@@ -2326,20 +2326,21 @@ class TestGenerativeCreativeBuild:
             assert_gemini_key_missing_advisory(errs)
 
     @pytest.mark.parametrize(
-        ("tenant_key", "global_key", "expect_advisory"),
+        ("tenant_key", "global_key", "expect_advisory", "expected_key"),
         [
-            ("tenant-key", None, False),
-            (None, "global-key", False),
-            (None, None, True),
+            ("tenant-key", None, False, "tenant-key"),
+            (None, "global-key", True, None),
+            (None, None, True, None),
+            ("tenant-key", "global-key", False, "tenant-key"),
         ],
-        ids=["tenant_only", "global_only", "neither"],
+        ids=["tenant_only", "global_only_ignored", "neither", "both_tenant_wins"],
     )
-    def test_gemini_key_prefers_tenant_then_global(self, tenant_key, global_key, expect_advisory):
-        """Tenant key wins over global; neither → X_PREBID advisory.
+    def test_gemini_key_is_account_scoped(self, tenant_key, global_key, expect_advisory, expected_key):
+        """Account-scoped key is sole source; process-global alone → advisory.
 
-        Deleting ``tenant.get("gemini_api_key") or`` must redden the tenant_only
-        arm — grades advisory **code**, not action (key-present arms may still
-        fail downstream with SERVICE_UNAVAILABLE under mocks).
+        Deleting ``tenant.get("gemini_api_key")`` must redden the tenant_only /
+        both_tenant_wins arms. A non-None process-global key must not rescue a
+        keyless tenant (``global_only_ignored``).
         """
         from types import SimpleNamespace
         from unittest.mock import patch
@@ -2366,7 +2367,7 @@ class TestGenerativeCreativeBuild:
             errs = out.errors or []
             assert errs and errs[0].code == "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"
         else:
-            assert out in {tenant_key, global_key}
+            assert out == expected_key
 
 
 # ============================================================================

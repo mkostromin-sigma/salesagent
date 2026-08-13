@@ -111,34 +111,38 @@ class TestCreativeSyncEnvContract:
         assert callable(env.call_mcp)
 
     def test_clear_gemini_api_key_clears_in_process_mock(self):
-        """In-process clear_gemini_api_key nulls the config mock key."""
+        """In-process clear_gemini_api_key nulls the account-scoped tenant key."""
         from tests.harness.creative_sync import CreativeSyncEnv
 
         with _unit_mode(CreativeSyncEnv)() as env:
-            env.mock["config"].return_value.gemini_api_key = "present"
+            env.set_gemini_keys(tenant="present", global_key="present")
             env.clear_gemini_api_key()
+            assert env.identity.tenant["gemini_api_key"] is None
             assert env.mock["config"].return_value.gemini_api_key is None
 
-    def test_clear_gemini_api_key_e2e_unsupported(self):
-        """e2e cannot clear live-server GEMINI_API_KEY — declare unsupported."""
-        import pytest
+    def test_clear_gemini_api_key_e2e_nulls_tenant_row(self):
+        """e2e realization nulls the shared-DB tenant column (account-scoped)."""
+        from unittest.mock import MagicMock
 
-        from tests.harness._realize import E2EUnsupportedSetup
-        from tests.harness.creative_sync import CreativeSyncEnv
-        from tests.harness.transport import E2EConfig
+        from tests.harness.creative_sync import _clear_gemini_api_key_e2e
 
-        e2e = E2EConfig(
-            base_url="http://proxy:8000",
-            postgres_url="postgresql://unused",
-        )
-        with _unit_mode(CreativeSyncEnv)(e2e_config=e2e) as env:
-            with pytest.raises(E2EUnsupportedSetup) as exc_info:
-                env.clear_gemini_api_key()
-        assert "GEMINI_API_KEY" in str(exc_info.value)
-        assert exc_info.value.method_name == "clear_gemini_api_key"
+        tenant_row = MagicMock()
+        tenant_row.gemini_api_key = "present"
+        session = MagicMock()
+        session.scalars.return_value.first.return_value = tenant_row
+        env = MagicMock()
+        env.get_session.return_value = session
+        env._tenant_id = "t1"
+        env.identity.tenant = {"gemini_api_key": "present"}
+
+        _clear_gemini_api_key_e2e(env)
+
+        assert tenant_row.gemini_api_key is None
+        env._commit_factory_data.assert_called_once()
+        assert env.identity.tenant["gemini_api_key"] is None
 
     def test_setup_generative_build_e2e_unsupported(self):
-        """e2e cannot stub creative-agent catalog — declare unsupported (#1887)."""
+        """e2e cannot stub creative-agent catalog — declare unsupported (#1964)."""
         import pytest
 
         from tests.harness._realize import E2EUnsupportedSetup
@@ -153,7 +157,7 @@ class TestCreativeSyncEnvContract:
             with pytest.raises(E2EUnsupportedSetup) as exc_info:
                 env.setup_generative_build()
         assert exc_info.value.method_name == "setup_generative_build"
-        assert "#1887" in str(exc_info.value)
+        assert "#1964" in str(exc_info.value)
 
     def test_set_gemini_keys_independent_surfaces(self):
         """Tenant and global GEMINI keys must be independently controllable."""

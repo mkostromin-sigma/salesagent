@@ -114,7 +114,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         e2e_unsupported(
             "generative build grading injects an in-process format mock and "
             "registry.build_creative AsyncMock; the live e2e creative-agent "
-            "catalog cannot be stubbed mid-suite, and Then steps assert the mock (#1887)"
+            "catalog cannot be stubbed mid-suite, and Then steps assert the mock (#1964)"
         )
     )
     def setup_generative_build(
@@ -129,13 +129,14 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         Sets up:
         - A format mock with output_format_ids (makes it generative)
         - build_creative AsyncMock with the given return value
-        - gemini_api_key on the config mock
+        - gemini_api_key on the account-scoped tenant dict (and config mock
+          for unrelated surfaces)
         - run_async to return the generative format list
 
         In-process only (a2a/mcp/rest). Live e2e_rest cannot stub the
         creative-agent catalog or observe ``registry.build_creative`` —
         declare E2EUnsupportedSetup so the BDD hook non-strict-xfails e2e
-        (#1887; partial adoption — ``set_run_async_result`` and direct
+        (#1964; partial adoption — ``set_run_async_result`` and direct
         registry pokes remain unwrapped).
 
         Returns a format_id dict for use in creative payloads::
@@ -171,9 +172,9 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # Also configure get_format to return this format for validation
         registry.get_format = AsyncMock(return_value=mock_format)
 
-        # Set gemini API key on both lookup surfaces production consults
-        # (tenant dict first, then process-global config). Prefer
-        # ``set_gemini_keys`` when the surfaces must diverge.
+        # Account-scoped key is the sole advisory source; keep config mock
+        # aligned for unrelated surfaces. Prefer ``set_gemini_keys`` when the
+        # surfaces must diverge.
         self.set_gemini_keys(tenant=gemini_api_key, global_key=gemini_api_key)
 
         return {"agent_url": agent, "id": format_id}
@@ -186,28 +187,22 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     ) -> None:
         """Set tenant and process-global GEMINI keys independently.
 
-        Production prefers ``tenant["gemini_api_key"]`` then
-        ``get_config().gemini_api_key``. Tests that need tenant-present /
-        global-absent (or the reverse) must use this setter — writing both
-        surfaces to the same value makes the tenant preference unfalsifiable.
+        Production creative-sync advisories read only
+        ``tenant["gemini_api_key"]`` (account-scoped). The config mock remains
+        writable so unrelated surfaces and regression arms can still set a
+        process-global key that must *not* rescue a keyless tenant.
         """
         self.mock["config"].return_value.gemini_api_key = global_key
         tenant_dict = getattr(self.identity, "tenant", None)
         if isinstance(tenant_dict, dict):
             tenant_dict["gemini_api_key"] = tenant
 
-    @realize_e2e(
-        e2e_unsupported(
-            "CI / e2e stack always injects GEMINI_API_KEY into the live server process; "
-            "clearing the in-process get_config mock cannot realize a missing-key seller (#1887)"
-        )
-    )
+    @realize_e2e(_clear_gemini_api_key_e2e)
     def clear_gemini_api_key(self) -> None:
-        """Clear GEMINI_API_KEY on config mock and tenant dict (impl-only).
+        """Clear account-scoped GEMINI key (tenant dict + config mock).
 
-        Live e2e_rest cannot unset the server process env mid-suite — declare
-        E2EUnsupportedSetup so the BDD hook non-strict-xfails e2e only while
-        a2a/mcp/rest still grade X_PREBID_CREATIVE_GEMINI_KEY_MISSING.
+        E2E: null the shared-DB tenant column so the live server sees a keyless
+        seller even when the process still has ``GEMINI_API_KEY`` injected.
         """
         self.set_gemini_keys(tenant=None, global_key=None)
 

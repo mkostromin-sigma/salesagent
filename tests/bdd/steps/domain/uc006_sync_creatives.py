@@ -29,6 +29,7 @@ from tests.factories.creative_asset import (
     url_spec,
 )
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.creative_test_helpers import _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -2174,13 +2175,13 @@ def _infer_error_code_from_message(msg: str) -> str:
 def _infer_suggestion_from_message(msg: str) -> str | None:
     """Fallback suggestion for plain-string advisories (typed Errors promote as-is).
 
-    GEMINI path: pin the same buyer-facing literal as
-    ``tests.helpers.creative_test_helpers._EXPECTED_GEMINI_KEY_MISSING_SUGGESTION``
-    (independent of the production constant so drift still fails pins).
+    GEMINI path: return the shared test-side pin
+    ``_EXPECTED_GEMINI_KEY_MISSING_SUGGESTION`` (independent of the production
+    constant so drift still fails pins).
     """
     lower = msg.lower()
     if "gemini_api_key" in lower:
-        return "Ask the seller to configure a Gemini API key for this account"
+        return _EXPECTED_GEMINI_KEY_MISSING_SUGGESTION
     if "preview" in lower:
         return "Provide a media_url for the creative"
     return None

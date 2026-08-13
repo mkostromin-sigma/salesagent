@@ -491,9 +491,25 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
         return
     nested = _nested_creative_advisory_error(ctx)
     if nested is not None:
-        actual = nested.get("recovery")
-        actual_str = actual.value if hasattr(actual, "value") else str(actual) if actual is not None else None
-        assert actual_str == recovery, f"Expected recovery '{recovery}', got '{actual_str}' from wire_response"
+        wire = ctx.get("wire_response")
+        transport = ctx["transport"]
+        code = nested.get("code")
+        assert code, f"Expected nested advisory code when asserting recovery={recovery!r}: {nested}"
+        result = ctx.get("result")
+        wire_is_proxy = bool(getattr(result, "envelope", None) and result.envelope.get("wire_response_is_proxy"))
+        # Payload grading on CreativeSyncEnv A2A model_dump proxy stays allowed
+        # until #1919 (Chris R3-04); require_real_wire=True would refuse that arm.
+        from tests.harness.transport import assert_wire_advisory
+
+        assert_wire_advisory(
+            wire,
+            code,
+            recovery=recovery,
+            transport=transport,
+            response=ctx.get("response"),
+            wire_is_proxy=wire_is_proxy,
+            require_real_wire=False,
+        )
         return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"

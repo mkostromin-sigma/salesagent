@@ -25,7 +25,12 @@ from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
-from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
+from ._processing import (
+    _create_new_creative,
+    _failed_sync_result,
+    _service_unavailable_result,
+    _update_existing_creative,
+)
 from ._validation import _get_field, _validate_creative_input, check_provenance_required
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
@@ -415,14 +420,7 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(
-                    _failed_sync_result(
-                        creative_id,
-                        error_msg,
-                        code="SERVICE_UNAVAILABLE",
-                        recovery="transient",
-                    )
-                )
+                results.append(_service_unavailable_result(creative_id, error_msg))
 
         # Archive creatives not in the sync payload when delete_missing=True
         if delete_missing:

@@ -86,6 +86,16 @@ def _failed_sync_result(
     )
 
 
+def _service_unavailable_result(creative_id: str, error_msg: str) -> SyncCreativeResult:
+    """Per-creative advisory for transient creative-agent / preview outages."""
+    return _failed_sync_result(
+        creative_id,
+        error_msg,
+        code="SERVICE_UNAVAILABLE",
+        recovery="transient",
+    )
+
+
 def _check_gemini_key_or_advisory(
     creative_id: str,
     *,
@@ -93,16 +103,15 @@ def _check_gemini_key_or_advisory(
     creative_format: _FormatIdLike,
     tenant: dict[str, Any],
 ) -> str | SyncCreativeResult:
-    """Return the GEMINI API key, or a missing-key advisory result.
+    """Return the account-scoped GEMINI API key, or a missing-key advisory result.
 
-    Policy: tenant/account key first (DB column / admin AI settings), then
-    process-global ``get_config().gemini_api_key``. A tenant that configured
-    its own key must not be blocked by a missing server-wide env key — same
-    tenant-then-platform order as ``src/services/ai/factory.py``.
+    Policy: sole source is the tenant/account key (DB column / admin AI
+    settings via the tenant dict). Process-global ``get_config().gemini_api_key``
+    is intentionally not consulted — a keyless seller on a server that injects
+    ``GEMINI_API_KEY`` into the process must still see the misconfiguration
+    advisory (multi-tenant isolation; e2e_rest can clear the DB row alone).
     """
-    from src.core.config import get_config
-
-    gemini_api_key = tenant.get("gemini_api_key") or get_config().gemini_api_key
+    gemini_api_key = tenant.get("gemini_api_key")
     if gemini_api_key:
         return gemini_api_key
     error_msg = f"Cannot {action_verb} generative creative {creative_format.id}: GEMINI_API_KEY not configured"
@@ -465,12 +474,7 @@ def _update_existing_creative(
                     error_msg = f"Preview generation failed for {existing_creative.creative_id}: no previews returned and no media_url provided"
                     logger.error(f"[sync_creatives] {error_msg}")
                     return (
-                        _failed_sync_result(
-                            existing_creative.creative_id,
-                            error_msg,
-                            code="SERVICE_UNAVAILABLE",
-                            recovery="transient",
-                        ),
+                        _service_unavailable_result(existing_creative.creative_id, error_msg),
                         False,
                     )
 
@@ -762,12 +766,7 @@ def _create_new_creative(
                         error_msg = f"Preview generation failed for {creative_id}: no previews returned and no media_url provided"
                         logger.error(f"[sync_creatives] {error_msg}")
                         return (
-                            _failed_sync_result(
-                                creative_id,
-                                error_msg,
-                                code="SERVICE_UNAVAILABLE",
-                                recovery="transient",
-                            ),
+                            _service_unavailable_result(creative_id, error_msg),
                             False,
                         )
 

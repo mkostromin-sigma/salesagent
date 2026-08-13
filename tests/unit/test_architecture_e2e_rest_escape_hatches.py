@@ -442,16 +442,10 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
         (
             "tests/harness/creative_sync.py",
-            "clear_gemini_api_key",
-            "CI / e2e stack always injects GEMINI_API_KEY into the live server process; "
-            "clearing the in-process get_config mock cannot realize a missing-key seller (#1887)",
-        ),
-        (
-            "tests/harness/creative_sync.py",
             "setup_generative_build",
             "generative build grading injects an in-process format mock and "
             "registry.build_creative AsyncMock; the live e2e creative-agent "
-            "catalog cannot be stubbed mid-suite, and Then steps assert the mock (#1887)",
+            "catalog cannot be stubbed mid-suite, and Then steps assert the mock (#1964)",
         ),
     }
 )
