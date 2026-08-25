@@ -1241,6 +1241,7 @@ class AdCPRequestHandler(RequestHandler):
         authorized = task is not None and identity.principal_id and stored_owner == expected_owner
         if not authorized:
             self._deny_task_access(task_id, operation, identity)
+        assert task is not None
         return task
 
     async def on_get_task(
