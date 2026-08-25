@@ -458,6 +458,25 @@ def _send_post_commit_side_effects(
         )
 
 
+def _append_adapter_finalize_warnings(
+    media_buy_actions: list[dict[str, Any]],
+    *,
+    tenant_id: str,
+    approved_by: str,
+    push_warnings: list[str],
+) -> None:
+    """Finalize unblocked buys and surface adapter failures as response warnings."""
+    for action in media_buy_actions:
+        outcome = finalize_media_buy_after_creative_approval(
+            action["media_buy_id"],
+            tenant_id,
+            approved_by=approved_by,
+        )
+        if outcome.kind == "adapter_failed":
+            buy_id = action["media_buy_id"]
+            push_warnings.append(f"Adapter creation for buy {buy_id} failed — see server logs for details")
+
+
 @creatives_bp.route("/review/<creative_id>/approve", methods=["POST"])
 @log_admin_action("approve_creative")
 @require_tenant_access()
@@ -584,16 +603,12 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         )
 
         # Execute adapter creation for unblocked media buys
-        for action in media_buy_actions:
-            outcome = finalize_media_buy_after_creative_approval(
-                action["media_buy_id"],
-                tenant_id,
-                approved_by=user_email,
-            )
-            if outcome.kind == "adapter_failed":
-                buy_id = action["media_buy_id"]
-                push_warnings.append(f"Adapter creation for buy {buy_id} failed — see server logs for details")
-
+        _append_adapter_finalize_warnings(
+            media_buy_actions,
+            tenant_id=tenant_id,
+            approved_by=user_email,
+            push_warnings=push_warnings,
+        )
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are
         # live in the ad server, push this newly-approved creative to the line item.
