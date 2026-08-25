@@ -415,7 +415,10 @@ class TestCreativeApprovalRetroactivePush:
             )
 
         assert response.status_code == 200
-        assert response.get_json() == {"success": True, "status": "approved"}
+        body = response.get_json()
+        assert body["success"] is True
+        assert body["status"] == "approved"
+        assert body["warnings"] == [f"Adapter creation for buy {media_buy_id} failed — see server logs for details"]
         with MediaBuyUoW(test_tenant) as uow:
             assert uow.media_buys is not None
             buy = uow.media_buys.get_by_id(media_buy_id)

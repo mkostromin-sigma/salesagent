@@ -390,9 +390,9 @@ class TestAdminMediaBuyRejectWebhook:
             f"approved webhook must embed a completed Success, got status={embedded.get('status')!r}"
         )
         # Domain field (media-buy-status.json@3.1.1): resolve_canonical_status
-        # date-refines a future-start buy to pending_start (ORM may still say
-        # "scheduled"). Protocol TaskStatus on the Success envelope stays
-        # "completed".
+        # date-refines a future-start buy to pending_start (ORM also persists
+        # pending_start on the ready arm). Protocol TaskStatus on the Success
+        # envelope stays "completed".
         assert embedded.get("media_buy_status") == "pending_start", (
             f"approved webhook must embed media_buy_status matching get_media_buys "
             f"(canonical), got media_buy_status={embedded.get('media_buy_status')!r}"
@@ -422,7 +422,7 @@ class TestAdminMediaBuyRejectWebhook:
             "media_buy_id": media_buy_id,
         }
         # Ready-arm provenance: session operator email on the MediaBuy row.
-        _assert_persisted_status(pending_reject_media_buy, "scheduled", approved_by="test@example.com")
+        _assert_persisted_status(pending_reject_media_buy, "pending_start", approved_by="test@example.com")
 
     def test_reject_bumps_revision_without_confirming(
         self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
@@ -721,7 +721,7 @@ class TestAdminWorkflowApproveHold:
         authenticated_admin_session,
         make_pending_media_buy,
     ):
-        """Ready arm: real compute (unpatched) → scheduled for future-start buy + execute."""
+        """Ready arm: real compute (unpatched) → pending_start for future-start buy + execute."""
         ids = make_pending_media_buy(
             tenant_id="wf_ready_t",
             media_buy_id="mb_wf_ready",
@@ -735,8 +735,8 @@ class TestAdminWorkflowApproveHold:
             _post_workflow_approve(authenticated_admin_session, ids)
 
         mock_execute.assert_called_once_with(ids["media_buy_id"], ids["tenant_id"])
-        # make_pending_media_buy seeds start_time = now+7d → scheduled
-        _assert_persisted_status(ids, "scheduled", approved_by="test@example.com")
+        # make_pending_media_buy seeds start_time = now+7d → pending_start
+        _assert_persisted_status(ids, "pending_start", approved_by="test@example.com")
 
 
 class TestAdminApproveAdapterFailureRollback:
