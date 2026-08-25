@@ -14,16 +14,21 @@ the two ``synthesize()`` sites — pinned in the allowlist so a new bypass (or a
 new synthesize caller) fails the build.
 
 ``recovery=`` on constructors is enforced for ``src/a2a_server/`` only (zero
-tolerance after dropping the redundant SSRF-site kwarg). Repo-wide recovery=
-ratchet on ``src/core`` / ``src/adapters`` is a separate follow-up — many sites
-legitimately override class defaults today.
+tolerance after dropping the redundant SSRF-site kwarg). Repo-wide ``recovery=``
+ratchet on ``src/core`` / ``src/adapters`` is out of scope for #1720 — tracked
+in #1676 (webhook scrub) and a future core/adapters guard widen; do not expand
+this PR into that sweep.
 """
 
 import ast
 from collections.abc import Iterator
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import (
+    assert_detector_catches_ast_snippets,
+    assert_violations_match_allowlist,
+    iter_call_expressions,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters", REPO_ROOT / "src" / "a2a_server"]
@@ -164,6 +169,34 @@ class TestNoErrorCodeKwargInImpl:
         assert not sites, (
             f"Found {len(sites)} recovery= site(s) on AdCP*Error constructors in a2a_server. "
             "Use the class default; do not hand-write recovery=:\n" + "\n".join(sites)
+        )
+
+    def test_recovery_kwarg_detector_self_test(self) -> None:
+        """Guard must redden when recovery= appears on an AdCP*Error constructor."""
+
+        def _find_recovery_in_module(tree: ast.Module) -> list[int]:
+            hits: list[int] = []
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for child in iter_call_expressions(node):
+                    if not _func_targets_adcp_error_or_synthesize(child.func):
+                        continue
+                    if _func_is_synthesize(child.func):
+                        continue
+                    if any(kw.arg == "recovery" for kw in child.keywords):
+                        hits.append(child.lineno)
+            return hits
+
+        assert_detector_catches_ast_snippets(
+            _find_recovery_in_module,
+            snippets={
+                "hand_written_recovery": (
+                    "def bad():\n"
+                    "    from src.core.exceptions import AdCPError\n"
+                    "    AdCPError(message='x', recovery='transient')\n"
+                ),
+            },
         )
 
 

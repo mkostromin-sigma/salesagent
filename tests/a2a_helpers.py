@@ -219,6 +219,10 @@ def assert_task_not_found_nondisclosure(
     assert isinstance(exc.data, dict)
     assert exc.data.get("task_id") == safe_id
     assert "adcp_error" in exc.data
+    adcp_error = exc.data["adcp_error"]
+    assert isinstance(adcp_error, dict)
+    assert adcp_error["code"] == "REFERENCE_NOT_FOUND"
+    assert adcp_error["recovery"] == "correctable"
     blob = f"{exc.message}{exc.data!s}"
     for needle in forbidden_substrings:
         assert needle not in blob
@@ -292,12 +296,20 @@ def post_a2a_task_method(
 
 
 def assert_wire_auth_failure(err: Mapping[str, object]) -> None:
-    """Exact wire-body oracle for unauthenticated A2A task calls (v0.3 compat)."""
-    assert err == {
-        "code": -32603,
-        "message": "Missing authentication token",
-        "data": None,
-    }
+    """Wire-body oracle for unauthenticated A2A task calls (v0.3 compat).
+
+    Under v0.3 compat the envelope may flatten to ``data: null`` (#1670); when
+    ``data`` is present we grade ``AUTH_REQUIRED`` / ``correctable`` on the
+    two-layer envelope attached at the raise site.
+    """
+    assert err.get("code") == -32603
+    assert err.get("message") == "Missing authentication token"
+    data = err.get("data")
+    if isinstance(data, dict) and "adcp_error" in data:
+        adcp_error = data["adcp_error"]
+        assert isinstance(adcp_error, dict)
+        assert adcp_error.get("code") == "AUTH_REQUIRED"
+        assert adcp_error.get("recovery") == "correctable"
 
 
 def assert_wire_no_identity_leak(

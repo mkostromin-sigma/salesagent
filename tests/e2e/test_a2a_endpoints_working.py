@@ -337,7 +337,11 @@ class TestA2ARequestHandler:
         with a2a_auth_as(self.handler, PrincipalFactory.make_identity(protocol="a2a")):
             with pytest.raises(TaskNotFoundError) as exc:
                 await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
-        assert_task_not_found_nondisclosure(exc.value, "task_does_not_exist")
+        assert_task_not_found_nondisclosure(
+            exc.value,
+            "task_does_not_exist",
+            forbidden_substrings=("test_tenant", "test_principal"),
+        )
 
     def test_handler_has_skill_methods(self):
         """Test that handler has skill-specific methods."""
