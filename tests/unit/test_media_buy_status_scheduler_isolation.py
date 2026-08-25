@@ -10,19 +10,20 @@ re-raise/escape control flow routing to the outer log, and the
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import OperationalError
 
 import src.services.media_buy_status_scheduler as status_mod
 from src.core.metrics import scheduler_isolation_errors
-from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+from src.services.media_buy_status_scheduler import STATUS_BATCH_SUMMARY_PREFIX, MediaBuyStatusScheduler
 from tests.helpers.scheduler_isolation import (
     counter_value,
     mock_get_db_session_cm,
     mock_media_buy,
     mock_savepoint_session,
+    summary_lines,
 )
 
 
@@ -64,7 +65,7 @@ async def test_status_scheduler_connection_invalidated_reraises():
 
 
 @pytest.mark.asyncio
-async def test_status_send_isolates_one_failure_and_meters_once():
+async def test_status_isolates_one_failure_and_meters_once():
     """Pins the ``scheduler="media_buy_status"`` metric label and per-tenant
     non-metering of siblings — not durable commit (mocked session/objects
     can't grade that; the real-DB twin does)."""
@@ -104,3 +105,118 @@ async def test_status_send_isolates_one_failure_and_meters_once():
     assert counter_value("media_buy_status", "tenant-fail", "db_error") == fail_before + 1
     # Siblings must not be metered.
     assert counter_value("media_buy_status", "tenant-ok-a", "db_error") == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_warns_when_every_visited_buy_fails():
+    """A1: ``errors == seen`` must log WARNING (not INFO)."""
+    buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(3)]
+    session = mock_savepoint_session()
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    def _always_fail(_media_buy, _now, _session):
+        raise OperationalError("SELECT 1", {}, Exception("timeout"))
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", side_effect=_always_fail),
+        patch.object(status_mod.logger, "warning") as mock_warning,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    assert warn_lines == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_suppresses_all_quiet_tick():
+    """A5: no flips and no errors → no summary line."""
+    buys = [mock_media_buy(media_buy_id="mb_noop", tenant_id="t1")]
+    session = mock_savepoint_session()
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", return_value=None),
+        patch.object(status_mod.logger, "warning") as mock_warning,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    assert summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_reports_pending_flips_when_commit_fails():
+    """A2: failed terminal commit must not claim N updated."""
+    buys = [mock_media_buy(media_buy_id="mb_a", tenant_id="t1")]
+    session = mock_savepoint_session()
+    session.commit = MagicMock(side_effect=RuntimeError("commit boom"))
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", return_value="completed"),
+        patch.object(status_mod.logger, "warning") as mock_warning,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    assert len(warn_lines) == 1
+    assert "0 persisted" in warn_lines[0]
+    assert "1 pending flips lost" in warn_lines[0]
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_survives_dead_connection_escape():
+    """A3: escape mid-loop still emits summary for prior pending flips."""
+    buys = [
+        mock_media_buy(media_buy_id="mb_ok", tenant_id="t-ok"),
+        mock_media_buy(media_buy_id="mb_dead", tenant_id="t-dead"),
+    ]
+    session = mock_savepoint_session()
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    def _compute(media_buy, _now, _session):
+        if media_buy.media_buy_id == "mb_dead":
+            raise OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
+        return "completed"
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
+        patch.object(status_mod.logger, "warning") as mock_warning,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    assert len(warn_lines) == 1
+    assert "0 persisted" in warn_lines[0]
+    assert "1 pending flips lost" in warn_lines[0]
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []

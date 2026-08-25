@@ -424,17 +424,12 @@ async def test_active_transitions_to_completed_when_end_time_passed(integration_
     tenant_id = _create_test_tenant("tenant_active_completed")
     principal_id = _create_test_principal(tenant_id)
 
-    # Create media buy with end_time in the past
-    past_start = datetime.now(UTC) - timedelta(days=7)
-    past_end = datetime.now(UTC) - timedelta(hours=1)
-
-    media_buy_id = _create_media_buy(
+    media_buy_id = "mb_active_to_completed"
+    seed_active_expired_buys(
+        _create_media_buy,
         tenant_id=tenant_id,
         principal_id=principal_id,
-        media_buy_id="mb_active_to_completed",
-        status="active",
-        start_time=past_start,
-        end_time=past_end,
+        buy_ids=[media_buy_id],
     )
 
     # Verify initial status

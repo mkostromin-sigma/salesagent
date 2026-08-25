@@ -93,45 +93,59 @@ class MediaBuyStatusScheduler:
     def _process_one_media_buy(self, media_buy: MediaBuy, now: datetime, session: Session) -> _BuyOutcome:
         """Run one buy's status check inside its own SAVEPOINT; isolate DB errors.
 
-        Ids are captured into plain locals *before* the SAVEPOINT opens — under
-        production ``autoflush=True`` a flush failure expires ORM attributes, so
-        reading ``media_buy.tenant_id`` after the fact can raise
-        ``PendingRollbackError`` and hide the original exception. A release-time
-        flush failure (e.g. an over-length status value) counts as an error, not
-        a success, even though the in-body assignment "succeeded". Dead-connection
-        errors (``connection_invalidated`` / ``DisconnectionError``, see
+        Ids are captured into plain locals *inside* the per-buy ``try`` and
+        *before* the SAVEPOINT opens — under production ``autoflush=True`` a
+        flush failure expires ORM attributes, so reading ``media_buy.tenant_id``
+        after the fact can raise ``PendingRollbackError`` and hide the original
+        exception. Capturing inside the ``try`` also keeps a lazy-id failure
+        from aborting the rest of the tick (the #1714 containment unit is one
+        iteration, not only the SAVEPOINT body). A release-time flush failure
+        counts as an error, not a success. Dead-connection errors
+        (``connection_invalidated`` / ``DisconnectionError``, see
         :func:`is_connection_dead`) are *not* isolated — they re-raise so
-        ``get_db_session`` can trip the process-global circuit breaker.
+        ``get_db_session`` can trip the process-global circuit breaker when the
+        exception class is in :data:`CONNECTION_ERROR_TYPES`.
 
         Returns :class:`_BuyOutcome` — ``FLIPPED`` / ``ISOLATED`` / ``NOOP``.
         """
-        tenant_id = media_buy.tenant_id
-        principal_id = media_buy.principal_id
-        media_buy_id = media_buy.media_buy_id
+        tenant_id = ""
+        principal_id = ""
+        media_buy_id = ""
+        new_status: str | None = None
+        old_status: str | None = None
 
         try:
+            tenant_id = media_buy.tenant_id
+            principal_id = media_buy.principal_id
+            media_buy_id = media_buy.media_buy_id
             with session.begin_nested():
                 new_status = self._compute_new_status(media_buy, now, session)
-                if new_status:
+                if new_status and new_status != media_buy.status:
                     old_status = media_buy.status
                     media_buy.status = new_status
         except Exception as exc:
             if is_connection_dead(exc):
                 raise
-            logger.error(
-                f"Error updating media buy status "
-                f"(tenant_id={tenant_id}, principal_id={principal_id}, "
-                f"media_buy_id={media_buy_id}): {exc}",
-                exc_info=True,
-            )
-            record_scheduler_isolation_error(
-                scheduler="media_buy_status",
-                tenant_id=tenant_id,
-                error_type=_classify_scheduler_error(exc),
-            )
+            try:
+                logger.error(
+                    f"Error updating media buy status "
+                    f"(tenant_id={tenant_id}, principal_id={principal_id}, "
+                    f"media_buy_id={media_buy_id}): {exc}",
+                    exc_info=True,
+                )
+                record_scheduler_isolation_error(
+                    scheduler="media_buy_status",
+                    tenant_id=tenant_id,
+                    error_type=_classify_scheduler_error(exc),
+                )
+            except Exception as handler_exc:
+                logger.error(
+                    f"Status isolation error handler failed (media_buy_id={media_buy_id}): {handler_exc}",
+                    exc_info=True,
+                )
             return _BuyOutcome.ISOLATED
 
-        if not new_status:
+        if not new_status or old_status is None:
             return _BuyOutcome.NOOP
         logger.info(f"Updated media buy {media_buy_id} status: {old_status} -> {new_status}")
         return _BuyOutcome.FLIPPED
@@ -145,9 +159,15 @@ class MediaBuyStatusScheduler:
         terminal ``session.commit()`` — see :meth:`_process_one_media_buy` for
         the pre-capture / isolation / dead-connection contract. The
         ``updated_count``/``errors`` tally is applied only *after* the SAVEPOINT
-        releases cleanly.
+        releases cleanly. Batch summary runs in an outer ``finally`` so a
+        dead-connection re-raise mid-loop still emits the tally, and the
+        summary keys severity on whether the terminal commit actually persisted.
         """
         now = datetime.now(UTC)
+        updated_count = 0
+        errors = 0
+        seen = 0
+        reached_end = False
 
         try:
             with get_db_session() as session:
@@ -202,14 +222,22 @@ class MediaBuyStatusScheduler:
                         updated_count += 1
                         logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
 
-                try:
-                    if updated_count > 0:
-                        session.commit()
-                finally:
-                    self._log_batch_summary(seen=seen, updated_count=updated_count, errors=errors)
+                if updated_count > 0:
+                    session.commit()
+                reached_end = True
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
+        finally:
+            # Pending flips are only "updated" when the tick reached a successful
+            # terminal commit (or there were no flips to persist).
+            committed = reached_end or updated_count == 0
+            self._log_batch_summary(
+                seen=seen,
+                updated_count=updated_count,
+                errors=errors,
+                committed=committed,
+            )
 
     def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> PersistedMediaBuyStatus | None:
         """The status this sweep should write, or ``None`` to leave the row alone.

@@ -100,18 +100,14 @@ def test_scheduler_isolation_errors_increments():
     ``media_buy_status_scheduler._classify_scheduler_error``); the recorder
     only sanitizes against :data:`SCHEDULER_ERROR_TYPE_VALUES`.
     """
-    from src.core.metrics import record_scheduler_isolation_error, scheduler_isolation_errors
+    from src.core.metrics import record_scheduler_isolation_error
+    from tests.helpers.scheduler_isolation import counter_value
 
-    initial_value = scheduler_isolation_errors.labels(
-        scheduler="media_buy_status", tenant_id="test_tenant", error_type="db_error"
-    )._value.get()
+    initial_value = counter_value("media_buy_status", "test_tenant", "db_error")
 
     record_scheduler_isolation_error(scheduler="media_buy_status", tenant_id="test_tenant", error_type="db_error")
 
-    new_value = scheduler_isolation_errors.labels(
-        scheduler="media_buy_status", tenant_id="test_tenant", error_type="db_error"
-    )._value.get()
-    assert new_value == initial_value + 1
+    assert counter_value("media_buy_status", "test_tenant", "db_error") == initial_value + 1
 
 
 def test_active_ai_reviews_gauge():

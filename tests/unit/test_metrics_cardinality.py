@@ -35,7 +35,9 @@ def test_categorize_error_bounds_error_type_to_enum():
     """categorize_error must collapse arbitrary exceptions into a fixed enum."""
     from src.core.metrics import ERROR_TYPE_VALUES, categorize_error
 
-    allowed = set(ERROR_TYPE_VALUES)
+    # Literal pin — must stay in lockstep with ERROR_TYPE_VALUES (not derived from it).
+    allowed = {"validation", "timeout", "model_error", "other"}
+    assert allowed == set(ERROR_TYPE_VALUES)
 
     # 1000 distinct exception classes must all map into the fixed enum.
     seen = set()
@@ -88,12 +90,15 @@ def test_scheduler_isolation_errors_cardinality_bounded():
         )
 
     # prometheus emits _total + _created per label set.
+    assert len(metrics.SCHEDULER_ERROR_TYPE_VALUES) <= 2
+    assert set(metrics.SCHEDULER_ERROR_TYPE_VALUES) == {"db_error", "other"}
     assert _series_count(metrics.scheduler_isolation_errors) <= len(metrics.SCHEDULER_ERROR_TYPE_VALUES) * 2
 
 
 def test_scheduler_isolation_oracle_uses_db_error_class():
     """Unit oracle must pin the bounded label the scheduler loop actually records."""
     from src.core import metrics
+    from tests.helpers.scheduler_isolation import counter_value
 
     metrics.scheduler_isolation_errors.clear()
     metrics.record_scheduler_isolation_error(
@@ -101,12 +106,7 @@ def test_scheduler_isolation_oracle_uses_db_error_class():
         tenant_id="t1",
         error_type="db_error",
     )
-    assert (
-        metrics.scheduler_isolation_errors.labels(
-            scheduler="media_buy_status", tenant_id="t1", error_type="db_error"
-        )._value.get()
-        == 1
-    )
+    assert counter_value("media_buy_status", "t1", "db_error") == 1
 
 
 def test_sanitize_policy_triggered_allowlist():
@@ -164,8 +164,8 @@ def test_scheduler_isolation_cardinality_bounded_under_freeform_scheduler():
         )
 
     # All free-form names collapse to scheduler="other" x error_type="other".
+    assert len(metrics.SCHEDULER_ERROR_TYPE_VALUES) <= 2
     assert _series_count(metrics.scheduler_isolation_errors) <= len(metrics.SCHEDULER_ERROR_TYPE_VALUES) * 2
-    assert (
-        metrics.scheduler_isolation_errors.labels(scheduler="other", tenant_id="t1", error_type="other")._value.get()
-        == 1000
-    )
+    from tests.helpers.scheduler_isolation import counter_value
+
+    assert counter_value("other", "t1", "other") == 1000

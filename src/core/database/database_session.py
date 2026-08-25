@@ -38,10 +38,15 @@ _is_healthy = True
 #: Schedulers isolate per-item failures via ``is_connection_dead``, which keys
 #: on connection *state* (``connection_invalidated`` / ``DisconnectionError``),
 #: not on membership in this tuple. A plain ``OperationalError`` (e.g. statement
-#: timeout) is deliberately isolated and must NOT be re-raised by callers. When
-#: escape *does* re-raise a dead connection, the exception class must be in this
-#: tuple so the breaker actually arms — hence ``InterfaceError`` is included
-#: alongside ``OperationalError`` / ``DisconnectionError``.
+#: timeout) is deliberately isolated and must NOT be re-raised by callers.
+#:
+#: Escape and arm are related but not identical: ``is_connection_dead`` can be
+#: true for an invalidated ``DBAPIError`` whose class is *not* in this tuple
+#: (e.g. ``ProgrammingError`` with ``connection_invalidated=True``). That
+#: re-raise escapes the per-item loop but does **not** arm the breaker today.
+#: Aligning escape⇒arm for every ``DBAPIError`` subclass is a separate change;
+#: ``InterfaceError`` is listed here because that class *does* need to arm when
+#: escape re-raises it.
 CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
     OperationalError,
     DisconnectionError,
@@ -52,11 +57,11 @@ CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
 def is_connection_dead(exc: BaseException) -> bool:
     """Return True when ``exc`` indicates a dead/unusable DB connection.
 
-    Owned here next to :data:`CONNECTION_ERROR_TYPES` so the breaker arm-set and
-    the per-item isolation escape predicate cannot drift across layers.
-    Schedulers call this directly in their per-item ``except`` to re-raise
-    (arming the breaker via :func:`get_db_session`) or isolate; see
-    :meth:`src.services.media_buy_status_scheduler.MediaBuyStatusScheduler._process_one_media_buy`.
+    Owned next to :data:`CONNECTION_ERROR_TYPES` (breaker arm-set). The escape
+    predicate keys on connection *state*; the breaker still keys on class
+    membership — see the module comment on :data:`CONNECTION_ERROR_TYPES` for
+    the intentional asymmetry. Per-item schedulers call this in ``except`` to
+    decide re-raise vs isolate.
     """
     return bool(getattr(exc, "connection_invalidated", False)) or isinstance(exc, DisconnectionError)
 
@@ -273,14 +278,20 @@ def get_db_session() -> Generator[Session, None, None]:
         scoped.remove()
 
 
-def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = CONNECTION_ERROR_TYPES) -> Any:
+def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = (OperationalError, DisconnectionError)) -> Any:
     """
     Execute a database operation with retry logic for connection issues.
+
+    Default ``retry_on`` stays the historical retry vocabulary
+    (``OperationalError``, ``DisconnectionError``) — not
+    :data:`CONNECTION_ERROR_TYPES` — so breaker arm-set edits (e.g. adding
+    ``InterfaceError``) do not silently change auth/principal lookup retry
+    behavior via :func:`execute_with_retry`.
 
     Args:
         func: Function that takes a session as its first argument
         max_retries: Maximum number of retry attempts
-        retry_on: Tuple of exception types to retry on (defaults to connection errors)
+        retry_on: Tuple of exception types to retry on (defaults to retryable DB errors)
 
     Returns:
         The result of the function
