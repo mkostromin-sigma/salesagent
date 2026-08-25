@@ -13,7 +13,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, NoReturn
 
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
@@ -63,6 +63,7 @@ from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPError,
+    AdCPServiceUnavailableError,
     AdCPTaskNotFoundError,
     AdCPValidationError,
     build_two_layer_error_envelope,
@@ -303,12 +304,11 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
             message=exc.message,
             data=build_two_layer_error_envelope(exc),
         )
-    # Untyped: fixed phrase only — class defaults map INTERNAL_ERROR →
-    # SERVICE_UNAVAILABLE with recovery=transient on the envelope.
+    # Untyped: fixed phrase via typed SERVICE_UNAVAILABLE (not base AdCPError).
     fixed = f"{operation} failed"
     return InternalError(
         message=fixed,
-        data=build_two_layer_error_envelope(AdCPError(message=fixed)),
+        data=build_two_layer_error_envelope(AdCPServiceUnavailableError(message=fixed)),
     )
 
 
@@ -498,7 +498,7 @@ class AdCPRequestHandler(RequestHandler):
             # Underscore→space is the wire phrase; keep op ids underscore-replaceable.
             # Delegate to ``_internal_error_for`` (typed + untyped); never interpolate
             # ``str(exc)`` / SQL (do not hand-write error_code=/recovery=).
-            raise _internal_error_for(operation.replace("_", " "), e) from e
+            raise _internal_error_for(_wire_phrase(operation), e) from e
 
     def _log_a2a_operation(
         self,
@@ -1143,7 +1143,7 @@ class AdCPRequestHandler(RequestHandler):
             # Raise A2A error — ``_internal_error_for`` keeps SQL out of the
             # client-facing InternalError message/envelope (do not attach a
             # normalize_to_adcp_error artifact on this raising path).
-            raise _internal_error_for("message processing", e)
+            raise _internal_error_for("message processing", e) from e
 
         self.tasks[task_id] = task
         return task
@@ -1214,6 +1214,31 @@ class AdCPRequestHandler(RequestHandler):
         data["task_id"] = safe_id
         return TaskNotFoundError(message=adcp_err.message, data=data)
 
+    def _deny_task_access(
+        self,
+        task_id: str,
+        operation: str,
+        identity: ResolvedIdentity,
+    ) -> NoReturn:
+        """Single denial path for unknown id and ownership miss (#1702).
+
+        Receives no branch discriminator — the wire, telemetry, and log must stay
+        symmetric (error-handling.mdx observability MUST).
+        """
+        safe_id = _safe_task_id_for_log(task_id)
+        adcp_err = AdCPTaskNotFoundError(message=_task_not_found_message(safe_id))
+        logger.warning(
+            "Task access denied on %s: task_id=%s caller tenant_id=%s principal_id=%s",
+            operation,
+            safe_id,
+            identity.tenant_id,
+            identity.principal_id,
+        )
+        record_boundary_error("a2a", operation, adcp_err)
+        data = build_two_layer_error_envelope(adcp_err)
+        data["task_id"] = safe_id
+        raise TaskNotFoundError(message=adcp_err.message, data=data)
+
     def _get_owned_in_memory_task_or_raise(
         self, task_id: str, context: ServerCallContext | None, *, operation: str
     ) -> Task:
@@ -1234,6 +1259,7 @@ class AdCPRequestHandler(RequestHandler):
         identity = self._authenticate(context, operation=operation)
 
         task = self.tasks.get(task_id)
+        stored_owner = self._task_owners.get(task_id)
         expected_owner = _TaskOwner(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
         # Bind the ownership compare before the ``if`` so it runs on every
         # call, not only when ``or`` short-circuits past it
@@ -1333,6 +1359,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         operation = "get_push_notification_config"
         tool_context = None
+        operation = "get_push_notification_config"
         try:
             identity = self._authenticate(context, operation=operation)
             tool_context = self._make_tool_context(identity, operation)
@@ -1406,6 +1433,7 @@ class AdCPRequestHandler(RequestHandler):
         # comments.
         operation = "set_push_notification_config"
         tool_context = None
+        operation = "set_push_notification_config"
         try:
             identity = self._authenticate(context, operation=operation)
             tool_context = self._make_tool_context(identity, operation)
@@ -1488,6 +1516,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         operation = "list_push_notification_configs"
         tool_context = None
+        operation = "list_push_notification_configs"
         try:
             identity = self._authenticate(context, operation=operation)
             tool_context = self._make_tool_context(identity, operation)
@@ -1544,6 +1573,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         operation = "delete_push_notification_config"
         tool_context = None
+        operation = "delete_push_notification_config"
         try:
             identity = self._authenticate(context, operation=operation)
             tool_context = self._make_tool_context(identity, operation)

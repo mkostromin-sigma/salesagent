@@ -90,6 +90,8 @@ class A2ATaskOwnershipEnv(IntegrationEnv):
             self.switch_tenant(tenant_id)
             self.switch_principal(principal_id)
             try:
+                self.switch_tenant(tenant_id)
+                self.switch_principal(principal_id)
                 identity = self.identity_for(Transport.A2A)
                 assert identity.auth_token, (
                     f"No access token resolved for role {role!r} ({tenant_id}/{principal_id}) — "

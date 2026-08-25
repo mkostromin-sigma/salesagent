@@ -1262,11 +1262,11 @@ class BaseTestEnv:
         # in-process object the gate just authorized. A v0.3-compat serializer
         # regression that emits the wrong status.state on the wire must redden
         # this, even while the in-process object stays correct (#1720 review).
-        from a2a.types import Task, TaskState, TaskStatus
+        from a2a.compat.v0_3 import conversions as v03_conversions
+        from a2a.compat.v0_3 import types as v03_types
 
         result = body["result"]
-        wire_state_name = "TASK_STATE_" + result["status"]["state"].upper()
-        task = Task(id=result["id"], status=TaskStatus(state=TaskState.Value(wire_state_name)))
+        task = v03_conversions.to_core_task(v03_types.Task.model_validate(result))
         self._last_a2a_task = task
         return task
 
@@ -1274,8 +1274,8 @@ class BaseTestEnv:
         self,
         task_id: str,
         *,
-        identity: ResolvedIdentity | None | _NoOverride = _NO_OVERRIDE,
-        state: TaskState | None = None,
+        identity: ResolvedIdentity | _NoOverride = _NO_OVERRIDE,
+        state: TaskState.ValueType | None = None,
         record_owner: bool = True,
     ) -> Task:
         """Seed an in-memory task owned by *identity* on the shared handler.
@@ -1299,8 +1299,13 @@ class BaseTestEnv:
         from tests.harness.transport import Transport
 
         owner = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
+        if record_owner and owner is None:
+            raise ValueError("seed_a2a_task with record_owner=True requires a ResolvedIdentity")
         handler = self.a2a_handler
-        task = Task(id=task_id, status=TaskStatus(state=state or TaskState.TASK_STATE_WORKING))
+        task = Task(
+            id=task_id,
+            status=TaskStatus(state=state if state is not None else TaskState.TASK_STATE_WORKING),
+        )
         handler.tasks[task_id] = task
         if record_owner:
             record_a2a_task_owner(

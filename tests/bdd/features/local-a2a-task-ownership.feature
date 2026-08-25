@@ -65,19 +65,22 @@ Feature: A2A in-memory task ownership for tasks/get and tasks/cancel (local)
   Scenario: A denied tasks/cancel does not mutate the owner's task
     When the "sibling" calls tasks/cancel for task "task-owned-1"
     Then the A2A task response should be a JSON-RPC task-not-found error for "task-owned-1"
-    And the stored task "task-owned-1" should be in state WORKING
+    When the "owner" calls tasks/get for task "task-owned-1"
+    Then the A2A task response should carry task "task-owned-1" in state WORKING
 
   @T-A2A-TASK-OWNERSHIP-other-tenant-cancel @a2a
   Scenario: A principal in another tenant is denied via tasks/cancel
     When the "other_tenant" calls tasks/cancel for task "task-owned-1"
     Then the A2A task response should be a JSON-RPC task-not-found error for "task-owned-1"
-    And the stored task "task-owned-1" should be in state WORKING
+    When the "owner" calls tasks/get for task "task-owned-1"
+    Then the A2A task response should carry task "task-owned-1" in state WORKING
 
   @T-A2A-TASK-OWNERSHIP-owner-cancel @a2a
   Scenario: The owner cancels their own task
     When the "owner" calls tasks/cancel for task "task-owned-1"
     Then the A2A task response should carry task "task-owned-1" in state CANCELED
-    And the stored task "task-owned-1" should be in state CANCELED
+    When the "owner" calls tasks/get for task "task-owned-1"
+    Then the A2A task response should carry task "task-owned-1" in state CANCELED
 
   @T-A2A-TASK-OWNERSHIP-no-owner-get @a2a
   Scenario: A task present without an owner record is denied as not-found
