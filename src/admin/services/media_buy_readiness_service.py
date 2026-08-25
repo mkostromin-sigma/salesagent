@@ -128,7 +128,11 @@ class MediaBuyReadinessService:
                 )
                 creatives = list(session.scalars(creatives_stmt).all())
 
-            creatives_approved = sum(1 for c in creatives if c.status == "approved")
+            # Same ready vocabulary as the shared #1696 finalize gate
+            # (FINALIZE_READY_CREATIVE_STATUSES = approved + legacy active).
+            from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
+
+            creatives_approved = sum(1 for c in creatives if c.status in FINALIZE_READY_CREATIVE_STATUSES)
             creatives_pending = sum(1 for c in creatives if c.status == "pending_review")
             creatives_rejected = sum(1 for c in creatives if c.status == "rejected")
 

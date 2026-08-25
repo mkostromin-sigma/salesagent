@@ -1407,7 +1407,7 @@ def execute_approved_media_buy(
 
         # After successful adapter execution, persist flight-window ORM status
         # (active / scheduled / completed). Hardcoding "active" clobbered future-start
-        # buys that the ready arm already set to "scheduled" (#1696 / UC-002:437).
+        # buys that the ready arm already set to "pending_start" / "active" (#1696 / UC-002:437).
         from src.services.media_buy_creative_readiness import (
             compute_media_buy_status_from_flight_dates,
         )

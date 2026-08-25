@@ -327,7 +327,7 @@ class TestCreateMediaBuyManualApproval:
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-08
         Integration equivalent of unit xfail test_execute_approved_calls_adapter.
         Verifies that execute_approved_media_buy persists flight-window status
-        (UC-002:437 / #1696). Default create request starts in +1d → scheduled.
+        (UC-002:437 / #1696). Default create request starts in +1d → pending_start.
         """
         from src.core.tools._media_buy_status import resolve_canonical_status
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -360,8 +360,8 @@ class TestCreateMediaBuyManualApproval:
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None
-            assert mb.status == "scheduled", (
-                f"Status should be 'scheduled' for future-start after approval, got {mb.status}"
+            assert mb.status == "pending_start", (
+                f"Status should be 'pending_start' for future-start after approval, got {mb.status}"
             )
 
 

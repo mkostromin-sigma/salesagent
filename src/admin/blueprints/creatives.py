@@ -53,7 +53,9 @@ from src.services.media_buy_creative_readiness import finalize_media_buy_after_c
 logger = logging.getLogger(__name__)
 
 # Buy statuses where the order is live in the ad server (retroactive creative push, #1038)
-_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "scheduled", "paused"})
+# Include pending_start (pre-flight after approve) so retroactive push still
+# matches buys this PR parks before flight; keep legacy "scheduled" rows.
+_LIVE_BUY_STATUSES: frozenset[str] = frozenset({"active", "pending_start", "scheduled", "paused"})
 
 # Create Blueprint
 creatives_bp = Blueprint("creatives", __name__)
@@ -583,11 +585,14 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         # Execute adapter creation for unblocked media buys
         for action in media_buy_actions:
-            finalize_media_buy_after_creative_approval(
+            outcome = finalize_media_buy_after_creative_approval(
                 action["media_buy_id"],
                 tenant_id,
                 approved_by=user_email,
             )
+            if outcome.kind == "adapter_failed":
+                buy_id = action["media_buy_id"]
+                push_warnings.append(f"Adapter creation for buy {buy_id} failed — see server logs for details")
 
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are

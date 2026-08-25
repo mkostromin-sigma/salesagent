@@ -192,7 +192,7 @@ class TestApplyCreativeFinalizeReady:
         apply_creative_finalize_ready(media_buy, approved_by="op@example.com")
         assert media_buy.approved_by == "op@example.com"
         assert isinstance(media_buy.approved_at, datetime)
-        assert media_buy.status == "scheduled"
+        assert media_buy.status == "pending_start"
 
 
 class TestStampMediaBuyApproval:
@@ -466,21 +466,22 @@ class TestCoerceFlightBoundary:
 
 
 class TestComputeMediaBuyStatusFromFlightDates:
-    def test_completed_when_past_end(self):
+    def test_active_when_past_end(self):
+        """Past end stays active; wire refine to completed via resolve_canonical_status."""
         mb = MagicMock()
         mb.start_time = datetime.now(UTC) - timedelta(days=10)
         mb.end_time = datetime.now(UTC) - timedelta(days=1)
         mb.start_date = None
         mb.end_date = None
-        assert compute_media_buy_status_from_flight_dates(mb) == "completed"
+        assert compute_media_buy_status_from_flight_dates(mb) == "active"
 
-    def test_scheduled_when_before_start(self):
+    def test_pending_start_when_before_start(self):
         mb = MagicMock()
         mb.start_time = datetime.now(UTC) + timedelta(days=2)
         mb.end_time = datetime.now(UTC) + timedelta(days=10)
         mb.start_date = None
         mb.end_date = None
-        assert compute_media_buy_status_from_flight_dates(mb) == "scheduled"
+        assert compute_media_buy_status_from_flight_dates(mb) == "pending_start"
 
     def test_date_columns_via_coerce(self):
         mb = MagicMock()
@@ -488,7 +489,7 @@ class TestComputeMediaBuyStatusFromFlightDates:
         mb.end_time = None
         mb.start_date = (datetime.now(UTC) + timedelta(days=2)).date()
         mb.end_date = (datetime.now(UTC) + timedelta(days=10)).date()
-        assert compute_media_buy_status_from_flight_dates(mb) == "scheduled"
+        assert compute_media_buy_status_from_flight_dates(mb) == "pending_start"
 
     def test_active_when_in_window(self):
         mb = MagicMock()
@@ -507,11 +508,11 @@ class TestComputeMediaBuyStatusFromFlightDates:
         mb.end_date = None
         assert compute_media_buy_status_from_flight_dates(mb) == "active"
 
-    def test_scheduled_when_only_start_in_future(self):
-        """Single-boundary: future start_time alone → scheduled."""
+    def test_pending_start_when_only_start_in_future(self):
+        """Single-boundary: future start_time alone → pending_start."""
         mb = MagicMock()
         mb.start_time = datetime.now(UTC) + timedelta(days=2)
         mb.end_time = None
         mb.start_date = None
         mb.end_date = None
-        assert compute_media_buy_status_from_flight_dates(mb) == "scheduled"
+        assert compute_media_buy_status_from_flight_dates(mb) == "pending_start"

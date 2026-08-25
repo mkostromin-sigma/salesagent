@@ -312,7 +312,14 @@ def _coerce_flight_boundary(
 
 
 def compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
-    """Compute post-approve status from flight window: active / scheduled / completed."""
+    """Compute post-approve *persisted* status from the flight window.
+
+    Returns AdCP 3.1.1 lifecycle tokens that ``MEDIA_BUY_STATE_MACHINE`` /
+    ``valid_actions_for_status`` understand: ``pending_start`` before flight,
+    ``active`` in flight. Past end-of-flight stays ``active`` here — the wire
+    refines to ``completed`` via ``resolve_canonical_status``; persisting
+    ``completed`` (or legacy ``scheduled``) would skip the update-path gate.
+    """
     now = datetime.now(UTC)
 
     # MediaBuy annotates start_date/end_date as Mapped[Date] (SQLAlchemy type), not
@@ -329,14 +336,10 @@ def compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
     )
 
     if start_time and end_time:
-        if now > end_time:
-            return "completed"
         if now >= start_time:
             return "active"
-        return "scheduled"
+        return "pending_start"
 
     if start_time and now < start_time:
-        return "scheduled"
-    if end_time and now > end_time:
-        return "completed"
+        return "pending_start"
     return "active"

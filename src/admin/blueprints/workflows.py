@@ -200,6 +200,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # operations; this route is the jsonify transport tail.
                     from src.admin.services.media_buy_creative_readiness import (
                         flash_creative_finalize_hold,
+                        flash_media_buy_adapter_failure,
                     )
                     from src.services.media_buy_creative_readiness import (
                         finalize_media_buy_approval,
@@ -208,12 +209,16 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     outcome = finalize_media_buy_approval(db, tenant_id, media_buy, approved_by=user_email)
                     if outcome.kind == "held":
                         flash_creative_finalize_hold(outcome.hold_message)
-                        return jsonify({"success": True}), 200
+                        return jsonify(
+                            {
+                                "success": True,
+                                "held": True,
+                                "hold_reason": outcome.hold_reason,
+                                "message": outcome.hold_message,
+                            }
+                        ), 200
                     if outcome.kind == "adapter_failed":
-                        flash(
-                            f"Workflow approved but media buy creation failed: {outcome.error_msg}",
-                            "error",
-                        )
+                        flash_media_buy_adapter_failure(outcome.error_msg)
                         return jsonify({"success": False, "error": outcome.error_msg}), 500
 
                     flash("Workflow step approved and media buy created successfully", "success")

@@ -414,6 +414,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # → commit → execute → rollback. Transport only below.
                     from src.admin.services.media_buy_creative_readiness import (
                         flash_creative_finalize_hold,
+                        flash_media_buy_adapter_failure,
                     )
                     from src.services.media_buy_creative_readiness import (
                         finalize_media_buy_approval,
@@ -426,10 +427,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
                     if outcome.kind == "adapter_failed":
-                        flash(
-                            f"Media buy approved but adapter creation failed: {outcome.error_msg}",
-                            "error",
-                        )
+                        flash_media_buy_adapter_failure(outcome.error_msg)
                         return redirect(
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
