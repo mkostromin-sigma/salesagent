@@ -304,8 +304,13 @@ class TestGetFormat:
         ):
             from src.core.format_resolver import get_format
 
-            with pytest.raises(AdCPFormatNotFoundError, match="Reference not found"):
+            with pytest.raises(AdCPFormatNotFoundError, match="Reference not found") as exc_info:
                 get_format("display_300x250", tenant_id="t1")
+            assert_format_not_found_uniform(
+                exc_info.value,
+                field=None,
+                forbidden_substrings=["display_300x250", "t1"],
+            )
 
     def test_not_found_error_is_generic_with_agent_url(self):
         """AdCPFormatNotFoundError message stays generic even when agent_url provided.

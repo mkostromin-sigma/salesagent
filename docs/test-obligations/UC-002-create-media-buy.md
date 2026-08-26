@@ -1000,7 +1000,7 @@ Source: UC-002-ext-h.md
 **When** the system validates format IDs
 **Then** it returns wire error `REFERENCE_NOT_FOUND` with generic message `"Reference not found"` (uniform response — no `format_id` / `agent_url` in message or details)
 **And** `error.field` names the `packages[i].format_ids[j]` path
-**Note:** Same create wiring (#1962). Uniform raise + wire envelope graded via `tests/unit/test_format_not_found_uniform_sites.py` (Covers: UC-002-EXT-H-03), `test_format_not_found_on_agent`, and the UC-021 binder for the preview path.
+**Note:** Same create wiring (#1962). Graded on the create path by `test_format_not_found_on_agent` (integration, `env.call_impl`) and unit uniform-site oracles. UC-021 preview harness is **not** a grader for this obligation (no `_detect_uc` arm / no preview_creative tool in-repo — feature contract text only).
 **Priority:** P1
 
 #### Scenario: FormatId Object Missing Required Fields

@@ -1661,26 +1661,52 @@ class TestExtensionObligations:
             assert exc_info.value.error_code == "AUTH_REQUIRED"
             assert exc_info.value.field == "packages[0].format_ids[0]"
             assert exc_info.value.suggestion
-            assert "inventory" not in str(exc_info.value).lower()
+            assert "Registered agents" not in str(exc_info.value)
 
-    @pytest.mark.asyncio
-    async def test_format_not_found_on_agent(self):
-        """Helper raises typed format miss with generic message and indexed field path.
+    def test_format_not_found_on_agent(self, integration_db):
+        """Create path raises typed format miss when format absent on registered agent.
 
-        Covers: UC-002-EXT-H-03 (uniform raise site; create wiring #1962 also
-        routes request format_ids through this helper).
+        Covers: UC-002-EXT-H-03 — grades the live ``_create_media_buy_impl`` wiring
+        (#1962), not a stand-alone helper mock.
         """
-        from tests.helpers.format_not_found_assertions import (
-            assert_format_not_found_uniform,
-            raise_format_not_found_from_validate_helper,
+        from unittest.mock import AsyncMock, patch
+
+        from src.core.exceptions import AdCPFormatNotFoundError
+        from tests.helpers.format_not_found_assertions import assert_format_not_found_uniform
+
+        agent_url = "https://creative.adcontextprotocol.org"
+        missing_id = "nonexistent_format_zzz"
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "format_ids": [{"agent_url": agent_url, "id": missing_id}],
+                }
+            ]
         )
 
-        exc = await raise_format_not_found_from_validate_helper()
-        assert_format_not_found_uniform(
-            exc,
-            field="packages[0].format_ids[0]",
-            forbidden_substrings=["nonexistent_format", "creative.example.com"],
-        )
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            # Product must list the same format key so product-support check is not
+            # the first failure; registry miss is what we grade.
+            env.setup_product_chain(
+                tenant,
+                format_ids=[{"agent_url": agent_url, "id": missing_id}],
+            )
+            with patch(
+                "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
+                new=AsyncMock(return_value=None),
+            ):
+                with pytest.raises(AdCPFormatNotFoundError) as exc_info:
+                    env.call_impl(req=req)
+
+            assert_format_not_found_uniform(
+                exc_info.value,
+                field="packages[0].format_ids[0]",
+                forbidden_substrings=[missing_id, "creative.adcontextprotocol.org"],
+            )
 
     @pytest.mark.asyncio
     async def test_authentication_always_required(self):

@@ -655,6 +655,28 @@ def given_package_format_id_unregistered_agent(ctx: dict) -> None:
     pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]
 
 
+@given(parsers.parse("a package format_id references an unknown format on a registered agent"))
+def given_package_format_id_unknown_on_registered_agent(ctx: dict) -> None:
+    """Set FormatId for the default registered agent with an id that does not exist.
+
+    Wired via ``_validate_and_convert_format_ids`` (#1962 / UC-002-EXT-H-03):
+    registered agent + unknown id → AdCPFormatNotFoundError / wire REFERENCE_NOT_FOUND
+    with generic message. Patches registry.get_format → None so the scenario does not
+    depend on live creative-agent network.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    pkg = _first_package(ctx)
+    pkg["format_ids"] = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format_999"}]
+    # Keep patch for the When via conftest ``_patchers`` teardown (same as UC-019).
+    patcher = patch(
+        "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
+        new=AsyncMock(return_value=None),
+    )
+    patcher.start()
+    ctx.setdefault("_patchers", []).append(patcher)
+
+
 @given(parsers.parse('a package has two catalogs both with type "{catalog_type}"'))
 def given_package_duplicate_catalog_types(ctx: dict, catalog_type: str) -> None:
     """Attach two catalogs of the same type to one package.

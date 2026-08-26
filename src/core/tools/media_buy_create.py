@@ -2444,6 +2444,7 @@ async def _create_media_buy_impl(
 
     try:
         # Validate input parameters
+        validated_request_format_ids: dict[int, list[dict[str, str]]] = {}
         # 1. Budget validation (shared validator)
         total_budget = req.get_total_budget()
         budget_err = validate_budget_positive(total_budget, field=package_field_path("budget"))
@@ -2905,10 +2906,13 @@ async def _create_media_buy_impl(
         # FormatId shape, registered creative agent, and format existence on agent.
         # Runs only when the buyer supplies package.format_ids (product fallback
         # formats are publisher-configured and checked later against the catalog).
+        # Keep the returned normalized FormatId dicts — the helper's conversion
+        # (rstrip + normalize_agent_url) must reach format_ids_to_use below.
+        validated_request_format_ids = {}
         if req.packages:
             for package_idx, pkg in enumerate(req.packages):
                 if pkg.format_ids:
-                    await _validate_and_convert_format_ids(
+                    validated_request_format_ids[package_idx] = await _validate_and_convert_format_ids(
                         format_ids=list(pkg.format_ids),
                         tenant_id=tenant["tenant_id"],
                         package_idx=package_idx,
@@ -3537,6 +3541,8 @@ async def _create_media_buy_impl(
 
             # Use format_ids from request package if provided
             matching_package = pkg  # The package we're iterating over
+            # 0-based index matches early _validate_and_convert_format_ids call
+            validated_fmts = validated_request_format_ids.get(idx - 1)
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
@@ -3549,11 +3555,16 @@ async def _create_media_buy_impl(
                         normalized_url = str(agent_url).rstrip("/") if agent_url else None
                         product_format_keys.add((normalized_url, fmt.id))
 
-                # Build set of requested format keys for comparison
+                # Build set of requested format keys for comparison.
+                # Prefer helper-normalized agent_url when the early gate ran.
                 requested_format_keys: set[tuple[str | None, str]] = set()
-                for fmt in matching_package.format_ids:
-                    normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
-                    requested_format_keys.add((normalized_url, fmt.id))
+                if validated_fmts:
+                    for v in validated_fmts:
+                        requested_format_keys.add((v["agent_url"].rstrip("/"), v["id"]))
+                else:
+                    for fmt in matching_package.format_ids:
+                        normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
+                        requested_format_keys.add((normalized_url, fmt.id))
 
                 def format_display(url: str | None, fid: str) -> str:
                     """Format a (url, id) pair for display, handling trailing slashes."""
@@ -3629,16 +3640,24 @@ async def _create_media_buy_impl(
                                 fmt.duration_ms,
                             )
 
-                # Process request format_ids, merging dimensions from product if missing
-                for req_fmt in matching_package.format_ids:
-                    normalized_url = str(req_fmt.agent_url).rstrip("/") if req_fmt.agent_url else None
+                # Process request format_ids, merging dimensions from product if missing.
+                # agent_url/id come from the early validate-and-convert result when present
+                # so normalization is not discarded.
+                for fmt_i, req_fmt in enumerate(matching_package.format_ids):
+                    if validated_fmts and fmt_i < len(validated_fmts):
+                        use_agent_url = validated_fmts[fmt_i]["agent_url"]
+                        use_id = validated_fmts[fmt_i]["id"]
+                    else:
+                        use_agent_url = req_fmt.agent_url
+                        use_id = req_fmt.id
+                    normalized_url = str(use_agent_url).rstrip("/") if use_agent_url else None
                     # Check if request format has dimensions
                     if req_fmt.width is not None and req_fmt.height is not None:
                         # Request has dimensions, convert to our FormatId type
                         format_ids_to_use.append(
                             FormatId(
-                                agent_url=req_fmt.agent_url,
-                                id=req_fmt.id,
+                                agent_url=use_agent_url,
+                                id=use_id,
                                 width=req_fmt.width,
                                 height=req_fmt.height,
                                 duration_ms=req_fmt.duration_ms,
@@ -3646,13 +3665,13 @@ async def _create_media_buy_impl(
                         )
                     else:
                         # Try to get dimensions from product's format_ids
-                        product_dims = product_format_dimensions.get((normalized_url, req_fmt.id))
+                        product_dims = product_format_dimensions.get((normalized_url, use_id))
                         if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
                             # Merge dimensions from product
                             format_ids_to_use.append(
                                 FormatId(
-                                    agent_url=req_fmt.agent_url,
-                                    id=req_fmt.id,
+                                    agent_url=use_agent_url,
+                                    id=use_id,
                                     width=product_dims[0],
                                     height=product_dims[1],
                                     duration_ms=product_dims[2] if product_dims[2] is not None else req_fmt.duration_ms,
@@ -3663,8 +3682,8 @@ async def _create_media_buy_impl(
                             # GAM adapter will try regex extraction from format_id string
                             format_ids_to_use.append(
                                 FormatId(
-                                    agent_url=req_fmt.agent_url,
-                                    id=req_fmt.id,
+                                    agent_url=use_agent_url,
+                                    id=use_id,
                                     width=req_fmt.width,
                                     height=req_fmt.height,
                                     duration_ms=req_fmt.duration_ms,
