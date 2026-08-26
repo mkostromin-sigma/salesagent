@@ -282,7 +282,7 @@ def assert_task_not_found_nondisclosure(
 
     Expected message is a hand-written literal (never derived from production
     ``_task_not_found_message`` — both sides would move together). Sanitizer
-    treatment matches ``_task_not_found`` so control-character ids stay joined.
+    treatment matches ``_task_not_found_error`` so control-character ids stay joined.
     """
     safe_id = _safe_id_for_log(task_id)
     assert exc.message == f"Task not found: {safe_id}"

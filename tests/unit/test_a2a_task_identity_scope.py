@@ -306,7 +306,7 @@ async def test_sibling_principal_denied_same_as_unknown(request_cls, method_name
 async def test_auth_infra_failure_is_internal_error_not_task_not_found(method_name, wire_message):
     """DB/infra failure during identity resolve must not collapse to TaskNotFoundError.
 
-    Mutating the ``_authenticate`` except branch back to ``_task_not_found`` must
+    Mutating the ``_authenticate`` except branch back to ``_task_not_found_error`` must
     redden this test: buyers see a fixed human-phrase InternalError, not not-found.
     Also pins ``operation.replace("_", " ")`` as the buyer-facing phrase for the
     four push-config methods (same ``_authenticate`` seam).
@@ -595,7 +595,7 @@ async def test_owner_row_without_task_is_not_found(request_cls, method_name):
     "request_cls, method_name",
     [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
 )
-async def test_ownership_lookup_hoist_runs_once_on_unknown_id(request_cls, method_name):
+async def test_ownership_lookup_is_unconditional_on_unknown_id(request_cls, method_name):
     """Unknown-id path must call ``_task_owners.get`` at least once (no existence oracle)."""
 
     class _CountingDict(dict):

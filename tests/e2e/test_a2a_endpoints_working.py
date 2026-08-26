@@ -316,7 +316,7 @@ class TestA2ARequestHandler:
 
         Fast smoke check on the raise only. It does NOT prove the wire code: the
         exception carries no code, and the client actually sees -32603 — see
-        ``_task_not_found`` (src/a2a_server/adcp_a2a_server.py)
+        ``_task_not_found_error`` (src/a2a_server/adcp_a2a_server.py)
         and #1670 for why, plus the xfail'd live-server test in
         TestA2AServerIntegration that grades the code on the wire. Assert on
         str(exc), not exc.code — there is none.
@@ -433,7 +433,7 @@ class TestA2AServerIntegration:
         locked in when #1670 lands.
 
         STRICT xfail against #1670: the code is -32603 today, not the spec's
-        -32001 — see ``_task_not_found``
+        -32001 — see ``_task_not_found_error``
         (src/a2a_server/adcp_a2a_server.py) and #1670 for the
         enable_v0_3_compat dispatch path that flattens it. Both
         `tasks/get` and `tasks/cancel` reach that path, so both are -32603 today
