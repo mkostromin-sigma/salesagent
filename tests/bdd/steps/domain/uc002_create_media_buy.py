@@ -661,14 +661,24 @@ def given_package_format_id_unknown_on_registered_agent(ctx: dict) -> None:
 
     Wired via ``_validate_and_convert_format_ids`` (#1962 / UC-002-EXT-H-03):
     registered agent + unknown id → AdCPFormatNotFoundError / wire REFERENCE_NOT_FOUND
-    with generic message. Patches registry.get_format → None so the scenario does not
-    depend on live creative-agent network.
+    with generic message.
+
+    Use ``CreativeAgentRegistry.DEFAULT_AGENT.agent_url`` (honours ``CREATIVE_AGENT_URL``)
+    so e2e_rest matches the Docker creative-agent pin — hardcoding the public host
+    yields AUTH_REQUIRED because that URL is not the in-network default.
+
+    In-process transports: patch ``get_format`` → None (no network). e2e_rest: the
+    patch cannot cross the HTTP boundary; the pinned creative-agent simply has no
+    ``nonexistent_format_999`` entry, so the server still emits REFERENCE_NOT_FOUND.
     """
     from unittest.mock import AsyncMock, patch
 
+    from src.core.creative_agent_registry import CreativeAgentRegistry
+
     pkg = _first_package(ctx)
-    pkg["format_ids"] = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format_999"}]
-    # Keep patch for the When via conftest ``_patchers`` teardown (same as UC-019).
+    agent_url = str(CreativeAgentRegistry.DEFAULT_AGENT.agent_url)
+    pkg["format_ids"] = [{"agent_url": agent_url, "id": "nonexistent_format_999"}]
+    # Keep patch for in-process When via conftest ``_patchers`` teardown (UC-019).
     patcher = patch(
         "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
         new=AsyncMock(return_value=None),
