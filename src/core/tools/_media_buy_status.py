@@ -13,7 +13,7 @@ delivery-only terminal ``failed``::
     pending_creatives, pending_start, active, paused, completed,
     rejected, canceled, failed
 
-(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.0-beta.3.)
+(``get-media-buy-delivery-response.json`` status enum; repo pins AdCP 3.1.1.)
 The two callers adapt this single result to their own surface:
 
 - ``get_media_buy_delivery`` uses the canonical string directly and overlays
@@ -32,9 +32,9 @@ request's *end_date* (``media_buy_delivery.py``) — current-state vs
 period-scoped. So for a serving buy near its flight boundary the two may
 legitimately report different date-refined statuses; the mapping is identical,
 the reference date is the buyer-visible difference. Under ``mock_time``
-(``X-Mock-Time``) both tools share that clock and pass ``simulate=True`` so
-non-terminal persisted states refine against the mock date. ``jump_to_event``
-remains delivery-only.
+(``X-Mock-Time``) both tools share the controllable clock for *today* /
+filtering; status date-refinement under mock_time is delivery-only via
+``jump_to_event`` / ``simulate=True`` there.
 """
 
 from __future__ import annotations

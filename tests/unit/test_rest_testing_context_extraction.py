@@ -121,10 +121,10 @@ class TestMediaBuyListHonorsMockTime:
             _get_media_buys_impl(GetMediaBuysRequest(), identity=identity)
 
         assert captured["today"] == date(2026, 3, 15)
-        assert captured["simulate"] is True
+        assert captured["simulate"] is False
 
-    def test_list_pending_creatives_past_flight_matches_simulate_true(self):
-        """Under mock_time, list status agrees with resolve_canonical_status(simulate=True)."""
+    def test_list_pending_creatives_past_flight_keeps_simulate_false_under_mock_time(self):
+        """#1830: mock_time moves today only; persisted status stays unrefined on list."""
         buy = SimpleNamespace(
             status="pending_creatives",
             start_date=date(2025, 1, 1),
@@ -237,12 +237,15 @@ class TestResolveNowSharedClock:
         after = datetime.now(UTC)
         assert before <= got <= after
 
-    def test_reference_today_delegates_to_resolve_now(self):
-        from src.core.testing_hooks import reference_today, resolve_now
+    def test_resolve_clock_mock_time_is_clock_only(self):
+        from src.core.testing_hooks import resolve_clock, resolve_now
 
         mock_time = datetime(2026, 3, 15, 12, 0, 0, tzinfo=UTC)
         tc = AdCPTestContext(mock_time=mock_time)
-        assert reference_today(tc) == resolve_now(tc).date() == date(2026, 3, 15)
+        clock, simulate = resolve_clock(tc)
+        assert clock == resolve_now(tc) == mock_time
+        assert simulate is False
+        assert clock.date() == date(2026, 3, 15)
 
 
 class TestResolveIdentityFromContextUsesHeaders:
@@ -341,12 +344,14 @@ class TestHarnessRealTokenAppliesTestingHookHeaders:
             testing_context=AdCPTestContext(mock_time=mock_time),
         )
 
+        captured: dict[str, object] = {}
+
         class _FakeToolResult:
             structured_content = {"media_buys": []}
 
         class _FakeClient:
             def __init__(self, *args, **kwargs):
-                pass
+                self._kwargs = kwargs
 
             async def __aenter__(self):
                 return self
@@ -368,7 +373,9 @@ class TestHarnessRealTokenAppliesTestingHookHeaders:
             try:
                 env._run_mcp_client("get_media_buys", GetMediaBuysResponse, identity=identity)
             except Exception:
-                # Fake Client skips the real auth chain assert — preamble is enough.
                 pass
 
         assert spy.called, "real-token MCP path must call apply_testing_hook_headers"
+        call = spy.call_args
+        headers = call.args[0] if call.args else call.kwargs.get("headers") or {}
+        assert headers.get("x-mock-time") == "2026-03-15T12:00:00Z", headers

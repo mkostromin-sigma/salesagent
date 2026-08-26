@@ -84,13 +84,15 @@ def _resolve_rest_identity(auth_ctx: AuthContext, *, require_valid_token: bool) 
         testing_context=AdCPTestContext.from_headers(headers),
     )
 
-    # Set tenant ContextVar at the REST transport boundary
+    return identity
+
+
+def _set_tenant_from_identity(identity: "ResolvedIdentity") -> None:
+    """Pin tenant ContextVar only after auth gates pass."""
     if identity.tenant:
         from src.core.config_loader import set_current_tenant
 
         set_current_tenant(identity.tenant)
-
-    return identity
 
 
 def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
@@ -105,6 +107,7 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     identity = _resolve_rest_identity(auth_ctx, require_valid_token=False)
     if not identity.principal_id:
         return None
+    _set_tenant_from_identity(identity)
     return identity
 
 
@@ -125,6 +128,7 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     identity = _resolve_rest_identity(auth_ctx, require_valid_token=True)
     if not identity.principal_id:
         raise AdCPAuthRequiredError("Authentication required", suggestion=AUTH_REQUIRED_SUGGESTION)
+    _set_tenant_from_identity(identity)
     return identity
 
 

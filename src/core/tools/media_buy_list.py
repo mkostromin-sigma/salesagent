@@ -197,12 +197,12 @@ def _get_media_buys_impl(
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
     # if no tenant resolved (the principal advisories above take precedence).
     tenant = require_tenant(identity, context=req.context)
-    # Shared mock/wall clock with delivery / apply_testing_hooks (resolve_now).
+    # Shared mock/wall clock with delivery / apply_testing_hooks (resolve_clock).
     # jump_to_event stays buy-scoped in delivery's _simulation_clock.
-    from src.core.testing_hooks import resolve_now
+    from src.core.testing_hooks import resolve_clock
 
-    today = resolve_now(testing_ctx).date()
-    simulate = testing_ctx is not None and testing_ctx.mock_time is not None
+    today = resolve_clock(testing_ctx)[0].date()
+    simulate = False
     tenant_id: str = tenant["tenant_id"]
 
     # Every non-fatal per-row advisory lands here — a degraded optional field and an

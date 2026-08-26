@@ -2478,23 +2478,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
 
         # --- UC-019: HTTP transport xfails for auth suggestion mismatch ---
-        # impl/a2a/mcp graduated (kb7y); REST/e2e_rest suggestion string differs
-        # from spec ("authenticate" vs "authentication").
-        if (is_rest or is_e2e_rest) and "T-UC-019-ext-a" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
-                    strict=False,
-                )
-            )
-        if (is_rest or is_e2e_rest) and "T-UC-019-partition-principal-invalid" in marker_names:
-            if "identity_missing" in nodeid:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
-                        strict=False,
-                    )
-                )
+        # T-UC-019-ext-a graduated: REST/A2A both emit AUTH_REQUIRED_SUGGESTION
+        # ("Provide valid credentials…") — see exceptions.py AUTH_REQUIRED_SUGGESTION.
 
         # --- UC-019: parametrization-specific xfails for partially-passing scenarios ---
         # These scenario outlines have some parametrizations that pass (graduated)

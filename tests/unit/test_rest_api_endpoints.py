@@ -161,8 +161,14 @@ class TestGetMediaBuysQueryEndpoint:
             headers={"Authorization": "Bearer test-token"},
         )
         assert response.status_code == 200, response.text
-        assert mock_raw.call_args.kwargs["media_buy_ids"] == ["mb1"]
-        assert mock_raw.call_args.kwargs["status_filter"] == "active"
+        mock_raw.assert_called_once_with(
+            media_buy_ids=["mb1"],
+            status_filter="active",
+            include_snapshot=False,
+            account=None,
+            context=None,
+            identity=_MOCK_IDENTITY,
+        )
 
 
 class TestGetMediaBuyDeliveryEndpoint:

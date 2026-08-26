@@ -15,7 +15,7 @@ This module handles all testing headers and provides isolated test execution:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -100,15 +100,6 @@ class AdCPTestContext(BaseModel):
         per-comparator.
         """
         return _ensure_aware(v) if v is not None else v
-
-    def reference_today(self) -> date:
-        """UTC calendar date used for flight-window refinement under testing hooks.
-
-        Delegates to module-level :func:`resolve_now` so list, delivery, and
-        ``apply_testing_hooks`` share one mock/wall clock. Delivery still uses
-        ``_simulation_clock`` for buy-scoped ``jump_to_event``.
-        """
-        return resolve_now(self).date()
 
     @classmethod
     def from_headers(cls, headers: dict[str, str]) -> "AdCPTestContext | None":
@@ -231,20 +222,21 @@ def resolve_now(testing_ctx: AdCPTestContext | None) -> datetime:
 
     Single source for the non-buy-scoped clock. ``jump_to_event`` stays
     buy-scoped in delivery's ``_simulation_clock`` (needs flight windows).
-    Callers that only need a calendar date use :func:`reference_today`.
     """
     if testing_ctx is not None and testing_ctx.mock_time is not None:
         return testing_ctx.mock_time
     return datetime.now(UTC)
 
 
-def reference_today(testing_ctx: AdCPTestContext | None) -> date:
-    """Mock/wall UTC date for list-style status refinement.
+def resolve_clock(testing_ctx: AdCPTestContext | None) -> tuple[datetime, bool]:
+    """Effective (clock, simulate) for list-style reads under testing hooks.
 
-    ``resolve_now(testing_ctx).date()`` — same clock as delivery's mock_time
-    branch and ``apply_testing_hooks`` progress math.
+    ``mock_time`` supplies the controllable clock only (``simulate=False``):
+    #1830 needs date refinement for filtering without flipping persisted
+    status on live servers. ``jump_to_event`` simulation stays delivery-only
+    via ``_simulation_clock``.
     """
-    return resolve_now(testing_ctx).date()
+    return resolve_now(testing_ctx), False
 
 
 class NextEventCalculator:

@@ -493,7 +493,6 @@ class BaseTestEnv:
 
         protocol = TRANSPORT_PROTOCOL[transport]
         if protocol not in self._identity_cache:
-            from src.core.testing_hooks import AdCPTestContext
             from tests.factories.principal import PrincipalFactory
 
             # In integration mode, commit factory data first so the token
@@ -510,10 +509,7 @@ class BaseTestEnv:
                 protocol=protocol,
                 dry_run=self._dry_run,
                 auth_token=auth_token,
-                testing_context=AdCPTestContext(
-                    dry_run=self._dry_run,
-                    mock_time=self._mock_time,
-                ),
+                mock_time=self._mock_time,
                 **self._tenant_overrides,
             )
         return self._identity_cache[protocol]
@@ -539,6 +535,17 @@ class BaseTestEnv:
         ).first()
         return token
 
+    def _invalidate_identity(self) -> None:
+        """Drop cached identities so the next access re-stamps from env fields.
+
+        All public writers (``switch_principal``, ``switch_tenant``,
+        ``set_mock_time``) call this — never poke ``_identity_cache`` /
+        ``__dict__["_identity"]`` from step functions.
+        """
+        self._identity_cache.clear()
+        if "_identity" in self.__dict__:
+            del self.__dict__["_identity"]
+
     def switch_principal(self, principal_id: str) -> None:
         """Re-point the env at *principal_id*, clearing cached identity.
 
@@ -549,8 +556,8 @@ class BaseTestEnv:
         picking up a principal row committed after the env was created (in
         integration mode this re-runs the auth-token lookup).
         """
-        self._identity_cache.clear()
         self._principal_id = principal_id
+        self._invalidate_identity()
 
     def switch_tenant(self, tenant_id: str) -> None:
         """Re-point the env at *tenant_id*, clearing cached identity.
@@ -561,8 +568,8 @@ class BaseTestEnv:
         Clearing the cache forces the next identity build to resolve the auth
         token against the new tenant's principal rows.
         """
-        self._identity_cache.clear()
         self._tenant_id = tenant_id
+        self._invalidate_identity()
 
     @property
     def mock_time(self) -> datetime | None:
@@ -575,11 +582,14 @@ class BaseTestEnv:
         Public mutator for Given ``today is …``: steps must not poke
         ``_mock_time`` / ``_identity_cache`` / ``__dict__["_identity"]``.
         ``identity_for`` rebuilds ``AdCPTestContext(mock_time=…)`` on next access.
+        Coerce through ``AdCPTestContext`` so naive datetimes become UTC-aware
+        before header serialization (``apply_testing_hook_headers``).
         """
-        self._mock_time = mock_time
-        self._identity_cache.clear()
-        if "_identity" in self.__dict__:
-            del self.__dict__["_identity"]
+        if mock_time is None:
+            self._mock_time = None
+        else:
+            self._mock_time = AdCPTestContext(mock_time=mock_time).mock_time
+        self._invalidate_identity()
 
     @property
     def identity(self) -> ResolvedIdentity:
