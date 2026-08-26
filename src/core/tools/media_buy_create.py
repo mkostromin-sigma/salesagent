@@ -3559,8 +3559,8 @@ async def _create_media_buy_impl(
                 # Prefer helper-normalized agent_url when the early gate ran.
                 requested_format_keys: set[tuple[str | None, str]] = set()
                 if validated_fmts:
-                    for v in validated_fmts:
-                        requested_format_keys.add((v["agent_url"].rstrip("/"), v["id"]))
+                    for validated_fmt in validated_fmts:
+                        requested_format_keys.add((validated_fmt["agent_url"].rstrip("/"), validated_fmt["id"]))
                 else:
                     for fmt in matching_package.format_ids:
                         normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
@@ -3645,12 +3645,12 @@ async def _create_media_buy_impl(
                 # so normalization is not discarded.
                 for fmt_i, req_fmt in enumerate(matching_package.format_ids):
                     if validated_fmts and fmt_i < len(validated_fmts):
-                        use_agent_url = validated_fmts[fmt_i]["agent_url"]
+                        use_agent_url: str | None = validated_fmts[fmt_i]["agent_url"]
                         use_id = validated_fmts[fmt_i]["id"]
                     else:
-                        use_agent_url = req_fmt.agent_url
+                        use_agent_url = str(req_fmt.agent_url) if req_fmt.agent_url else None
                         use_id = req_fmt.id
-                    normalized_url = str(use_agent_url).rstrip("/") if use_agent_url else None
+                    normalized_url = use_agent_url.rstrip("/") if use_agent_url else None
                     # Check if request format has dimensions
                     if req_fmt.width is not None and req_fmt.height is not None:
                         # Request has dimensions, convert to our FormatId type
