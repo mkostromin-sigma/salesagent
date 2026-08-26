@@ -2341,21 +2341,32 @@ class TestGenerativeCreativeBuild:
             assert_gemini_key_missing_advisory(errs)
 
     @pytest.mark.parametrize(
-        ("tenant_key", "global_key", "expect_advisory", "expected_key"),
+        ("tenant_key", "ai_config_key", "global_key", "expect_advisory", "expected_key"),
         [
-            ("tenant-key", None, False, "tenant-key"),
-            (None, "global-key", True, None),
-            (None, None, True, None),
-            ("tenant-key", "global-key", False, "tenant-key"),
+            ("tenant-key", None, None, False, "tenant-key"),
+            (None, "ai-config-key", None, False, "ai-config-key"),
+            (None, "ai-config-key", "global-key", False, "ai-config-key"),
+            ("tenant-key", "ai-config-key", None, False, "ai-config-key"),
+            (None, None, "global-key", True, None),
+            (None, None, None, True, None),
+            ("tenant-key", None, "global-key", False, "tenant-key"),
         ],
-        ids=["tenant_only", "global_only_ignored", "neither", "both_tenant_wins"],
+        ids=[
+            "legacy_column_only",
+            "ai_config_only",
+            "ai_config_ignores_global",
+            "ai_config_prefers_over_legacy",
+            "global_only_ignored",
+            "neither",
+            "legacy_with_global",
+        ],
     )
-    def test_gemini_key_is_account_scoped(self, tenant_key, global_key, expect_advisory, expected_key):
-        """Account-scoped key is sole source; process-global alone → advisory.
+    def test_gemini_key_is_account_scoped(self, tenant_key, ai_config_key, global_key, expect_advisory, expected_key):
+        """Account-scoped key: ai_config.api_key first, then legacy column; never process-global.
 
-        Deleting ``tenant.get("gemini_api_key")`` must redden the tenant_only /
-        both_tenant_wins arms. A non-None process-global key must not rescue a
-        keyless tenant (``global_only_ignored``).
+        An account that configured Gemini only via admin AI settings (``ai_config``)
+        must not receive a terminal missing-key advisory. Process-global alone must
+        not rescue a keyless tenant.
         """
         from types import SimpleNamespace
         from unittest.mock import patch
@@ -2365,6 +2376,8 @@ class TestGenerativeCreativeBuild:
         tenant: dict = {"tenant_id": "t1"}
         if tenant_key is not None:
             tenant["gemini_api_key"] = tenant_key
+        if ai_config_key is not None:
+            tenant["ai_config"] = {"provider": "gemini", "api_key": ai_config_key}
         mock_config = MagicMock()
         mock_config.gemini_api_key = global_key
         fmt = SimpleNamespace(id="display_gen")

@@ -96,6 +96,27 @@ def _service_unavailable_result(creative_id: str, error_msg: str) -> SyncCreativ
     )
 
 
+def _account_gemini_api_key(tenant: dict[str, Any]) -> str | None:
+    """Resolve the account Gemini key the same way admin AI review does.
+
+    Prefer ``ai_config.api_key`` (what the current admin AI-settings UI writes),
+    then the legacy ``gemini_api_key`` column. Never consult process-global
+    ``get_config().gemini_api_key`` — a keyless seller on a server that injects
+    ``GEMINI_API_KEY`` must still see the misconfiguration advisory.
+    """
+    ai_config = tenant.get("ai_config")
+    if isinstance(ai_config, dict):
+        ai_key = ai_config.get("api_key")
+        if ai_key:
+            return str(ai_key)
+    elif ai_config is not None:
+        ai_key = getattr(ai_config, "api_key", None)
+        if ai_key:
+            return str(ai_key)
+    legacy = tenant.get("gemini_api_key")
+    return str(legacy) if legacy else None
+
+
 def _check_gemini_key_or_advisory(
     creative_id: str,
     *,
@@ -105,13 +126,11 @@ def _check_gemini_key_or_advisory(
 ) -> str | SyncCreativeResult:
     """Return the account-scoped GEMINI API key, or a missing-key advisory result.
 
-    Policy: sole source is the tenant/account key (DB column / admin AI
-    settings via the tenant dict). Process-global ``get_config().gemini_api_key``
-    is intentionally not consulted — a keyless seller on a server that injects
-    ``GEMINI_API_KEY`` into the process must still see the misconfiguration
-    advisory (multi-tenant isolation; e2e_rest can clear the DB row alone).
+    Policy: sole sources are account AI settings (``ai_config.api_key``) then the
+    legacy ``gemini_api_key`` column on the tenant dict. Process-global
+    ``get_config().gemini_api_key`` is intentionally not consulted.
     """
-    gemini_api_key = tenant.get("gemini_api_key")
+    gemini_api_key = _account_gemini_api_key(tenant)
     if gemini_api_key:
         return gemini_api_key
     error_msg = f"Cannot {action_verb} generative creative {creative_format.id}: GEMINI_API_KEY not configured"

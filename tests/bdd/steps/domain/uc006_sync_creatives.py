@@ -1524,9 +1524,8 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
                     inferred = _infer_error_code_from_message(str(first))
                     if inferred == expected_code:
                         return
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: expected {expected_code}, inferred '{inferred}' "
-                        f"from error message: {first}"
+                    raise AssertionError(
+                        f"Expected errors[0].code={expected_code!r}, inferred {inferred!r} from error message: {first}"
                     )
     if error is not None:
         if isinstance(error, AdCPError) and error.error_code == expected_code:
@@ -1534,10 +1533,10 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
         err_code = getattr(error, "code", None) or getattr(error, "error_code", None)
         if err_code == expected_code:
             return
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected {expected_code}, got {type(error).__name__}(code={err_code!r}): {error}"
+        raise AssertionError(
+            f"Expected error code={expected_code!r}, got {type(error).__name__}(code={err_code!r}): {error}"
         )
-    pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code} but no error occurred. Response: {resp}")
+    raise AssertionError(f"Expected error code={expected_code!r} but no error occurred. Response: {resp}")
 
 
 @then(parsers.parse('the result should be "{outcome}"'))

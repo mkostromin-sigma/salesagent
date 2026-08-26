@@ -325,6 +325,36 @@ class TestNestedCreativeAdvisoryAccessor:
                 transport=Transport.REST,
             )
 
+    def test_assert_wire_advisory_reddens_on_wrong_suggestion(self):
+        """Mutation oracle: gutting the suggestion assert must fail this meta-test."""
+        import pytest
+
+        from tests.harness.transport import Transport, assert_wire_advisory
+
+        wire = {
+            "creatives": [
+                {
+                    "creative_id": "bad",
+                    "action": "failed",
+                    "errors": [
+                        {
+                            "code": "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
+                            "recovery": "terminal",
+                            "suggestion": "wrong suggestion",
+                        }
+                    ],
+                }
+            ]
+        }
+        with pytest.raises(AssertionError, match="unexpected wire advisory suggestion"):
+            assert_wire_advisory(
+                wire,
+                "X_PREBID_CREATIVE_GEMINI_KEY_MISSING",
+                recovery="terminal",
+                suggestion="Ask the seller to configure a Gemini API key for this account",
+                transport=Transport.REST,
+            )
+
     def test_assert_wire_advisory_refuses_proxy_when_require_real_wire(self):
         import pytest
 
