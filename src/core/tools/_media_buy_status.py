@@ -32,9 +32,9 @@ request's *end_date* (``media_buy_delivery.py``) — current-state vs
 period-scoped. So for a serving buy near its flight boundary the two may
 legitimately report different date-refined statuses; the mapping is identical,
 the reference date is the buyer-visible difference. Under ``mock_time``
-(``X-Mock-Time``) both tools share the controllable clock for *today* /
-filtering; status date-refinement under mock_time is delivery-only via
-``jump_to_event`` / ``simulate=True`` there.
+(``X-Mock-Time``) both tools share the controllable clock; ``get_media_buys``
+keeps ``simulate=False`` (#1830 clock-only), while delivery still passes
+``simulate=True`` under ``mock_time`` / ``jump_to_event``.
 """
 
 from __future__ import annotations

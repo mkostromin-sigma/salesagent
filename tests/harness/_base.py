@@ -585,6 +585,8 @@ class BaseTestEnv:
         Coerce through ``AdCPTestContext`` so naive datetimes become UTC-aware
         before header serialization (``apply_testing_hook_headers``).
         """
+        from src.core.testing_hooks import AdCPTestContext
+
         if mock_time is None:
             self._mock_time = None
         else:

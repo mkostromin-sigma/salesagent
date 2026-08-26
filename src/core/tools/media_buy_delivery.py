@@ -129,8 +129,10 @@ def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt:
     from src.core.testing_hooks import resolve_clock
 
     if testing_ctx.mock_time:
-        # Same mock clock as list / apply_testing_hooks; simulate stays False.
-        return resolve_clock(testing_ctx)
+        # Shared clock with list (resolve_clock); delivery still simulates
+        # status under mock_time (list keeps simulate=False for #1830).
+        clock, _ = resolve_clock(testing_ctx)
+        return clock, True
     if testing_ctx.jump_to_event:
         simulated = TimeSimulator.jump_to_event_time(
             testing_ctx.jump_to_event,
