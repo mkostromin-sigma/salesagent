@@ -136,7 +136,7 @@ class RequestCompatMiddleware(Middleware):
         """Translate missing-required / TypeAdapter failures into AdCP envelopes."""
         if RequestCompatMiddleware._is_missing_required_argument_error(exc):
             await self._translate_missing_required(context, tool_name)
-            raise  # pragma: no cover
+            raise exc  # pragma: no cover
 
         if not self._is_typeadapter_validation_error(exc):
             raise
@@ -145,7 +145,7 @@ class RequestCompatMiddleware(Middleware):
         # (not ToolError). Keep A2A ≡ MCP wording via the same L2 message.
         if tool_name in ("get_task", "complete_task") and self._is_missing_task_id_validation(exc):
             await self._translate_missing_required(context, tool_name)
-            raise  # pragma: no cover
+            raise exc  # pragma: no cover
 
         if self._should_retry(exc):
             retried = await self._retry_deep_strip(context, call_next, tool_name, normalized, exc)
@@ -255,8 +255,10 @@ class RequestCompatMiddleware(Middleware):
             return False
         for err in exc.errors():
             loc = err.get("loc") or ()
-            if "task_id" not in loc and not (loc and loc[-1] == "task_id"):
+            if "task_id" not in loc:
                 continue
+            if err.get("type") == "missing":
+                return True
             err_type = str(err.get("type", ""))
             msg = str(err.get("msg", "")).lower()
             if "missing" in err_type or "required" in msg or "missing" in msg:

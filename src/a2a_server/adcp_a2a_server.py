@@ -1955,7 +1955,12 @@ class AdCPRequestHandler(RequestHandler):
 
         with adcp_validation_boundary(context="get_task request"):
             assert_known_task_params(parameters, allowed=GET_TASK_BUYER_PARAMS)
-            return await core_get_task(task_id=parameters.get("task_id"), identity=identity)
+            kwargs: dict[str, Any] = {"identity": identity}
+            for key in GET_TASK_BUYER_PARAMS:
+                if key in parameters:
+                    kwargs[key] = parameters[key]
+            kwargs.setdefault("task_id", parameters.get("task_id"))
+            return await core_get_task(**kwargs)
 
     async def _handle_complete_task_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit complete_task skill — principal-scoped durable completion.

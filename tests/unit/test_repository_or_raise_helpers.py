@@ -150,9 +150,9 @@ class TestWorkflowOrRaise:
     def test_get_by_step_id_or_raise_rejects_falsy_principal_id(self):
         """Explicit None/empty must not silently tenant-scope via get_by_step_id."""
         repo = _workflow_repo_with_execute_row((MagicMock(), "p"))
-        with pytest.raises(ValueError, match="principal_id is required"):
+        with pytest.raises(ValueError, match="Owner scope is required"):
             repo.get_by_step_id_or_raise("step-1", principal_id=None)  # type: ignore[arg-type]
-        with pytest.raises(ValueError, match="principal_id is required"):
+        with pytest.raises(ValueError, match="Owner scope is required"):
             repo.get_by_step_id_or_raise("step-1", principal_id="")
         repo._session.execute.assert_not_called()
 
@@ -166,7 +166,7 @@ class TestWorkflowOrRaise:
     def test_get_by_step_id_rejects_empty_principal_id(self):
         """Explicit "" must raise — not silently widen to tenant-only (Chris R4 NIT)."""
         repo = _repo_with_first(WorkflowRepository, None)
-        with pytest.raises(ValueError, match="principal_id is required"):
+        with pytest.raises(ValueError, match="Owner scope is required"):
             repo.get_by_step_id("step-1", principal_id="")
         repo._session.scalars.assert_not_called()
 
@@ -193,7 +193,7 @@ class TestWorkflowOrRaise:
     def test_update_status_rejects_empty_principal_id(self):
         """Write gate: empty-string principal_id raises like the read gate."""
         repo = _repo_with_first(WorkflowRepository, MagicMock())
-        with pytest.raises(ValueError, match="principal_id is required"):
+        with pytest.raises(ValueError, match="Owner scope is required"):
             repo.update_status("step-1", status="completed", principal_id="")
         repo._session.scalars.assert_not_called()
 

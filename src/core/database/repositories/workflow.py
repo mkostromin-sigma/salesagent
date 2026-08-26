@@ -27,6 +27,16 @@ from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowS
 # Sentinel for resolve-then-authorize miss branch — never a real principal_id.
 _MISSING_OWNER: Final[object] = object()
 
+# Fail-closed buyer-path message — do not name the ownership column on the wire
+# (ValueError → AdCPValidationError via normalize_to_adcp_error).
+_OWNER_SCOPE_REQUIRED: Final[str] = "Owner scope is required"
+
+
+def _require_owner_scope(principal_id: str | None) -> None:
+    """Reject falsy principal_id when an owner-scoped call was requested."""
+    if not principal_id:
+        raise ValueError(_OWNER_SCOPE_REQUIRED)
+
 
 class WorkflowRepository:
     """Tenant-scoped data access for WorkflowStep and ObjectWorkflowMapping.
@@ -67,8 +77,7 @@ class WorkflowRepository:
         # None (omitted) → tenant-only. Explicit "" must not silently widen —
         # same fail-closed rule as get_by_step_id_or_raise / update_status.
         if principal_id is not None:
-            if not principal_id:
-                raise ValueError("principal_id is required")
+            _require_owner_scope(principal_id)
             conditions.append(DBContext.principal_id == principal_id)
         return self._session.scalars(select(WorkflowStep).join(DBContext).where(*conditions)).first()
 
@@ -93,8 +102,7 @@ class WorkflowRepository:
         Message is the generic REFERENCE_NOT_FOUND text (AdCP 3.1.1
         error-handling Uniform response — no resource-qualified message).
         """
-        if not principal_id:
-            raise ValueError("principal_id is required")
+        _require_owner_scope(principal_id)
 
         # Step 1 — resolve within tenant (no principal predicate in SQL).
         row = self._session.execute(
@@ -348,8 +356,7 @@ class WorkflowRepository:
         not owned by principal_id").
         Does NOT commit — the caller handles that.
         """
-        if principal_id is not None and not principal_id:
-            raise ValueError("principal_id is required")
+        # Empty principal_id is rejected inside get_by_step_id (single authority).
         step = self.get_by_step_id(step_id, principal_id=principal_id)
         if step is None:
             return None

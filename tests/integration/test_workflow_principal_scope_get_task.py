@@ -294,12 +294,7 @@ def test_get_task_omitted_task_id_a2a_and_mcp(integration_db):
         for transport in (Transport.A2A, Transport.MCP):
             # Empty buyer args — MCP hits FastMCP missing-required seam; A2A hits L2.
             result = env.call_via(transport, tool="get_task")
-            result.assert_wire_error("VALIDATION_ERROR")
-            envelope = result.wire_error_envelope or {}
-            # two-layer envelope: errors[0].message
-            errors = envelope.get("errors") or []
-            msg = errors[0].get("message", "") if errors else str(envelope)
-            assert TASK_ID_REQUIRED_MESSAGE in msg, (transport, msg, envelope)
+            result.assert_wire_error("VALIDATION_ERROR", message_substr=TASK_ID_REQUIRED_MESSAGE)
 
 
 def test_complete_task_unknown_key_a2a_and_mcp(integration_db):

@@ -1350,6 +1350,8 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
 INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
 VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
 
+ERROR_MESSAGE_TYPE_MESSAGE = "error_message must be a string"
+
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
     """Return the bracket-notation path of the first Pydantic error, or ``None``.
@@ -1429,7 +1431,6 @@ SQL_LEAK_MARKERS: tuple[str, ...] = (
     "psycopg2",
     "asyncpg",
     "can't adapt type",
-    "workflow_steps",
 )
 
 

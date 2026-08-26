@@ -21,6 +21,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.exceptions import (
+    ERROR_MESSAGE_TYPE_MESSAGE,
     VALIDATION_ERROR_SUGGESTION,
     AdCPConflictError,
     AdCPValidationError,
@@ -64,6 +65,7 @@ def assert_known_task_params(parameters: Mapping[str, Any], *, allowed: frozense
 
 TASK_ID_REQUIRED_MESSAGE = "task_id is required"
 TASK_ID_TYPE_MESSAGE = "task_id must be a string"
+# Re-export for task-tool callers / tests (SSOT lives in exceptions).
 
 
 def require_task_id(task_id: Any) -> str:
@@ -96,17 +98,13 @@ def require_task_id(task_id: Any) -> str:
     return task_id
 
 
-# Back-compat alias for any lingering private imports (tests / call sites).
-_require_task_id = require_task_id
-
-
 def _require_error_message(error_message: Any) -> str | None:
     """Reject non-string ``error_message`` before it reaches the ORM/DB driver."""
     if error_message is None:
         return None
     if not isinstance(error_message, str):
         raise AdCPValidationError(
-            "error_message must be a string",
+            ERROR_MESSAGE_TYPE_MESSAGE,
             field="error_message",
             suggestion=VALIDATION_ERROR_SUGGESTION,
         )

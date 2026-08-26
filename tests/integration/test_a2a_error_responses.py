@@ -23,7 +23,11 @@ from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+from tests.utils.a2a_helpers import (
+    assert_failed_task_artifact,
+    create_a2a_message_with_skill,
+    extract_data_from_artifact,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -675,7 +679,7 @@ class TestA2AErrorPropagation:
         result = await handler.on_message_send(params, ServerCallContext())
 
         assert isinstance(result, Task)
-        assert result.artifacts is not None and len(result.artifacts) > 0
+        assert_failed_task_artifact(result)
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="media_buy_id", recovery="correctable")
@@ -706,8 +710,6 @@ class TestA2AErrorPropagation:
         result = await handler.on_message_send(params, ServerCallContext())
 
         assert isinstance(result, Task)
-        from tests.utils.a2a_helpers import assert_failed_task_artifact
-
         assert_failed_task_artifact(result)
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
@@ -1119,7 +1121,7 @@ class TestA2AContextEcho:
 
         # Must be a Task with artifacts — AdCPError flows through dispatcher (not A2AError).
         assert isinstance(result, Task)
-        assert result.artifacts is not None and len(result.artifacts) > 0
+        assert_failed_task_artifact(result)
 
         artifact_data = extract_data_from_artifact(result.artifacts[0])
 

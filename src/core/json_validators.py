@@ -12,6 +12,8 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
+from src.core.exceptions import ERROR_MESSAGE_TYPE_MESSAGE
+
 # Pydantic models for JSON field validation
 
 
@@ -117,7 +119,7 @@ class JSONValidatorMixin:
         if value is None:
             return None
         if not isinstance(value, str):
-            raise ValueError(f"{key} must be a string or null")
+            raise ValueError(ERROR_MESSAGE_TYPE_MESSAGE)
         return value
 
     @validates("comments")
