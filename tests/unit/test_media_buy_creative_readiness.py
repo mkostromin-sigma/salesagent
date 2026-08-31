@@ -3,6 +3,7 @@
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+from src.core.database.models import PersistedMediaBuyStatus
 from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES, CreativeStatusEnum
 from src.services.media_buy_creative_readiness import (
     CreativeFinalizeReadiness,
@@ -222,7 +223,7 @@ class TestMarkMediaBuyAdapterFailed:
         ):
             mark_media_buy_adapter_failed("mb_x", "tenant_1", error_msg="adapter boom")
 
-        mock_repo.update_status.assert_called_once_with("mb_x", "failed")
+        mock_repo.update_status.assert_called_once_with("mb_x", PersistedMediaBuyStatus.FAILED)
         mock_session.commit.assert_called_once_with()
         assert any("[APPROVAL] Adapter creation failed for mb_x: adapter boom" in r.message for r in caplog.records)
 
@@ -245,10 +246,10 @@ class TestMarkMediaBuyAdapterFailed:
                 "mb_x",
                 "tenant_1",
                 error_msg="adapter boom",
-                status="pending_creatives",
+                status=PersistedMediaBuyStatus.PENDING_CREATIVES,
             )
 
-        mock_repo.update_status.assert_called_once_with("mb_x", "pending_creatives")
+        mock_repo.update_status.assert_called_once_with("mb_x", PersistedMediaBuyStatus.PENDING_CREATIVES)
 
 
 class TestFinalizeMediaBuyApproval:
@@ -419,7 +420,7 @@ class TestFinalizeMediaBuyAfterCreativeApproval:
             "mb_fail",
             "t1",
             error_msg="boom",
-            status="pending_creatives",
+            status=PersistedMediaBuyStatus.PENDING_CREATIVES,
         )
         mock_uow.assert_not_called()
         assert outcome.kind == "adapter_failed"

@@ -15,7 +15,7 @@ from typing import Literal, cast
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy
+from src.core.database.models import MediaBuy, PersistedMediaBuyStatus
 from src.core.database.repositories.creative import (
     CreativeAssignmentRepository,
     CreativeRepository,
@@ -181,14 +181,14 @@ def mark_media_buy_adapter_failed(
     tenant_id: str,
     *,
     error_msg: str | None = None,
-    status: str = "failed",
+    status: PersistedMediaBuyStatus = PersistedMediaBuyStatus.FAILED,
 ) -> None:
     """Persist adapter-failure status and log with a single ``[APPROVAL]`` trail.
 
     Ready-arm approve routes (operations / workflows) commit an optimistic
-    flight-window status before execute; pass the default ``status="failed"``
-    to roll that back. The creatives unblock path executes before stamping and
-    should stay recoverable — pass ``status="pending_creatives"`` there.
+    flight-window status before execute; pass the default ``FAILED`` to roll
+    that back. The creatives unblock path executes before stamping and should
+    stay recoverable — pass ``PENDING_CREATIVES`` there.
     """
     logger.error("[APPROVAL] Adapter creation failed for %s: %s", media_buy_id, error_msg)
     with get_db_session() as session:
@@ -201,8 +201,10 @@ def _execute_media_buy_adapter(
     media_buy_id: str,
     tenant_id: str,
     *,
-    failure_status: str,
-) -> tuple[bool, str | None]:
+    failure_status: PersistedMediaBuyStatus,
+    approved_by: str | None = None,
+    approved_at: datetime | None = None,
+):
     """Execute adapter creation and single-home its persisted failure outcome."""
     from src.core.tools.media_buy_create import execute_approved_media_buy
 
@@ -251,8 +253,21 @@ def finalize_media_buy_approval(
     session.commit()
 
     logger.info("[APPROVAL] Executing adapter creation for approved media buy %s", media_buy_id)
-    success, error_msg = _execute_media_buy_adapter(media_buy_id, tenant_id, failure_status="failed")
-    if not success:
+    approval = _execute_media_buy_adapter(
+        media_buy_id,
+        tenant_id,
+        failure_status=PersistedMediaBuyStatus.FAILED,
+        approved_by=approved_by,
+        approved_at=approved_at,
+    )
+    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
+        return FinalizeOutcome(
+            kind="held",
+            hold_message=approval.error_msg,
+            hold_reason="unapproved_creatives",
+            webhook_media_buy_status=webhook_media_buy_status,
+        )
+    if not approval.ok:
         return FinalizeOutcome(
             kind="adapter_failed",
             error_msg=error_msg,
@@ -282,7 +297,9 @@ def finalize_media_buy_after_creative_approval(
     success, error_msg = _execute_media_buy_adapter(
         media_buy_id,
         tenant_id,
-        failure_status="pending_creatives",
+        failure_status=PersistedMediaBuyStatus.PENDING_CREATIVES,
+        approved_by=approved_by,
+        approved_at=approved_at,
     )
     if not success:
         return FinalizeOutcome(kind="adapter_failed", error_msg=error_msg)
