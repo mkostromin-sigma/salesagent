@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, Principal, Tenant
+from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
 from tests.helpers.media_buy_approval import (
     ADAPTER_BOUNDARY,
     adapter_success,
@@ -346,7 +347,7 @@ class TestCreativeApprovalRetroactivePush:
             patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=(True, None),
+                return_value=ApprovalResult(outcome=ApprovalOutcome.EXECUTED),
             ),
         ):
             response = client.post(
@@ -372,7 +373,7 @@ class TestCreativeApprovalRetroactivePush:
             patch(_PUSH_PATCH, return_value=(True, None)),
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=(True, None),
+                return_value=ApprovalResult(outcome=ApprovalOutcome.EXECUTED),
             ) as mock_execute,
         ):
             response = client.post(
@@ -382,7 +383,9 @@ class TestCreativeApprovalRetroactivePush:
             )
 
         assert response.status_code == 200
-        mock_execute.assert_called_once_with(media_buy_id, test_tenant)
+        mock_execute.assert_called_once()
+        assert mock_execute.call_args.args == (media_buy_id, test_tenant)
+        assert mock_execute.call_args.kwargs["approved_by"] == "test@example.com"
 
         with MediaBuyUoW(test_tenant) as uow:
             assert uow.media_buys is not None
@@ -405,7 +408,7 @@ class TestCreativeApprovalRetroactivePush:
             patch(_PUSH_PATCH, return_value=(True, None)),
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=(False, "adapter boom"),
+                return_value=ApprovalResult.failed("adapter boom"),
             ),
         ):
             response = client.post(
@@ -628,7 +631,7 @@ class TestCreativeApprovalUnblocksMediaBuy:
 
         factory_session.expire_all()
         after = MediaBuyState.of(repo.get_by_id(media_buy_id))
-        assert after.approved_by == "system"
+        assert after.approved_by == "test@example.com"
         # The seeded flight window opened yesterday, so the shared rule picks "active".
         # confirms=True: this move crosses INTO commitment, so it must mint the stamp.
         assert_status_move_carried_bookkeeping(

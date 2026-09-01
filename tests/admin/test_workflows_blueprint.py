@@ -17,6 +17,7 @@ from src.core.database.models import Context, Principal, Tenant, WorkflowStep
 from tests.helpers.media_buy_approval import (
     ADAPTER_BOUNDARY,
     adapter_success,
+    attach_approved_creative,
     login_as,
     seed_pending_buy,
 )
@@ -294,6 +295,7 @@ class TestWorkflowApprovalMovesMediaBuy:
         sibling reddens.
         """
         seeded = seed_pending_buy(starts_in_days=7)
+        attach_approved_creative(seeded)
         _auth_session(client, seeded.tenant_id)
 
         before = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
@@ -332,6 +334,7 @@ class TestWorkflowApprovalMovesMediaBuy:
         caught it — but the column disagreed with the calendar.
         """
         seeded = seed_pending_buy(starts_in_days=-1)
+        attach_approved_creative(seeded)
         _auth_session(client, seeded.tenant_id)
 
         before = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)

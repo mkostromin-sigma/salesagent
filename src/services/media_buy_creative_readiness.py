@@ -21,7 +21,6 @@ from src.core.database.repositories.creative import (
     CreativeRepository,
 )
 from src.core.database.repositories.media_buy import MediaBuyRepository
-from src.core.database.repositories.uow import MediaBuyUoW
 from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES
 from src.core.utils import utc_flight_end, utc_flight_start
 
@@ -228,14 +227,30 @@ def finalize_media_buy_approval(
 ) -> FinalizeOutcome:
     """Own the approve finalize sequence once for operations + workflows.
 
-    evaluate readiness → hold (commit) | ready (stamp + commit + execute +
-    optional adapter-failure rollback). Callers only handle transport
-    (flash / redirect / jsonify / webhook) from the typed outcome.
+    evaluate readiness → hold (commit via repository) | ready (delegate to
+    ``execute_approved_media_buy`` as the sole post-adapter writer). Callers
+    only handle transport (flash / redirect / jsonify / webhook) from the
+    typed outcome.
+
+    Ready-arm does **not** pre-stamp flight-window status: that write belongs
+    to the sole writer. Wire ``media_buy_status`` is still captured from the
+    session-bound row for the webhook envelope (canonical date refine).
     """
+    from src.core.media_buy_status import resolve_canonical_status
+    from src.core.tools.media_buy_create import ApprovalOutcome
+
     media_buy_id = media_buy.media_buy_id
     readiness = evaluate_creative_finalize_readiness_for_session(session, tenant_id, media_buy_id=media_buy_id)
+    approved_at = datetime.now(UTC)
     if not readiness.ready:
-        apply_creative_finalize_hold(media_buy, readiness, approved_by=approved_by)
+        # Repository write so revision bumps (direct ORM status assign does not).
+        MediaBuyRepository(session, tenant_id).update_status(
+            media_buy_id,
+            PersistedMediaBuyStatus.PENDING_CREATIVES,
+            approved_at=approved_at,
+            approved_by=approved_by,
+        )
+        log_creative_finalize_hold(media_buy_id, readiness)
         session.commit()
         return FinalizeOutcome(
             kind="held",
@@ -243,14 +258,9 @@ def finalize_media_buy_approval(
             hold_reason=readiness.hold_reason,
         )
 
-    apply_creative_finalize_ready(media_buy, approved_by=approved_by)
-    # Capture canonical status while media_buy is still session-bound.
-    # execute_approved_media_buy opens its own session and leaves this
-    # instance expired/detached after commit — do not touch ORM attrs later.
-    from src.core.media_buy_status import resolve_canonical_status
-
-    webhook_media_buy_status = resolve_canonical_status(media_buy, datetime.now(UTC).date())
-    session.commit()
+    # Capture canonical wire status while media_buy is still session-bound.
+    # Do not persist here — execute_approved_media_buy is the sole writer.
+    webhook_media_buy_status = resolve_canonical_status(media_buy, approved_at.date())
 
     logger.info("[APPROVAL] Executing adapter creation for approved media buy %s", media_buy_id)
     approval = _execute_media_buy_adapter(
@@ -287,11 +297,11 @@ def finalize_media_buy_after_creative_approval(
     *,
     approved_by: str,
 ) -> FinalizeOutcome:
-    """Own the creatives unblock sequence: execute first, then stamp on success.
+    """Own the creatives unblock sequence via the sole post-adapter writer.
 
-    Unlike approve routes, this batch path has no optimistic status to roll
-    back. Adapter failure therefore remains recoverable at
-    ``pending_creatives`` so a later creative approval can retry it.
+    ``execute_approved_media_buy`` persists flight-window status on success.
+    Adapter failure stays recoverable at ``pending_creatives`` so a later
+    creative approval can retry (execute may have written FAILED; we restore).
     """
     logger.info("[CREATIVE APPROVAL] Executing adapter creation for unblocked media buy %s", media_buy_id)
     success, error_msg = _execute_media_buy_adapter(
@@ -303,12 +313,6 @@ def finalize_media_buy_after_creative_approval(
     )
     if not success:
         return FinalizeOutcome(kind="adapter_failed", error_msg=error_msg)
-
-    with MediaBuyUoW(tenant_id) as uow:
-        assert uow.media_buys is not None
-        media_buy = uow.media_buys.get_by_id(media_buy_id)
-        if media_buy:
-            apply_creative_finalize_ready(media_buy, approved_by=approved_by)
 
     logger.info("[CREATIVE APPROVAL] Media buy %s successfully created in adapter", media_buy_id)
     return FinalizeOutcome(kind="finalized")

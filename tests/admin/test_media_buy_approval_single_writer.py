@@ -27,6 +27,7 @@ from tests.helpers.media_buy_approval import (
     ADAPTER_BOUNDARY,
     adapter_failure,
     adapter_success,
+    attach_approved_creative,
     login_as,
     seed_pending_buy,
     uploadable_creative,
@@ -68,6 +69,7 @@ class TestOnePostAdapterWriter:
         calendar, and it is the column the wire projection reads.
         """
         seeded = seed_pending_buy(starts_in_days=7)
+        attach_approved_creative(seeded)
         login_as(client, tenant_id=seeded.tenant_id, email="approver@example.com")
 
         before = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
@@ -102,6 +104,7 @@ class TestOnePostAdapterWriter:
         committed to a buy that never reached the ad server.
         """
         seeded = seed_pending_buy(starts_in_days=7)
+        attach_approved_creative(seeded)
         login_as(client, tenant_id=seeded.tenant_id, email="approver@example.com")
 
         with patch(ADAPTER_BOUNDARY, side_effect=adapter_failure):

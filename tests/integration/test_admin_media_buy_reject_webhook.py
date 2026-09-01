@@ -19,6 +19,8 @@ from unittest.mock import ANY, AsyncMock, patch
 import pytest
 
 from src.core.context_manager import ContextManager
+from src.core.database.models import PersistedMediaBuyStatus
+from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
 from tests.factories.creative_asset import build_assets, image_spec
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -422,7 +424,7 @@ class TestAdminMediaBuyRejectWebhook:
             "media_buy_id": media_buy_id,
         }
         # Ready-arm provenance: session operator email on the MediaBuy row.
-        _assert_persisted_status(pending_reject_media_buy, "pending_start", approved_by="test@example.com")
+        _assert_persisted_status(pending_reject_media_buy, "scheduled", approved_by="test@example.com")
 
     def test_reject_bumps_revision_without_confirming(
         self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
@@ -730,20 +732,27 @@ class TestAdminWorkflowApproveHold:
 
         with patch(
             "src.core.tools.media_buy_create.execute_approved_media_buy",
-            return_value=(True, None),
+            return_value=ApprovalResult(
+                outcome=ApprovalOutcome.EXECUTED,
+                status=PersistedMediaBuyStatus.SCHEDULED,
+                revision=2,
+            ),
         ) as mock_execute:
-            _post_workflow_approve(authenticated_admin_session, ids)
+            body = _post_workflow_approve(authenticated_admin_session, ids)
 
-        mock_execute.assert_called_once_with(ids["media_buy_id"], ids["tenant_id"])
-        # make_pending_media_buy seeds start_time = now+7d → pending_start
-        _assert_persisted_status(ids, "pending_start", approved_by="test@example.com")
+        mock_execute.assert_called_once()
+        assert mock_execute.call_args.args == (ids["media_buy_id"], ids["tenant_id"])
+        assert mock_execute.call_args.kwargs["approved_by"] == "test@example.com"
+        # Mocked sole writer does not persist; ready-arm no longer pre-stamps.
+        # Grade that execute was invoked and the route returned success.
+        assert body.get("success") is True
 
 
 class TestAdminApproveAdapterFailureRollback:
     """Ready-arm adapter failure → shared mark_media_buy_adapter_failed (#1696 / KM Aug-05).
 
-    Both operations and workflows commit optimistic flight status before execute;
-    a (False, error) adapter result must leave ``failed`` on both surfaces.
+    Both operations and workflows map a failed ``ApprovalResult`` through
+    ``mark_media_buy_adapter_failed``; the buy must end ``failed`` on both surfaces.
     """
 
     @pytest.mark.parametrize("surface", ["operations", "workflows"])
@@ -761,7 +770,7 @@ class TestAdminApproveAdapterFailureRollback:
 
         with patch(
             "src.core.tools.media_buy_create.execute_approved_media_buy",
-            return_value=(False, "adapter boom"),
+            return_value=ApprovalResult.failed("adapter boom"),
         ) as mock_execute:
             if surface == "operations":
                 _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
@@ -770,5 +779,7 @@ class TestAdminApproveAdapterFailureRollback:
                 assert body.get("success") is False
                 assert body.get("error") == "adapter boom"
 
-        mock_execute.assert_called_once_with(ids["media_buy_id"], ids["tenant_id"])
+        mock_execute.assert_called_once()
+        assert mock_execute.call_args.args == (ids["media_buy_id"], ids["tenant_id"])
+        assert mock_execute.call_args.kwargs["approved_by"] == "test@example.com"
         _assert_persisted_status(ids, "failed", approved_by="test@example.com")

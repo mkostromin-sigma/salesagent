@@ -252,6 +252,18 @@ class TestMarkMediaBuyAdapterFailed:
         mock_repo.update_status.assert_called_once_with("mb_x", PersistedMediaBuyStatus.PENDING_CREATIVES)
 
 
+def _approval_executed(**kwargs):
+    from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
+
+    return ApprovalResult(outcome=ApprovalOutcome.EXECUTED, **kwargs)
+
+
+def _approval_failed(error_msg: str):
+    from src.core.tools.media_buy_create import ApprovalResult
+
+    return ApprovalResult.failed(error_msg)
+
+
 class TestFinalizeMediaBuyApproval:
     def test_held_applies_hold_and_commits_without_execute(self):
         from src.services.media_buy_creative_readiness import finalize_media_buy_approval
@@ -265,13 +277,18 @@ class TestFinalizeMediaBuyApproval:
             hold_reason="no_assignments",
             hold_message="held msg",
         )
+        mock_repo = MagicMock()
 
         with (
             patch(
                 "src.services.media_buy_creative_readiness.evaluate_creative_finalize_readiness_for_session",
                 return_value=readiness,
             ) as mock_eval,
-            patch("src.services.media_buy_creative_readiness.apply_creative_finalize_hold") as mock_hold,
+            patch(
+                "src.services.media_buy_creative_readiness.MediaBuyRepository",
+                return_value=mock_repo,
+            ) as mock_repo_cls,
+            patch("src.services.media_buy_creative_readiness.log_creative_finalize_hold") as mock_log,
             patch("src.services.media_buy_creative_readiness.apply_creative_finalize_ready") as mock_ready,
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
@@ -280,7 +297,14 @@ class TestFinalizeMediaBuyApproval:
             outcome = finalize_media_buy_approval(session, "t1", media_buy, approved_by="op@example.com")
 
         mock_eval.assert_called_once_with(session, "t1", media_buy_id="mb_hold")
-        mock_hold.assert_called_once_with(media_buy, readiness, approved_by="op@example.com")
+        mock_repo_cls.assert_called_once_with(session, "t1")
+        mock_repo.update_status.assert_called_once()
+        us_args, us_kwargs = mock_repo.update_status.call_args
+        assert us_args[0] == "mb_hold"
+        assert us_args[1] is PersistedMediaBuyStatus.PENDING_CREATIVES
+        assert us_kwargs["approved_by"] == "op@example.com"
+        assert us_kwargs["approved_at"] is not None
+        mock_log.assert_called_once()
         session.commit.assert_called_once_with()
         mock_ready.assert_not_called()
         mock_execute.assert_not_called()
@@ -288,7 +312,7 @@ class TestFinalizeMediaBuyApproval:
         assert outcome.hold_message == "held msg"
         assert outcome.hold_reason == "no_assignments"
 
-    def test_finalized_stamps_commits_executes(self):
+    def test_finalized_delegates_to_sole_writer_without_pre_stamp(self):
         from src.services.media_buy_creative_readiness import finalize_media_buy_approval
 
         session = MagicMock()
@@ -313,18 +337,27 @@ class TestFinalizeMediaBuyApproval:
             ),
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=(True, None),
+                return_value=_approval_executed(
+                    status=PersistedMediaBuyStatus.SCHEDULED,
+                    confirmed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    revision=2,
+                ),
             ) as mock_execute,
             patch("src.services.media_buy_creative_readiness.mark_media_buy_adapter_failed") as mock_fail,
         ):
             outcome = finalize_media_buy_approval(session, "t1", media_buy, approved_by="op@example.com")
 
-        mock_ready.assert_called_once_with(media_buy, approved_by="op@example.com")
-        session.commit.assert_called_once_with()
-        mock_execute.assert_called_once_with("mb_ok", "t1")
+        mock_ready.assert_not_called()
+        session.commit.assert_not_called()
+        mock_execute.assert_called_once()
+        exec_args, exec_kwargs = mock_execute.call_args
+        assert exec_args == ("mb_ok", "t1")
+        assert exec_kwargs["approved_by"] == "op@example.com"
+        assert exec_kwargs["approved_at"] is not None
         mock_fail.assert_not_called()
         assert outcome.kind == "finalized"
         assert outcome.webhook_media_buy_status == "pending_start"
+        assert outcome.revision == 2
 
     def test_adapter_failed_rolls_back_via_shared_applier(self):
         from src.services.media_buy_creative_readiness import finalize_media_buy_approval
@@ -351,34 +384,33 @@ class TestFinalizeMediaBuyApproval:
             ),
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=(False, "boom"),
+                return_value=_approval_failed("boom"),
             ),
             patch("src.services.media_buy_creative_readiness.mark_media_buy_adapter_failed") as mock_fail,
         ):
             outcome = finalize_media_buy_approval(session, "t1", media_buy, approved_by="op@example.com")
 
-        mock_fail.assert_called_once_with("mb_fail", "t1", error_msg="boom", status="failed")
+        mock_fail.assert_called_once_with(
+            "mb_fail",
+            "t1",
+            error_msg="boom",
+            status=PersistedMediaBuyStatus.FAILED,
+        )
         assert outcome.kind == "adapter_failed"
         assert outcome.error_msg == "boom"
 
 
 class TestFinalizeMediaBuyAfterCreativeApproval:
-    def test_success_executes_before_stamping_in_separate_uow(self):
-        media_buy = MagicMock()
-        mock_uow = MagicMock()
-        mock_uow.__enter__.return_value = mock_uow
-        mock_uow.__exit__.return_value = None
-        mock_uow.media_buys.get_by_id.return_value = media_buy
-
+    def test_success_delegates_to_sole_writer_without_extra_stamp(self):
         with (
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=(True, None),
+                return_value=_approval_executed(
+                    status=PersistedMediaBuyStatus.ACTIVE,
+                    confirmed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    revision=3,
+                ),
             ) as mock_execute,
-            patch(
-                "src.services.media_buy_creative_readiness.MediaBuyUoW",
-                return_value=mock_uow,
-            ),
             patch(
                 "src.services.media_buy_creative_readiness.apply_creative_finalize_ready",
             ) as mock_ready,
@@ -392,19 +424,24 @@ class TestFinalizeMediaBuyAfterCreativeApproval:
                 approved_by="op@example.com",
             )
 
-        mock_execute.assert_called_once_with("mb_ok", "t1")
-        mock_uow.media_buys.get_by_id.assert_called_once_with("mb_ok")
-        mock_ready.assert_called_once_with(media_buy, approved_by="op@example.com")
+        mock_execute.assert_called_once()
+        exec_args, exec_kwargs = mock_execute.call_args
+        assert exec_args == ("mb_ok", "t1")
+        assert exec_kwargs["approved_by"] == "op@example.com"
+        mock_ready.assert_not_called()
         mock_fail.assert_not_called()
         assert outcome.kind == "finalized"
+        assert outcome.revision == 3
 
     def test_failure_keeps_recoverable_pending_creatives_without_stamping(self):
         with (
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=(False, "boom"),
+                return_value=_approval_failed("boom"),
             ) as mock_execute,
-            patch("src.services.media_buy_creative_readiness.MediaBuyUoW") as mock_uow,
+            patch(
+                "src.services.media_buy_creative_readiness.apply_creative_finalize_ready",
+            ) as mock_ready,
             patch(
                 "src.services.media_buy_creative_readiness.mark_media_buy_adapter_failed",
             ) as mock_fail,
@@ -415,14 +452,14 @@ class TestFinalizeMediaBuyAfterCreativeApproval:
                 approved_by="op@example.com",
             )
 
-        mock_execute.assert_called_once_with("mb_fail", "t1")
+        mock_execute.assert_called_once()
         mock_fail.assert_called_once_with(
             "mb_fail",
             "t1",
             error_msg="boom",
             status=PersistedMediaBuyStatus.PENDING_CREATIVES,
         )
-        mock_uow.assert_not_called()
+        mock_ready.assert_not_called()
         assert outcome.kind == "adapter_failed"
         assert outcome.error_msg == "boom"
 
