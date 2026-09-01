@@ -11,7 +11,6 @@ on the wire (code/message shape).
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -24,7 +23,6 @@ from tests.a2a_helpers import (
     OWNED_TASK_ID,
     OWNED_TASK_OWNER_TOK,
     OWNED_TASK_SIBLING_TOK,
-    TASK_METHOD_MATRIX,
     assert_wire_auth_failure,
     assert_wire_task_not_found,
     auth_headers_mapping,
@@ -32,7 +30,6 @@ from tests.a2a_helpers import (
     owned_task_sibling_identity,
     post_a2a_task_method,
     seeded_owned_a2a_handler,
-    seeded_owner_sibling_resolver,
 )
 
 

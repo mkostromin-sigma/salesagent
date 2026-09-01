@@ -267,7 +267,6 @@ ROLE_TARGETS: dict[str, tuple[str, str]] = {
 
 def owned_task_identity(role: str) -> ResolvedIdentity:
     """Build ``ResolvedIdentity`` for an ownership role (unit + wire altitudes)."""
-    from tests.factories.principal import PrincipalFactory
 
     tenant_id, principal_id = ROLE_TARGETS[role]
     return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, protocol="a2a")

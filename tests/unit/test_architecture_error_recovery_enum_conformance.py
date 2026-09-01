@@ -306,7 +306,7 @@ def test_wire_standard_codes_carry_no_classification() -> None:
         "define belongs in _SPEC_DEMOTED_CODES with a reason, not in the wire set."
     )
 
-    # The invariant the whole of salesagent-pldmk.4 exists to make definitional:
+    # The invariant the whole of GH #1802 exists to make definitional:
     # every code that can reach the wire has a pinned recovery classification, so
     # no lookup falls back to an authored default (invariant I6, "recovery is
     # derived, never authored"). src enforces this at import with a raise; this
@@ -449,7 +449,7 @@ def test_assert_envelope_shape_keeps_the_caller_literal_for_unclassified_codes()
     expectation — the derivation adds a check, it does not replace the caller's.
 
     ``NOT_SUPPORTED`` is used here as a code the pin is SILENT on — which is
-    exactly why salesagent-pldmk.4 removed it from the wire surface, via
+    exactly why GH #1802 removed it from the wire surface, via
     ``_SPEC_DEMOTED_CODES``. It is no longer emittable, and
     ``wire_advisory`` now subscripts rather than falling back, because the wire
     set is total over the recovery table by construction. What survives, and what
