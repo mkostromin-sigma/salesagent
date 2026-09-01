@@ -359,40 +359,33 @@ class TestCreativeApprovalRetroactivePush:
         assert response.status_code == 200
         mock_push.assert_not_called()
 
-    def test_approve_creative_finalize_stamps_session_operator_on_media_buy(self, client, test_tenant, factory_session):
-        """Finalize arm stamps MediaBuy.approved_by from session operator (#1718 KM Aug3)."""
-        from src.core.database.repositories.uow import MediaBuyUoW
+    def test_approve_creative_finalize_stamps_session_operator_on_media_buy(self, client, factory_session):
+        """Finalize arm stamps MediaBuy.approved_by from session operator (#1718 KM Aug3).
 
-        _auth_session(client, test_tenant)
-        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
-        media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="pending_creatives")
-        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+        ``execute_approved_media_buy`` is the sole post-adapter writer — do not mock
+        it when asserting a persisted stamp. Patch only the ad-server boundary.
+        """
+        from src.core.database.repositories import MediaBuyRepository
+
+        seeded = _seed_buy_held_on_one_creative(starts_in_days=-1)
+        login_as(client, tenant_id=seeded.tenant_id, email="test@example.com")
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_PUSH_PATCH, return_value=(True, None)),
-            patch(
-                "src.core.tools.media_buy_create.execute_approved_media_buy",
-                return_value=ApprovalResult(outcome=ApprovalOutcome.EXECUTED),
-            ) as mock_execute,
+            patch(ADAPTER_BOUNDARY, side_effect=adapter_success),
         ):
             response = client.post(
-                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                f"/tenant/{seeded.tenant_id}/creatives/review/{seeded.creative.creative_id}/approve",
                 content_type="application/json",
+                # Body field is creative-row provenance — must NOT win over session.
                 json={"approved_by": "creative-reviewer@example.com"},
             )
 
-        assert response.status_code == 200
-        mock_execute.assert_called_once()
-        assert mock_execute.call_args.args == (media_buy_id, test_tenant)
-        assert mock_execute.call_args.kwargs["approved_by"] == "test@example.com"
-
-        with MediaBuyUoW(test_tenant) as uow:
-            assert uow.media_buys is not None
-            buy = uow.media_buys.get_by_id(media_buy_id)
-            assert buy is not None
-            # Session operator — not the creative-row body field.
-            assert buy.approved_by == "test@example.com"
+        assert response.status_code == 200, response.data
+        factory_session.expire_all()
+        buy = MediaBuyRepository(factory_session, seeded.tenant_id).get_by_id(seeded.media_buy_id)
+        assert buy is not None
+        assert buy.approved_by == "test@example.com"
 
     def test_approve_creative_adapter_failure_stays_recoverable(self, client, test_tenant, factory_session):
         """Execute-first failure keeps the buy pending and the batch response successful."""
