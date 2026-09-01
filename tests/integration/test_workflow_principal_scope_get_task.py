@@ -18,7 +18,7 @@ from src.core.exceptions import AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.task_management import complete_task, get_task
 from tests.factories import PrincipalFactory, TenantFactory
-from tests.utils.database_helpers import _bind_factories_to_session
+from tests.utils.database_helpers import bind_factories_to_session
 from tests.utils.workflow_task_seed import create_principal_owned_workflow_step
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -64,7 +64,7 @@ def principal_scoped_step(integration_db):
     the sibling, so the tests genuinely exercise the leak path.
     """
     engine = get_engine()
-    with SASession(bind=engine) as session, _bind_factories_to_session(session):
+    with SASession(bind=engine) as session, bind_factories_to_session(session):
         tenant = TenantFactory(tenant_id="pscope_tenant_get_task")
         owner = PrincipalFactory(
             tenant=tenant,

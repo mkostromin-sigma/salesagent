@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps._outcome_helpers import wire_error_envelope_or_none, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PrincipalFactory
@@ -150,4 +150,8 @@ def then_wire_error_matches_unknown_task(ctx: dict) -> None:
     sibling_result.assert_wire_error("REFERENCE_NOT_FOUND", pin_enum_suggestion=True)
     assert unknown_result is not None, "Expected unknown-id dispatch TransportResult"
     unknown_result.assert_wire_error("REFERENCE_NOT_FOUND", pin_enum_suggestion=True)
-    assert sibling_result.wire_error_envelope == unknown_result.wire_error_envelope
+    # Compare via the guarded accessor (not result.wire_error_envelope) so
+    # test_architecture_bdd_wire_discipline stays green.
+    sibling_envelope = wire_error_envelope_or_none({"result": sibling_result})
+    unknown_envelope = wire_error_envelope_or_none({"result": unknown_result})
+    assert sibling_envelope == unknown_envelope
