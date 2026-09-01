@@ -28,6 +28,36 @@ from tests.helpers.scheduler_isolation import (
 
 
 @pytest.mark.asyncio
+async def test_savepoint_release_failure_counts_as_isolated_not_flipped():
+    """R10-1.4 unit twin: release-time DataError is ISOLATED, not FLIPPED."""
+    from sqlalchemy.exc import DataError
+
+    buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(3)]
+    release_exc = DataError("UPDATE media_buys", {}, Exception("value too long"))
+    session = mock_savepoint_session(release_exc=release_exc)
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", return_value="completed"),
+        patch.object(status_mod.logger, "warning") as mock_warning,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    assert warn_lines == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ") == []
+    session.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_status_scheduler_connection_invalidated_reraises():
     """Adoption oracle: invalidated OperationalError re-raises out of the batch.
 
@@ -125,6 +155,162 @@ async def test_batch_summary_warns_when_every_visited_buy_fails():
             return_value=buys,
         ),
         patch.object(scheduler, "_compute_new_status", side_effect=_always_fail),
+        patch.object(status_mod.logger, "warning") as mock_warning,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    warn_lines = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
+    assert warn_lines == [f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 3 errors"]
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == []
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_info_when_noop_plus_one_raiser():
+    """R10-2: mid-flight NOOPs + one ISOLATED must INFO, not WARNING.
+
+    Discriminates ``errors == seen`` from the pre-seen rule
+    ``errors and not updated_count`` (which would false-page every 60s).
+    """
+    buys = [mock_media_buy(media_buy_id=f"mb_{i}", tenant_id=f"t{i}") for i in range(5)]
+    session = mock_savepoint_session()
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    def _noop_or_raise(media_buy, _now, _session):
+        if media_buy.media_buy_id == "mb_4":
+            raise OperationalError("SELECT 1", {}, Exception("timeout"))
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", side_effect=_noop_or_raise),
+        patch.object(status_mod.logger, "warning") as mock_warning,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    assert summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX) == [
+        f"{STATUS_BATCH_SUMMARY_PREFIX}: 0 updated, 1 errors"
+    ]
+    assert summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX) == []
+
+
+@pytest.mark.asyncio
+async def test_lazy_id_failure_isolates_and_siblings_still_flip():
+    """R10-3a: id reads inside the per-buy try keep a lazy-id failure contained."""
+
+    class _LazyIdBuy:
+        media_buy_id = "mb_lazy"
+        principal_id = "p-lazy"
+        status = "active"
+
+        @property
+        def tenant_id(self) -> str:
+            raise RuntimeError("lazy tenant_id")
+
+    buys = [
+        _LazyIdBuy(),
+        mock_media_buy(media_buy_id="mb_ok_a", tenant_id="t-ok-a"),
+        mock_media_buy(media_buy_id="mb_ok_b", tenant_id="t-ok-b"),
+    ]
+    session = mock_savepoint_session()
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    def _compute(media_buy, _now, _session):
+        if getattr(media_buy, "media_buy_id", None) == "mb_lazy":
+            raise AssertionError("compute must not run after lazy-id failure")
+        return "completed"
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
+        patch.object(status_mod.logger, "error") as mock_error,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    err_msgs = [str(c.args[0]) for c in mock_error.call_args_list if c.args]
+    assert any("Error updating media buy status" in msg for msg in err_msgs)
+    assert not any("Failed to update media buy statuses" in msg for msg in err_msgs)
+    session.commit.assert_called_once()
+    flip_lines = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ")
+    assert len(flip_lines) == 2
+
+
+@pytest.mark.asyncio
+async def test_nested_handler_failure_stays_isolated():
+    """R10-3b: handler boom must not escape the per-buy iteration."""
+    buys = [
+        mock_media_buy(media_buy_id="mb_fail", tenant_id="t-fail"),
+        mock_media_buy(media_buy_id="mb_ok", tenant_id="t-ok"),
+    ]
+    session = mock_savepoint_session()
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    def _compute(media_buy, _now, _session):
+        if media_buy.media_buy_id == "mb_fail":
+            raise OperationalError("SELECT 1", {}, Exception("timeout"))
+        return "completed"
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
+        patch(
+            "src.services.media_buy_status_scheduler.record_scheduler_isolation_error",
+            side_effect=RuntimeError("handler boom"),
+        ),
+        patch.object(status_mod.logger, "error") as mock_error,
+        patch.object(status_mod.logger, "info") as mock_info,
+    ):
+        await scheduler._update_statuses()
+
+    err_msgs = [str(c.args[0]) for c in mock_error.call_args_list if c.args]
+    assert any("Status isolation error handler failed" in msg for msg in err_msgs)
+    assert not any("Failed to update media buy statuses" in msg for msg in err_msgs)
+    session.commit.assert_called_once()
+    flip_lines = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX, needle="Updated media buy ")
+    assert len(flip_lines) == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_warns_on_escape_with_only_prior_errors():
+    """R10-5: escape after isolations (zero flips) must WARNING, not INFO."""
+    buys = [
+        mock_media_buy(media_buy_id="mb_a", tenant_id="t-a"),
+        mock_media_buy(media_buy_id="mb_b", tenant_id="t-b"),
+        mock_media_buy(media_buy_id="mb_c", tenant_id="t-c"),
+        mock_media_buy(media_buy_id="mb_dead", tenant_id="t-dead"),
+    ]
+    session = mock_savepoint_session()
+    cm = mock_get_db_session_cm(session)
+    scheduler = MediaBuyStatusScheduler()
+
+    def _compute(media_buy, _now, _session):
+        if media_buy.media_buy_id == "mb_dead":
+            raise OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
+        raise OperationalError("SELECT 1", {}, Exception("timeout"))
+
+    with (
+        patch("src.services.media_buy_status_scheduler.get_db_session", return_value=cm),
+        patch(
+            "src.services.media_buy_status_scheduler.MediaBuyRepository.get_all_by_statuses",
+            return_value=buys,
+        ),
+        patch.object(scheduler, "_compute_new_status", side_effect=_compute),
         patch.object(status_mod.logger, "warning") as mock_warning,
         patch.object(status_mod.logger, "info") as mock_info,
     ):

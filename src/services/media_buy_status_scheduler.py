@@ -120,7 +120,7 @@ class MediaBuyStatusScheduler:
             media_buy_id = media_buy.media_buy_id
             with session.begin_nested():
                 new_status = self._compute_new_status(media_buy, now, session)
-                if new_status and new_status != media_buy.status:
+                if new_status:
                     old_status = media_buy.status
                     media_buy.status = new_status
         except Exception as exc:
@@ -161,7 +161,8 @@ class MediaBuyStatusScheduler:
         ``updated_count``/``errors`` tally is applied only *after* the SAVEPOINT
         releases cleanly. Batch summary runs in an outer ``finally`` so a
         dead-connection re-raise mid-loop still emits the tally, and the
-        summary keys severity on whether the terminal commit actually persisted.
+        summary keys severity on whether the loop ``reached_end`` (successful
+        terminal path), not on a derived ``committed`` flag.
         """
         now = datetime.now(UTC)
         updated_count = 0
@@ -229,14 +230,11 @@ class MediaBuyStatusScheduler:
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
         finally:
-            # Pending flips are only "updated" when the tick reached a successful
-            # terminal commit (or there were no flips to persist).
-            committed = reached_end or updated_count == 0
             self._log_batch_summary(
                 seen=seen,
                 updated_count=updated_count,
                 errors=errors,
-                committed=committed,
+                reached_end=reached_end,
             )
 
     def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> PersistedMediaBuyStatus | None:

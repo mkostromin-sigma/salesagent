@@ -701,12 +701,17 @@ async def test_all_failing_flips_emit_warning_summary(integration_db):
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_savepoint_release_failure_not_counted_processed_and_warns(integration_db):
-    """BLOCKER oracle through production entry: release failure is not processed.
+    """BLOCKER oracle: on-enum write + flush failure at SAVEPOINT release.
 
-    All three flips "succeed" inside the body but SAVEPOINT release raises;
-    summary must WARNING ``0 updated, 3 errors`` (not INFO ``3 updated, 3 errors``).
-    Success INFO must not fire for rolled-back flips either.
+    ``PersistedMediaBuyStatus.parse`` refuses off-enum values before any flush, so
+    an over-length status string no longer reaches release. Keep the injected
+    status inside the pinned enum, let ``update_status`` succeed, then dirty a
+    non-status ``String(255)`` column so the RELEASE flush raises
+    ``DataError`` / truncation — grading the release path, not parse.
     """
+    from src.core.database.models import PersistedMediaBuyStatus
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
     tenant_id = _create_test_tenant("tenant_isolation_release_fail_1714")
     principal_id = _create_test_principal(tenant_id)
 
@@ -719,15 +724,21 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
     )
 
     scheduler = MediaBuyStatusScheduler()
+    real_update = MediaBuyRepository.update_status
 
-    def _always_overlong(_media_buy, _now_arg, _session):
-        # Over-length status triggers StringDataRightTruncation at SAVEPOINT release.
-        return "x" * 64
+    def _update_then_poison_order_name(self, media_buy_id, status, **kwargs):
+        updated = real_update(self, media_buy_id, status, **kwargs)
+        if updated is not None:
+            # order_name is String(255); over-length dirties the unit so the
+            # SAVEPOINT RELEASE flush fails after the on-enum status write.
+            updated.order_name = "x" * 300
+        return updated
 
     with (
         patch.object(status_scheduler_mod.logger, "info") as mock_info,
         patch.object(status_scheduler_mod.logger, "warning") as mock_warning,
-        patch.object(scheduler, "_compute_new_status", side_effect=_always_overlong),
+        patch.object(scheduler, "_compute_new_status", return_value=PersistedMediaBuyStatus.COMPLETED),
+        patch.object(MediaBuyRepository, "update_status", _update_then_poison_order_name),
     ):
         await scheduler._update_statuses()
 
