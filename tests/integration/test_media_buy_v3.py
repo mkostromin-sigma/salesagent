@@ -329,7 +329,6 @@ class TestCreateMediaBuyManualApproval:
         Verifies that execute_approved_media_buy persists flight-window status
         (UC-002:437 / #1696). Default create request starts in +1d → pending_start.
         """
-        from src.core.tools._media_buy_status import resolve_canonical_status
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         identity = _make_identity(

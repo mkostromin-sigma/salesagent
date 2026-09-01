@@ -745,9 +745,12 @@ class TestAdminWorkflowApproveHold:
         ) as mock_execute:
             body = _post_workflow_approve(authenticated_admin_session, ids)
 
-        mock_execute.assert_called_once()
-        assert mock_execute.call_args.args == (ids["media_buy_id"], ids["tenant_id"])
-        assert mock_execute.call_args.kwargs["approved_by"] == "test@example.com"
+        mock_execute.assert_called_once_with(
+            ids["media_buy_id"],
+            ids["tenant_id"],
+            approved_by="test@example.com",
+            approved_at=ANY,
+        )
         # Mocked sole writer does not persist; ready-arm no longer pre-stamps.
         # Grade that execute was invoked and the route returned success.
         assert body.get("success") is True
@@ -784,7 +787,10 @@ class TestAdminApproveAdapterFailureRollback:
                 assert body.get("success") is False
                 assert body.get("error") == "adapter boom"
 
-        mock_execute.assert_called_once()
-        assert mock_execute.call_args.args == (ids["media_buy_id"], ids["tenant_id"])
-        assert mock_execute.call_args.kwargs["approved_by"] == "test@example.com"
+        mock_execute.assert_called_once_with(
+            ids["media_buy_id"],
+            ids["tenant_id"],
+            approved_by="test@example.com",
+            approved_at=ANY,
+        )
         _assert_persisted_status(ids, "failed", approved_by="test@example.com")

@@ -13,7 +13,6 @@ from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
-from src.core.tools.media_buy_create import ApprovalOutcome
 
 logger = logging.getLogger(__name__)
 

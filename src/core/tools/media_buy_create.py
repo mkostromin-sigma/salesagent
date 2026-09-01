@@ -1405,25 +1405,47 @@ def execute_approved_media_buy(
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
             return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
-        # After successful adapter execution, persist flight-window ORM status
-        # (active / scheduled / completed). Hardcoding "active" clobbered future-start
-        # buys that the ready arm already set to "pending_start" / "active" (#1696 / UC-002:437).
-        from src.services.media_buy_creative_readiness import (
-            compute_media_buy_status_from_flight_dates,
-        )
-
+        # THE post-adapter write. One writer, one write, one revision bump.
+        #
+        # The row is re-fetched inside this UoW rather than reusing the instance
+        # loaded before the adapter call: that instance was detached when a nested
+        # get_db_session() closed the shared scoped session, and resolving a flight
+        # window off a detached row is the defect this function exists to stop the
+        # routes from committing. Reusing it here would move that defect one frame
+        # down rather than remove it.
         with MediaBuyUoW(tenant_id) as uow3:
             assert uow3.media_buys is not None
-            buy = uow3.media_buys.get_by_id(media_buy_id)
-            if buy is None:
-                error_msg = f"Media buy {media_buy_id} not found after adapter success"
-                logger.error(f"[APPROVAL] {error_msg}")
-                return False, error_msg
-            new_status = compute_media_buy_status_from_flight_dates(buy)
-            uow3.media_buys.update_status(media_buy_id, new_status)
-            logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to {new_status!r}")
-
-        return True, None
+            fresh = uow3.media_buys.get_by_id(media_buy_id)
+            if fresh is None:
+                return ApprovalResult.failed(f"media buy {media_buy_id!r} vanished during approval")
+            resolved = resolve_flight_window_status(
+                fresh,
+                now=datetime.now(UTC),
+                creatives_approved=True,
+            )
+            assert resolved is not None, (
+                "flight_window() returned None for a persisted media buy; "
+                "MediaBuy.start_date/end_date are NOT NULL, so this cannot happen"
+            )
+            written = uow3.media_buys.update_status(
+                media_buy_id,
+                resolved,
+                # Reached only after the adapter created the order, so this is the
+                # commitment instant for every buy that arrives through approval.
+                # The creative-review HOLD returns above this line, before the
+                # adapter, and so leaves the default and stamps nothing.
+                seller_committed=True,
+                approved_at=approved_at,
+                approved_by=approved_by,
+            )
+            assert written is not None, f"media buy {media_buy_id!r} vanished mid-write"
+            logger.info(log_safe(f"[APPROVAL] Media buy {media_buy_id} -> {resolved}"))
+            return ApprovalResult(
+                outcome=ApprovalOutcome.EXECUTED,
+                status=resolved,
+                revision=written.revision,
+                confirmed_at=written.confirmed_at,
+            )
 
     except Exception as e:
         import traceback

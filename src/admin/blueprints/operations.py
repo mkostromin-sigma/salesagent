@@ -13,12 +13,11 @@ from flask import Blueprint, request
 from sqlalchemy import select
 
 from src.admin.utils import echo_context, require_auth, require_tenant_access, session_operator_email
-from src.core.database.models import PushNotificationConfig
+from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
-from src.core.tools.media_buy_create import ApprovalOutcome
-from src.core.webhooks.delivery import WebhookTaskContext
+from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -456,17 +455,14 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # the creative approval webhook in blueprints/creatives.py).
                         approve_context = echo_context(request_data)
 
-                        # The buy IS committed at this point, so a confirmed Success
-                        # (status/confirmed_at/revision from the subclass defaults) is
-                        # semantically correct here — route through the sync_success()
-                        # factory like every sibling construction site (PR #1567 round-2 cleanup).
-                        # Pass media_buy_status explicitly (canonical) so the webhook domain
-                        # field matches get_media_buys; body status stays "completed".
+                        # confirmed_at / revision come off FinalizeOutcome (from the
+                        # writer's ApprovalResult); media_buy_status is the canonical
+                        # domain field so the webhook matches get_media_buys.
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
-                            confirmed_at=approval.confirmed_at,
-                            revision=approval.revision,
+                            confirmed_at=outcome.confirmed_at,
+                            revision=outcome.revision,
                             context=approve_context,
                             media_buy_status=webhook_media_buy_status,
                         )
@@ -484,7 +480,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         else:
                             # tool_name is untrusted (workflow_steps DB column).
                             # Validate a COPY for the SDK payload; metadata keeps
-                            # the original label (salesagent-yi3s, salesagent-yk7o).
+                            # the original label (#1567).
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
                                 task_id=step_data["step_id"],
                                 task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),

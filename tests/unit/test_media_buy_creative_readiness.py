@@ -1,7 +1,7 @@
 """Unit tests for shared creative finalize-readiness predicate (#1696)."""
 
 from datetime import UTC, date, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.schemas.creative import FINALIZE_READY_CREATIVE_STATUSES, CreativeStatusEnum
@@ -299,13 +299,13 @@ class TestFinalizeMediaBuyApproval:
 
         mock_eval.assert_called_once_with(session, "t1", media_buy_id="mb_hold")
         mock_repo_cls.assert_called_once_with(session, "t1")
-        mock_repo.update_status.assert_called_once()
-        us_args, us_kwargs = mock_repo.update_status.call_args
-        assert us_args[0] == "mb_hold"
-        assert us_args[1] is PersistedMediaBuyStatus.PENDING_CREATIVES
-        assert us_kwargs["approved_by"] == "op@example.com"
-        assert us_kwargs["approved_at"] is not None
-        mock_log.assert_called_once()
+        mock_repo.update_status.assert_called_once_with(
+            "mb_hold",
+            PersistedMediaBuyStatus.PENDING_CREATIVES,
+            approved_at=ANY,
+            approved_by="op@example.com",
+        )
+        mock_log.assert_called_once_with("mb_hold", readiness)
         session.commit.assert_called_once_with()
         mock_ready.assert_not_called()
         mock_execute.assert_not_called()
@@ -350,11 +350,12 @@ class TestFinalizeMediaBuyApproval:
 
         mock_ready.assert_not_called()
         session.commit.assert_not_called()
-        mock_execute.assert_called_once()
-        exec_args, exec_kwargs = mock_execute.call_args
-        assert exec_args == ("mb_ok", "t1")
-        assert exec_kwargs["approved_by"] == "op@example.com"
-        assert exec_kwargs["approved_at"] is not None
+        mock_execute.assert_called_once_with(
+            "mb_ok",
+            "t1",
+            approved_by="op@example.com",
+            approved_at=ANY,
+        )
         mock_fail.assert_not_called()
         assert outcome.kind == "finalized"
         assert outcome.webhook_media_buy_status == "pending_start"
@@ -425,10 +426,12 @@ class TestFinalizeMediaBuyAfterCreativeApproval:
                 approved_by="op@example.com",
             )
 
-        mock_execute.assert_called_once()
-        exec_args, exec_kwargs = mock_execute.call_args
-        assert exec_args == ("mb_ok", "t1")
-        assert exec_kwargs["approved_by"] == "op@example.com"
+        mock_execute.assert_called_once_with(
+            "mb_ok",
+            "t1",
+            approved_by="op@example.com",
+            approved_at=ANY,
+        )
         mock_ready.assert_not_called()
         mock_fail.assert_not_called()
         assert outcome.kind == "finalized"
@@ -453,7 +456,12 @@ class TestFinalizeMediaBuyAfterCreativeApproval:
                 approved_by="op@example.com",
             )
 
-        mock_execute.assert_called_once()
+        mock_execute.assert_called_once_with(
+            "mb_fail",
+            "t1",
+            approved_by="op@example.com",
+            approved_at=ANY,
+        )
         mock_fail.assert_called_once_with(
             "mb_fail",
             "t1",

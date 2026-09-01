@@ -55,6 +55,10 @@ class FinalizeOutcome:
     hold_reason: HoldReason | None = None
     error_msg: str | None = None
     webhook_media_buy_status: str | None = None
+    # Carried from ApprovalResult after adapter success so webhook producers do
+    # not re-read a detached row for confirmed_at / revision (main writer contract).
+    confirmed_at: datetime | None = None
+    revision: int | None = None
 
 
 def _hold_message_for(reason: HoldReason, unapproved_count: int) -> str:
@@ -214,17 +218,26 @@ def _execute_media_buy_adapter(
     approved_at: datetime | None = None,
 ):
     """Execute adapter creation and single-home its persisted failure outcome."""
-    from src.core.tools.media_buy_create import execute_approved_media_buy
+    from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult, execute_approved_media_buy
 
-    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
-    if not success:
+    approval: ApprovalResult = execute_approved_media_buy(
+        media_buy_id,
+        tenant_id,
+        approved_by=approved_by,
+        approved_at=approved_at,
+    )
+    # Creative-hold is owned by evaluate_* above the call; a late HELD from the
+    # writer is a race / double-gate miss — surface it, do not stamp FAILED over it.
+    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
+        return approval
+    if not approval.ok:
         mark_media_buy_adapter_failed(
             media_buy_id,
             tenant_id,
-            error_msg=error_msg,
+            error_msg=approval.error_msg,
             status=failure_status,
         )
-    return success, error_msg
+    return approval
 
 
 def finalize_media_buy_approval(
@@ -289,7 +302,7 @@ def finalize_media_buy_approval(
     if not approval.ok:
         return FinalizeOutcome(
             kind="adapter_failed",
-            error_msg=error_msg,
+            error_msg=approval.error_msg,
             webhook_media_buy_status=webhook_media_buy_status,
         )
 
@@ -297,6 +310,8 @@ def finalize_media_buy_approval(
     return FinalizeOutcome(
         kind="finalized",
         webhook_media_buy_status=webhook_media_buy_status,
+        confirmed_at=approval.confirmed_at,
+        revision=approval.revision,
     )
 
 
@@ -312,19 +327,26 @@ def finalize_media_buy_after_creative_approval(
     Adapter failure stays recoverable at ``pending_creatives`` so a later
     creative approval can retry (execute may have written FAILED; we restore).
     """
+    from src.core.tools.media_buy_create import ApprovalOutcome
+
     logger.info("[CREATIVE APPROVAL] Executing adapter creation for unblocked media buy %s", media_buy_id)
-    success, error_msg = _execute_media_buy_adapter(
+    approved_at = datetime.now(UTC)
+    approval = _execute_media_buy_adapter(
         media_buy_id,
         tenant_id,
         failure_status=PersistedMediaBuyStatus.PENDING_CREATIVES,
         approved_by=approved_by,
         approved_at=approved_at,
     )
-    if not success:
-        return FinalizeOutcome(kind="adapter_failed", error_msg=error_msg)
+    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES or not approval.ok:
+        return FinalizeOutcome(kind="adapter_failed", error_msg=approval.error_msg)
 
     logger.info("[CREATIVE APPROVAL] Media buy %s successfully created in adapter", media_buy_id)
-    return FinalizeOutcome(kind="finalized")
+    return FinalizeOutcome(
+        kind="finalized",
+        confirmed_at=approval.confirmed_at,
+        revision=approval.revision,
+    )
 
 
 def _coerce_flight_boundary(
