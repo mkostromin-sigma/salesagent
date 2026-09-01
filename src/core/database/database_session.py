@@ -40,13 +40,9 @@ _is_healthy = True
 #: not on membership in this tuple. A plain ``OperationalError`` (e.g. statement
 #: timeout) is deliberately isolated and must NOT be re-raised by callers.
 #:
-#: Escape and arm are related but not identical: ``is_connection_dead`` can be
-#: true for an invalidated ``DBAPIError`` whose class is *not* in this tuple
-#: (e.g. ``ProgrammingError`` with ``connection_invalidated=True``). That
-#: re-raise escapes the per-item loop but does **not** arm the breaker today.
-#: Aligning escape⇒arm for every ``DBAPIError`` subclass is a separate change;
-#: ``InterfaceError`` is listed here because that class *does* need to arm when
-#: escape re-raises it.
+#: :func:`get_db_session` also arms the breaker when ``is_connection_dead`` is
+#: true on any ``SQLAlchemyError`` (narrow escape⇒arm for scheduler re-raises).
+#: Broader inventory / session-layer cleanup remains #2162.
 CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
     OperationalError,
     DisconnectionError,
@@ -57,11 +53,9 @@ CONNECTION_ERROR_TYPES: tuple[type[BaseException], ...] = (
 def is_connection_dead(exc: BaseException) -> bool:
     """Return True when ``exc`` indicates a dead/unusable DB connection.
 
-    Owned next to :data:`CONNECTION_ERROR_TYPES` (breaker arm-set). The escape
-    predicate keys on connection *state*; the breaker still keys on class
-    membership — see the module comment on :data:`CONNECTION_ERROR_TYPES` for
-    the intentional asymmetry. Per-item schedulers call this in ``except`` to
-    decide re-raise vs isolate.
+    Owned next to :data:`CONNECTION_ERROR_TYPES`. Schedulers call this in ``except``
+    to decide re-raise vs isolate; :func:`get_db_session` arms the breaker when
+    this is true on escaped ``SQLAlchemyError`` subclasses outside the class tuple.
     """
     return bool(getattr(exc, "connection_invalidated", False)) or isinstance(exc, DisconnectionError)
 
@@ -272,6 +266,10 @@ def get_db_session() -> Generator[Session, None, None]:
     except SQLAlchemyError as e:
         logger.error(f"Database error: {e}")
         session.rollback()
+        if is_connection_dead(e):
+            scoped.remove()
+            _is_healthy = False
+            _last_health_check = time.time()
         raise
     finally:
         session.close()

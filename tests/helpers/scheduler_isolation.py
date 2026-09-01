@@ -6,7 +6,17 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
-from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import (
+    DataError,
+    DBAPIError,
+    DisconnectionError,
+    IntegrityError,
+    InterfaceError,
+    InternalError,
+    NotSupportedError,
+    OperationalError,
+    ProgrammingError,
+)
 
 
 def summary_lines(mock_logger: MagicMock, prefix: str, *, needle: str | None = None) -> list[str]:
@@ -35,6 +45,20 @@ def counter_value(scheduler: str, tenant_id: str, error_type: str) -> float:
 def invalidated_operational_error() -> OperationalError:
     """Connection-invalidated OperationalError used by breaker-arm oracles."""
     return OperationalError("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
+
+
+def invalidated_dbapi_error(exc_type: type[DBAPIError]) -> DBAPIError:
+    """Build a connection-invalidated DBAPIError for escape⇒arm parametrization."""
+    return exc_type("SELECT 1", {}, Exception("gone"), connection_invalidated=True)
+
+
+INVALIDATED_ESCAPE_ARM_ERROR_TYPES: tuple[type[DBAPIError], ...] = (
+    ProgrammingError,
+    DataError,
+    IntegrityError,
+    InternalError,
+    NotSupportedError,
+)
 
 
 def invalidated_interface_error() -> InterfaceError:

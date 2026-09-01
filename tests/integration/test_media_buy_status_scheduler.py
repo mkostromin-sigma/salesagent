@@ -39,6 +39,7 @@ from tests.helpers.media_buy_write_seam import (
     read_media_buy_state,
 )
 from tests.helpers.scheduler_isolation import (
+    INVALIDATED_ESCAPE_ARM_ERROR_TYPES,
     counter_value,
     seed_active_expired_buys,
     summary_lines,
@@ -787,6 +788,43 @@ async def test_status_scheduler_invalidated_error_arms_real_breaker(integration_
 
     def _raise_invalidated(_media_buy, _now_arg, _session):
         raise invalidated_operational_error()
+
+    async def _run() -> None:
+        with patch.object(scheduler, "_compute_new_status", side_effect=_raise_invalidated):
+            await scheduler._update_statuses()
+
+    await assert_escaped_invalidation_arms_breaker(_run)
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc_type",
+    INVALIDATED_ESCAPE_ARM_ERROR_TYPES,
+    ids=[t.__name__ for t in INVALIDATED_ESCAPE_ARM_ERROR_TYPES],
+)
+async def test_status_scheduler_invalidated_dbapi_subclasses_arm_real_breaker(integration_db, exc_type):
+    """Each invalidated DBAPIError subclass the scheduler escapes must arm the breaker."""
+    from tests.helpers.scheduler_isolation import (
+        assert_escaped_invalidation_arms_breaker,
+        invalidated_dbapi_error,
+    )
+
+    tenant_id = _create_test_tenant(f"tenant_isolation_{exc_type.__name__}_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    seed_active_expired_buys(
+        _create_media_buy,
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        buy_ids=[f"mb_{exc_type.__name__}"],
+    )
+
+    scheduler = MediaBuyStatusScheduler()
+    escaped = invalidated_dbapi_error(exc_type)
+
+    def _raise_invalidated(_media_buy, _now_arg, _session):
+        raise escaped
 
     async def _run() -> None:
         with patch.object(scheduler, "_compute_new_status", side_effect=_raise_invalidated):
