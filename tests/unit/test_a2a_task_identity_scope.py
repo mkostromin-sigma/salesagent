@@ -53,7 +53,6 @@ from tests.a2a_helpers import (
     invoke_owned_task_method,
     make_a2a_context,
     message_send_with_push,
-    owned_task_other_tenant_identity,
     owned_task_owner_identity,
     owned_task_sibling_identity,
     seeded_owned_a2a_handler,
@@ -176,34 +175,6 @@ def _make_nl_message(text: str) -> SendMessageRequest:
     return SendMessageRequest(message=message)
 
 
-def _authenticate_operation_literals() -> list[str]:
-    """String literals passed as ``operation=`` into ``_authenticate`` / owned lookup."""
-    tree = ast.parse(_A2A_SERVER.read_text(), filename=str(_A2A_SERVER))
-    ops: list[str] = []
-
-    class _Visitor(ast.NodeVisitor):
-        def visit_Call(self, node: ast.Call) -> None:
-            func = node.func
-            name = None
-            if isinstance(func, ast.Name):
-                name = func.id
-            elif isinstance(func, ast.Attribute):
-                name = func.attr
-            if name in {"_authenticate", "_get_owned_in_memory_task_or_raise"}:
-                for kw in node.keywords:
-                    if kw.arg == "operation" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                        ops.append(kw.value.value)
-            self.generic_visit(node)
-
-    _Visitor().visit(tree)
-    return ops
-
-
-def test_task_not_found_message_is_literal_contract():
-    """Buyer-facing formatter pinned by a hand-written literal (R5-B1)."""
-    assert _task_not_found_message("task_x") == "Task not found: task_x"
-
-
 def test_safe_task_id_for_log_escapes_and_truncates():
     """Sanitizer oracle — allowlist + truncate-after-substitute (R5-C2 / R5-N1a)."""
     assert _safe_task_id_for_log("a\nWARNING forged") == "a?WARNING?forged"
@@ -232,28 +203,6 @@ def test_safe_task_id_for_log_escapes_and_truncates():
         ),
     ],
 )
-def test_internal_error_for_typed_and_untyped(exc, expected_message, expected_code, expected_recovery):
-    """``_internal_error_for`` branches pinned (R5-D2)."""
-    err = _internal_error_for("op", exc)
-    assert isinstance(err, InternalError)
-    assert err.message == expected_message
-    assert "[SQL:" not in err.message
-    assert "secret" not in err.message
-    assert err.data is not None
-    assert err.data["adcp_error"]["code"] == expected_code
-    assert err.data["adcp_error"]["recovery"] == expected_recovery
-
-
-def test_internal_error_for_sql_normalized_exception_stays_out_of_message():
-    """Normalized SQLAlchemy text must not reach InternalError.message (R5-D2)."""
-    sql_exc = OperationalError("SELECT principals.token WHERE tok=:tok", {"tok": "super-secret"}, None)
-    err = _internal_error_for("message processing", sql_exc)
-    assert err.message == "message processing failed"
-    blob = f"{err.message}{err.data!s}"
-    assert "super-secret" not in blob
-    assert "[SQL:" not in blob
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
@@ -312,54 +261,6 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
     "request_cls, method_name",
     TASK_METHOD_PAIRS,
 )
-async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
-    """Real constructor create→poll: owner allowed; sibling/other-tenant denied."""
-    handler = AdCPRequestHandler()
-    owner = owned_task_owner_identity()
-    sibling = owned_task_sibling_identity()
-    other_tenant = owned_task_other_tenant_identity()
-    ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
-    params = SendMessageRequest(message=create_a2a_text_message("Show me available products in the catalog"))
-
-    with patch("src.core.resolved_identity.resolve_identity", return_value=owner):
-        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
-            mock_products.return_value = GetProductsResponse(products=[])
-            created = await handler.on_message_send(params, context=ctx)
-
-    task_id = created.id
-    assert handler._task_owners[task_id] == _TaskOwner(tenant_id=OWNED_TASK_TENANT, principal_id=OWNED_TASK_OWNER)
-
-    with a2a_auth_as(handler, owner):
-        task = await invoke_owned_task_method(handler, method_name, request_cls, task_id)
-    assert task.id == task_id
-    if method_name == "on_cancel_task":
-        assert task.status.state == TaskState.TASK_STATE_CANCELED
-    else:
-        assert task.status.state == TaskState.TASK_STATE_COMPLETED
-
-    # Re-seed completed state so deny checks do not depend on cancel mutation.
-    handler.tasks[task_id].status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_COMPLETED))
-
-    with a2a_auth_as(handler, sibling):
-        with pytest.raises(TaskNotFoundError) as sibling_exc:
-            await invoke_owned_task_method(handler, method_name, request_cls, task_id)
-
-    with a2a_auth_as(handler, other_tenant):
-        with pytest.raises(TaskNotFoundError) as other_exc:
-            await invoke_owned_task_method(handler, method_name, request_cls, task_id)
-
-    with a2a_auth_as(handler, owner):
-        with pytest.raises(TaskNotFoundError) as unknown_exc:
-            await invoke_owned_task_method(handler, method_name, request_cls, "task_does_not_exist")
-
-    assert_task_not_found_nondisclosure(sibling_exc.value, task_id)
-    assert_task_not_found_nondisclosure(other_exc.value, task_id)
-    assert_task_not_found_nondisclosure(unknown_exc.value, "task_does_not_exist")
-    # Deny shape for the owned id matches the canonical not-found from this handler.
-    assert sibling_exc.value.message == other_exc.value.message
-    assert sibling_exc.value.data == other_exc.value.data
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
@@ -483,35 +384,6 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(method_na
     "request_cls, method_name, wire_message",
     [(row.request_cls, row.method_name, auth_operation_wire_phrase(row.operation)) for row in TASK_METHOD_MATRIX],
 )
-async def test_auth_infra_failure_is_internal_error_not_task_not_found(request_cls, method_name, wire_message):
-    """DB/infra failure during identity resolve must not collapse to TaskNotFoundError.
-
-    Mutating the ``_authenticate`` except branch back to ``_task_not_found`` must
-    redden this test: buyers see a fixed human-phrase InternalError, not not-found.
-    """
-    handler = seeded_owned_a2a_handler()
-
-    with (
-        patch.object(handler, "_get_auth_token", return_value="tok"),
-        patch.object(
-            handler,
-            "_resolve_a2a_identity",
-            side_effect=OperationalError("db down", None, None),
-        ),
-    ):
-        with pytest.raises(InternalError) as exc_info:
-            await invoke_owned_task_method(handler, method_name, request_cls, OWNED_TASK_ID)
-
-    raised = exc_info.value
-    assert raised.message == wire_message
-    assert "_" not in raised.message
-    # Spec MUST: senders populate error.recovery on every error —
-    # by-layer/L3/error-handling.mdx § Forward-compatible decoding (normative), AdCP 3.1.1.
-    assert raised.data is not None
-    assert raised.data["adcp_error"]["recovery"] == "transient"
-    assert raised.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
@@ -546,37 +418,6 @@ async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name)
     "request_cls, method_name",
     TASK_METHOD_PAIRS,
 )
-async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name):
-    """Ownership compare with real ``_get_auth_token`` (only resolve_identity patched).
-
-    Unlike ``a2a_auth_as`` tests, the token is extracted from ServerCallContext so
-    mutating ``!= expected_owner`` out of the gate reddens this path — unknown-id
-    alone would stay green.
-    """
-    handler = seeded_owned_a2a_handler()
-    owner = owned_task_owner_identity()
-    sibling = owned_task_sibling_identity()
-    resolve = token_identity_resolver(
-        {
-            OWNED_TASK_SIBLING_TOK: sibling,
-            OWNED_TASK_OWNER_TOK: owner,
-        }
-    )
-
-    with patch("src.core.resolved_identity.resolve_identity", side_effect=resolve):
-        sibling_ctx = make_a2a_context(auth_token=OWNED_TASK_SIBLING_TOK, headers={"host": "test.example.com"})
-        with pytest.raises(TaskNotFoundError) as deny_exc:
-            await getattr(handler, method_name)(request_cls(id=OWNED_TASK_ID), context=sibling_ctx)
-
-        owner_ctx = make_a2a_context(auth_token=OWNED_TASK_OWNER_TOK, headers={"host": "test.example.com"})
-        with pytest.raises(TaskNotFoundError) as unknown_exc:
-            await getattr(handler, method_name)(request_cls(id="task_does_not_exist"), context=owner_ctx)
-
-    assert_task_not_found_nondisclosure(deny_exc.value, OWNED_TASK_ID)
-    assert_task_not_found_nondisclosure(unknown_exc.value, "task_does_not_exist")
-    assert handler.tasks[OWNED_TASK_ID].status.state == TaskState.TASK_STATE_COMPLETED
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",

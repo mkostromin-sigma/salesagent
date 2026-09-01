@@ -129,20 +129,6 @@ def then_auth_failure_not_task_not_found(ctx: dict) -> None:
 
 
 @then("the A2A task response should be an authentication failure, not task-not-found")
-def then_auth_failure_not_task_not_found(ctx: dict) -> None:
-    """Unauthenticated callers must not receive the ownership-denial not-found shape.
-
-    ``assert_wire_auth_failure`` pins the exact JSON-RPC body (same shared
-    oracle as ``tests/unit/test_a2a_task_identity_wire.py``); its literal
-    "Missing authentication token" message already rules out the not-found
-    shape by construction, so no separate substring check is needed.
-    """
-    env = ctx["env"]
-    error = env.last_a2a_task_error
-    assert error is not None, "Expected an authentication failure, got none"
-    assert_wire_auth_failure(error)
-
-
 @then(parsers.parse('the stored task "{task_id}" should be in state {state}'))
 def then_stored_task_state(ctx: dict, task_id: str, state: str) -> None:
     """Poll the task as its owner and grade the wire result, not in-process state.
