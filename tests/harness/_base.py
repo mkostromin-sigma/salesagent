@@ -371,13 +371,23 @@ def _clear_unit_mode_identity(handler: AdCPRequestHandler) -> None:
     clear them first, otherwise it silently reuses the previous caller's
     identity — the exact denial-scenario bug this guards against.
 
-    Oracle: skipping either pop leaves a unit-mode lambda in place and a
-    subsequent dispatch is served (or denied) as the wrong caller.
+    Clears *every* callable instance-dict entry that shadows a class method
+    (not only the two named pops). A third inject such as ``_authenticate``
+    must not survive token-mode prepare; see
+    ``test_token_mode_prepare_clears_unit_mode_identity_lambdas``.
+
+    Oracle: skipping either named pop — or leaving any other callable
+    instance shadow — leaves a unit-mode lambda in place and a subsequent
+    dispatch is served (or denied) as the wrong caller.
     """
     handler.__dict__.pop("_resolve_a2a_identity", None)
     handler.__dict__.pop("_get_auth_token", None)
+    for key in list(handler.__dict__):
+        if callable(getattr(type(handler), key, None)):
+            handler.__dict__.pop(key, None)
     assert "_resolve_a2a_identity" not in handler.__dict__
     assert "_get_auth_token" not in handler.__dict__
+    assert not {k for k in handler.__dict__ if callable(getattr(type(handler), k, None))}
 
 
 class _TestClock:
