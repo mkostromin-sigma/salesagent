@@ -122,7 +122,7 @@ RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
 # here — this is a set of code NAMES; RECOVERY_BY_WIRE_CODE answers what they
 # mean. The remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for
 # the same treatment in #1602.
-_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
+_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
 
 # Codes the SDK helper ships that the PINNED spec does not define. The pin is the
 # authority and the helper is a cross-check (CLAUDE.md spec-grounding gate), so a
