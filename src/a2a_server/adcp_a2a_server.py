@@ -226,13 +226,13 @@ DISCOVERY_SKILLS = frozenset(
 def _task_not_found_message(task_id: str) -> str:
     """Buyer-facing not-found message (wire raise + deny telemetry when ids match).
 
-    Callers that sanitize for logs (``_safe_task_id_for_log``) may pass a different
+    Callers that sanitize for logs (``_safe_id_for_log``) may pass a different
     id than the raw wire raise — both still use this formatter.
     """
     return f"Task not found: {task_id}"
 
 
-def _safe_task_id_for_log(task_id: str) -> str:
+def _safe_id_for_log(task_id: str) -> str:
     """Neutralize attacker-controlled task ids before logs / buyer-facing messages.
 
     Allowlist keeps ``task_<hex>``-shaped ids intact; everything else becomes ``?``.
@@ -303,6 +303,7 @@ class AdCPRequestHandler(RequestHandler):
         # The VALUE, not the raw protobuf: what is stashed here is handed straight
         # to the sender, so it must carry the gate's receipt.
         self._task_push_configs: dict[str, ValidatedWebhookRegistration] = {}
+        self._task_owners: dict[str, _TaskOwner] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     @staticmethod
@@ -478,7 +479,7 @@ class AdCPRequestHandler(RequestHandler):
             # Underscore→space is the wire phrase; keep op ids underscore-replaceable.
             # Delegate to ``_internal_error_for`` (typed + untyped); never interpolate
             # ``str(exc)`` / SQL (do not hand-write error_code=/recovery=).
-            raise _internal_error_for(_wire_phrase(operation), e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     def _log_a2a_operation(
         self,
@@ -571,7 +572,7 @@ class AdCPRequestHandler(RequestHandler):
             # row is expected and the registration this sender holds
             # (ValidatedWebhookRegistration) carries no scope ids to give it.
             # Stating them as None is what makes that visible -- the dict this
-            # replaced simply had no such keys (salesagent-pldmk.39).
+            # replaced simply had no such keys (GH #1802).
             webhook_task = WebhookTaskContext(
                 task_id=task.id,
                 task_type=skills[0] if skills else "unknown",
@@ -749,8 +750,6 @@ class AdCPRequestHandler(RequestHandler):
             # Push config lives outside protobuf metadata (not JSON-serializable).
             # Failure webhooks before this point thread ``config=`` into
             # ``_send_protocol_webhook`` rather than writing the map early.
-            if push_notification_config:
-                self._task_push_configs[task_id] = push_notification_config
             self.tasks[task_id] = task
             self._task_owners[task_id] = _TaskOwner(
                 tenant_id=identity.tenant_id,
@@ -1175,7 +1174,7 @@ class AdCPRequestHandler(RequestHandler):
         live-server test pins the current reality.
 
         The requested id is put on both the message and structured ``data``
-        (sanitized via ``_safe_task_id_for_log`` so control characters cannot
+        (sanitized via ``_safe_id_for_log`` so control characters cannot
         forge log lines one frame away in the compat adapter). Only the message
         reaches a client today: the same compat adapter that flattens the code
         to ``-32603`` rebuilds the error as ``CoreInternalError(message=str(e))``,
@@ -1183,7 +1182,7 @@ class AdCPRequestHandler(RequestHandler):
         Populating it is still correct and becomes readable when #1670 closes,
         the same as the code.
         """
-        safe_id = _safe_task_id_for_log(task_id)
+        safe_id = _safe_id_for_log(task_id)
         adcp_err = AdCPTaskNotFoundError(message=_task_not_found_message(safe_id))
         data = build_two_layer_error_envelope(adcp_err)
         data["task_id"] = safe_id
@@ -1200,7 +1199,7 @@ class AdCPRequestHandler(RequestHandler):
         Receives no branch discriminator — the wire, telemetry, and log must stay
         symmetric (error-handling.mdx observability MUST).
         """
-        safe_id = _safe_task_id_for_log(task_id)
+        safe_id = _safe_id_for_log(task_id)
         adcp_err = AdCPTaskNotFoundError(message=_task_not_found_message(safe_id))
         logger.warning(
             "Task access denied on %s: task_id=%s caller tenant_id=%s principal_id=%s",
@@ -1358,7 +1357,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _internal_error_for(_wire_phrase(operation), e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     async def on_create_task_push_notification_config(
         self,
@@ -1393,7 +1392,7 @@ class AdCPRequestHandler(RequestHandler):
             # manufactures field="push_notification_config.url" plus the https SSRF
             # wording for a non-AdCP error -- so a credential refusal raised from
             # inside the repository would reach the buyer as "fix your URL" about a
-            # URL that is fine (salesagent-47n9.20).
+            # URL that is fine (GH #1802).
             registration = _accept_a2a_push_config(url, auth_type, auth_token_value)
 
             # No ValueError funnel around upsert any more: the repository no longer
@@ -1438,7 +1437,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _internal_error_for(_wire_phrase(operation), e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     async def on_list_task_push_notification_configs(
         self,
@@ -1494,7 +1493,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _internal_error_for(_wire_phrase(operation), e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     async def on_delete_task_push_notification_config(
         self,
@@ -1537,7 +1536,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tool_context.tenant_id if tool_context else None,
                 principal_id=tool_context.principal_id if tool_context else None,
             )
-            raise _internal_error_for(_wire_phrase(operation), e) from e
+            raise _internal_error_for(operation.replace("_", " "), e) from e
 
     async def on_get_extended_agent_card(
         self,
@@ -1672,7 +1671,7 @@ class AdCPRequestHandler(RequestHandler):
         # order (``error.data.adcp_error``). Without it the A2A wire carried a
         # bare JSON-RPC error and the buyer-facing code and suggestion that REST
         # returns were simply absent, which the test harness was papering over by
-        # synthesizing an envelope production never sent (salesagent-pldmk.26).
+        # synthesizing an envelope production never sent (GH #1802).
         #
         # AUTH_REQUIRED is the correct code at the 3.1.1 pin, not merely the
         # consistent one. The pin's enum marks it deprecated in favour of
@@ -1683,7 +1682,7 @@ class AdCPRequestHandler(RequestHandler):
         # attached". The generated features grade AUTH_REQUIRED accordingly,
         # including for the invalid-token case (BR-UC-011:256). The pin
         # contradicts itself here -- transport-errors.mdx separately reserves
-        # -32028 for AUTH_MISSING -- and salesagent-pldmk.38 tracks raising that
+        # -32028 for AUTH_MISSING -- and GH #1802 tracks raising that
         # upstream and migrating when the pin actually performs the split.
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
