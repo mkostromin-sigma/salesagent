@@ -286,12 +286,12 @@ class TestWorkflowApprovalMovesMediaBuy:
         # separately when the membership was corrected.
 
     def test_approve_schedules_buy_and_bumps_revision(self, client, factory_session):
-        """The scheduled arm: a buy approved BEFORE its flight window opens.
+        """The pre-flight arm: a buy approved BEFORE its flight window opens.
 
         The status this write persists is the flight-window rule's answer, not a
         constant. The sibling test below grades the inside-window answer, and the two
         together pin that the rule is consulted at all: replace the resolved status with
-        a bare ``PersistedMediaBuyStatus.SCHEDULED`` and this test stays green while its
+        a bare ``PersistedMediaBuyStatus.PENDING_START`` and this test stays green while its
         sibling reddens.
         """
         seeded = seed_pending_buy(starts_in_days=7)
@@ -315,12 +315,12 @@ class TestWorkflowApprovalMovesMediaBuy:
         assert_status_move_carried_bookkeeping(
             MediaBuyState(status="pending_approval", revision=before.revision, confirmed_at=None),
             after,
-            expected_status="scheduled",
+            expected_status="pending_start",
             confirms=True,
             subject="approving the media-buy workflow step",
         )
         # This is the manual-approval path: before this write the buy had no confirmation
-        # instant at all, and 'scheduled' is a seller-confirmed status.
+        # instant at all, and 'pending_start' is a seller-confirmed status.
         assert after.confirmed_at is not None, (
             "an admin-approved buy must carry the instant the seller committed; "
             "confirmed_at is still NULL after approval"

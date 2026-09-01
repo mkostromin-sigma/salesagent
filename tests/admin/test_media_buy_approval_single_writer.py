@@ -81,8 +81,8 @@ class TestOnePostAdapterWriter:
         assert response.status_code in (200, 302), response.data
 
         after = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
-        assert after.status == "scheduled", (
-            f"a buy approved seven days before its flight window opens is scheduled, but this "
+        assert after.status == "pending_start", (
+            f"a buy approved seven days before its flight window opens is pending_start, but this "
             f"route persisted {after.status!r}. The route resolves the flight-window status and "
             f"commits it BEFORE calling the adapter, so execute_approved_media_buy's "
             f"unconditional ACTIVE is written last and wins"
@@ -97,7 +97,7 @@ class TestOnePostAdapterWriter:
         """The failure arm inherits a commitment the seller never made.
 
         ``operations.approve_media_buy`` writes the flight-window status and commits
-        BEFORE calling the adapter (``operations.py:433``). ``scheduled`` is a
+        BEFORE calling the adapter (``operations.py:433``). ``pending_start`` is a
         seller-committed status, so that write stamps ``confirmed_at`` — and
         ``confirmed_at`` is write-once. When the adapter then fails and the route
         writes ``failed`` over it, the stamp survives: the row says the seller
@@ -174,9 +174,9 @@ class TestCreativeGateIsTenantScoped:
         assert response.status_code == 200, response.data
 
         after = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
-        assert after.status == "scheduled", (
+        assert after.status == "pending_start", (
             f"this tenant's only assigned creative {shared_creative_id!r} is approved, so the buy "
-            f"should have gone to the ad server and persisted 'scheduled' — it persisted "
+            f"should have gone to the ad server and persisted 'pending_start' — it persisted "
             f"{after.status!r} instead. The gate query selects Creative by creative_id with no "
             f"tenant predicate, so ANOTHER tenant's row with the same buyer-supplied id was read "
             f"for its status and held this approval"

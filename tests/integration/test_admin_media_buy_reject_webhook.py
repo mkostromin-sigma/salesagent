@@ -21,6 +21,7 @@ import pytest
 from src.core.context_manager import ContextManager
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
+from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.media_buy_write_seam import (
@@ -436,13 +437,16 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("context") is None, (
             f"approve webhook with no stored request context must not embed one, got {embedded.get('context')!r}"
         )
-        # Metadata now carries the audit identifiers the webhook service logs.
-        assert webhook_capture["metadata"] == {
-            "task_type": "create_media_buy",
-            "tenant_id": tenant_id,
-            "principal_id": "reject_wh_principal",
-            "media_buy_id": media_buy_id,
-        }
+        # The typed task context travels whole to send_notification (not a loose metadata dict).
+        assert webhook_capture["task"] == WebhookTaskContext(
+            task_id=pending_reject_media_buy["step_id"],
+            task_type="create_media_buy",
+            tenant_id=tenant_id,
+            principal_id="reject_wh_principal",
+            media_buy_id=media_buy_id,
+            sequence_number=1,
+            notification_type=None,
+        )
         # Ready-arm provenance: session operator email on the MediaBuy row.
         _assert_persisted_status(pending_reject_media_buy, "pending_start", approved_by="test@example.com")
 
@@ -497,7 +501,7 @@ class TestAdminMediaBuyRejectWebhook:
 
         ``execute_approved_media_buy`` is now the sole post-adapter writer, and the route
         touches nothing after calling it. So the delta is 1, and the status is the
-        flight-window rule's answer — ``scheduled`` here, because this fixture's buy is
+        flight-window rule's answer — ``pending_start`` here, because this fixture's buy is
         approved before its window opens.
 
         ``bumps`` is an EXACT delta, which is what makes this the grader for the
@@ -518,9 +522,9 @@ class TestAdminMediaBuyRejectWebhook:
         assert_status_move_carried_bookkeeping(
             MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=None),
             after,
-            expected_status="scheduled",
+            expected_status="pending_start",
             confirms=True,
-            subject="admin approval (pending_approval -> scheduled)",
+            subject="admin approval (pending_approval -> pending_start)",
         )
 
     def test_a2a_reject_webhook_carries_policy_violation_task(
