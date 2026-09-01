@@ -230,7 +230,7 @@ def webhook_capture():
         captured["task"] = task
 
     # A REAL service with only the wire call stubbed. The route dispatches through
-    # notify() now (salesagent-pldmk.39), and notify() on a MagicMock returns a
+    # notify() now (#1567), and notify() on a MagicMock returns a
     # MagicMock that asyncio.run refuses -- the route would swallow that as a failed
     # send and this guard would assert against an empty capture. With the real
     # object, notify() builds the payload for real and _capture still sees exactly

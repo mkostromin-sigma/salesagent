@@ -14,9 +14,6 @@ from adcp.types import (
 )
 from adcp.webhooks import GeneratedTaskStatus
 
-from src.core.database.models import (
-    PushNotificationConfig as DBPushNotificationConfig,
-)
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
@@ -79,6 +76,58 @@ def _cleanup_completed_tasks():
         for task_id in completed_tasks:
             del _ai_review_tasks[task_id]
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
+
+
+async def _deliver_sync_creatives_webhook(
+    *,
+    creative_id,
+    reviewed_count: int,
+    complete_result: SyncCreativesResponse,
+    push_notification_config,
+    step_tool_name: str | None,
+    step_step_id: str,
+    step_request_data: dict,
+    tenant_id: str,
+    principal_id: str | None,
+    # `Any`, not `str | None`: ORM attribute read before UoW closed (#1611).
+    step_context_id: Any,
+) -> bool:
+    """Build the protocol-shaped payload and push it to the buyer.
+
+    Second half of :func:`_call_webhook_for_creative_status`, split for ADR-009
+    complexity ratchet (#1610). Runs after the UoW closes with plain values.
+    """
+    service = get_protocol_webhook_service()
+    try:
+        protocol = step_request_data.get("protocol", "mcp")
+        result_dict = complete_result.model_dump(mode="json")
+
+        await service.notify(
+            push_notification_config,
+            task=WebhookTaskContext(
+                task_id=step_step_id,
+                task_type=step_tool_name,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                media_buy_id=None,
+                sequence_number=1,
+                notification_type=None,
+            ),
+            status=GeneratedTaskStatus.completed,
+            result=result_dict,
+            protocol=protocol,
+            context_id=step_context_id or "",
+        )
+
+        logger.info(
+            f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
+            f"with {reviewed_count} reviewed creatives"
+        )
+
+        return True
+    except Exception as send_e:
+        logger.error("Failed to send protocol webhook for creative %r: %s", creative_id, send_e)
+        return False
 
 
 async def _call_webhook_for_creative_status(
@@ -208,7 +257,7 @@ async def _call_webhook_for_creative_status(
             # Read INSIDE the UoW, like every other attribute here: the row is
             # detached once the session closes. This is the identifier that never
             # reached the delivery, which is why admin-originated sends wrote no
-            # webhook_delivery_log row (salesagent-pldmk.39).
+            # webhook_delivery_log row (#1567).
             step_principal_id = next((c.principal_id for c in all_creatives if c.principal_id), None)
 
         # --- Session closed here; webhook delivery is outside the transaction ---
