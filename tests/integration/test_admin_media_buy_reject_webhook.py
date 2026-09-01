@@ -21,6 +21,7 @@ import pytest
 from src.core.context_manager import ContextManager
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
+from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.media_buy_write_seam import (
     MediaBuyState,
@@ -443,7 +444,7 @@ class TestAdminMediaBuyRejectWebhook:
             "media_buy_id": media_buy_id,
         }
         # Ready-arm provenance: session operator email on the MediaBuy row.
-        _assert_persisted_status(pending_reject_media_buy, "scheduled", approved_by="test@example.com")
+        _assert_persisted_status(pending_reject_media_buy, "pending_start", approved_by="test@example.com")
 
     def test_reject_bumps_revision_without_confirming(
         self, authenticated_admin_session, pending_reject_media_buy, webhook_capture

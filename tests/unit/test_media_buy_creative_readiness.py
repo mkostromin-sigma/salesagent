@@ -397,6 +397,8 @@ class TestFinalizeMediaBuyApproval:
             "t1",
             error_msg="boom",
             status=PersistedMediaBuyStatus.FAILED,
+            approved_by="op@example.com",
+            approved_at=ANY,
         )
         assert outcome.kind == "adapter_failed"
         assert outcome.error_msg == "boom"

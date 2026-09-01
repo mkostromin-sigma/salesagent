@@ -188,6 +188,8 @@ def mark_media_buy_adapter_failed(
     *,
     error_msg: str | None = None,
     status: PersistedMediaBuyStatus = PersistedMediaBuyStatus.FAILED,
+    approved_at: datetime | None = None,
+    approved_by: str | None = None,
 ) -> None:
     """Persist adapter-failure status and log with a single ``[APPROVAL]`` trail.
 
@@ -205,7 +207,16 @@ def mark_media_buy_adapter_failed(
     )
     with get_db_session() as session:
         repo = MediaBuyRepository(session, tenant_id)
-        if repo.update_status(media_buy_id, status):
+        if approved_at is not None or approved_by is not None:
+            updated = repo.update_status(
+                media_buy_id,
+                status,
+                approved_at=approved_at,
+                approved_by=approved_by,
+            )
+        else:
+            updated = repo.update_status(media_buy_id, status)
+        if updated:
             session.commit()
 
 
@@ -231,12 +242,25 @@ def _execute_media_buy_adapter(
     if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
         return approval
     if not approval.ok:
-        mark_media_buy_adapter_failed(
-            media_buy_id,
-            tenant_id,
-            error_msg=approval.error_msg,
-            status=failure_status,
-        )
+        if failure_status == PersistedMediaBuyStatus.FAILED:
+            # Ready-arm (operations/workflows): operator approved the buy; record provenance
+            # even when the adapter fails. Creatives unblock keeps recoverable pending_creatives
+            # without stamping approval on the row (sole writer owns success path).
+            mark_media_buy_adapter_failed(
+                media_buy_id,
+                tenant_id,
+                error_msg=approval.error_msg,
+                status=failure_status,
+                approved_at=approved_at,
+                approved_by=approved_by,
+            )
+        else:
+            mark_media_buy_adapter_failed(
+                media_buy_id,
+                tenant_id,
+                error_msg=approval.error_msg,
+                status=failure_status,
+            )
     return approval
 
 
