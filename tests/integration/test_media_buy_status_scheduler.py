@@ -581,7 +581,7 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
     )
 
     for mid in buy_ids:
-        assert _get_media_buy_status(tenant_id, mid) == "active"
+        assert read_media_buy_state(tenant_id, mid).status == "active"
 
     scheduler = MediaBuyStatusScheduler()
     real_compute = scheduler._compute_new_status
@@ -608,8 +608,8 @@ async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db,
 
     assert set(processed) == set(buy_ids)
     for mid in good_ids:
-        assert _get_media_buy_status(tenant_id, mid) == "completed"
-    assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
+        assert read_media_buy_state(tenant_id, mid).status == "completed"
+    assert read_media_buy_state(tenant_id, bad_buy_id).status == "active"
 
     assert mock_error.call_count == 1
     err_msg = mock_error.call_args.args[0]
@@ -663,9 +663,9 @@ async def test_operational_error_class_is_isolated_without_invalidated(integrati
         await scheduler._update_statuses()
 
     assert set(processed) == set(buy_ids)
-    assert _get_media_buy_status(tenant_id, "mb_oe_a") == "completed"
-    assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
-    assert _get_media_buy_status(tenant_id, "mb_oe_c") == "completed"
+    assert read_media_buy_state(tenant_id, "mb_oe_a").status == "completed"
+    assert read_media_buy_state(tenant_id, bad_buy_id).status == "active"
+    assert read_media_buy_state(tenant_id, "mb_oe_c").status == "completed"
 
     assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
 
@@ -753,7 +753,7 @@ async def test_savepoint_release_failure_not_counted_processed_and_warns(integra
         await scheduler._update_statuses()
 
     for mid in buy_ids:
-        assert _get_media_buy_status(tenant_id, mid) == "active"
+        assert read_media_buy_state(tenant_id, mid).status == "active"
 
     warning_msgs = summary_lines(mock_warning, STATUS_BATCH_SUMMARY_PREFIX)
     info_msgs = summary_lines(mock_info, STATUS_BATCH_SUMMARY_PREFIX)
@@ -903,9 +903,9 @@ async def test_disconnection_error_escapes_while_plain_oe_isolates(integration_d
     with patch.object(scheduler, "_compute_new_status", side_effect=_raise_plain_oe):
         await scheduler._update_statuses()
     assert db_session_mod._is_healthy is True
-    assert _get_media_buy_status(tenant_id, "mb_de_a") == "completed"
-    assert _get_media_buy_status(tenant_id, "mb_de_b") == "active"
-    assert _get_media_buy_status(tenant_id, "mb_de_c") == "completed"
+    assert read_media_buy_state(tenant_id, "mb_de_a").status == "completed"
+    assert read_media_buy_state(tenant_id, "mb_de_b").status == "active"
+    assert read_media_buy_state(tenant_id, "mb_de_c").status == "completed"
     assert counter_value("media_buy_status", tenant_id, "db_error") == metric_before + 1
 
     # Bare DisconnectionError: escape and arm the breaker.
