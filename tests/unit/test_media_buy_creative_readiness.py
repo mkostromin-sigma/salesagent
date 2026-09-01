@@ -186,6 +186,7 @@ class TestApplyCreativeFinalizeHold:
 class TestApplyCreativeFinalizeReady:
     def test_stamps_provenance_and_flight_status(self):
         media_buy = MagicMock()
+        media_buy.media_buy_id = "mb_ready"
         media_buy.start_time = datetime.now(UTC) + timedelta(days=7)
         media_buy.end_time = datetime.now(UTC) + timedelta(days=37)
         media_buy.start_date = None

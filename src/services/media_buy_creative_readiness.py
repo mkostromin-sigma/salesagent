@@ -165,14 +165,17 @@ def apply_creative_finalize_hold(
 ) -> None:
     """Apply hold outcome: provenance + pending_creatives + single info log."""
     stamp_media_buy_approval(media_buy, approved_by=approved_by)
-    media_buy.status = "pending_creatives"
+    media_buy.status = PersistedMediaBuyStatus.PENDING_CREATIVES
     log_creative_finalize_hold(media_buy.media_buy_id, readiness)
 
 
 def apply_creative_finalize_ready(media_buy: MediaBuy, *, approved_by: str) -> None:
     """Apply ready outcome: provenance + flight-window status (mirror of hold)."""
     stamp_media_buy_approval(media_buy, approved_by=approved_by)
-    media_buy.status = compute_media_buy_status_from_flight_dates(media_buy)
+    media_buy.status = PersistedMediaBuyStatus.parse(
+        compute_media_buy_status_from_flight_dates(media_buy),
+        media_buy_id=media_buy.media_buy_id,
+    )
 
 
 def mark_media_buy_adapter_failed(
@@ -189,7 +192,13 @@ def mark_media_buy_adapter_failed(
     that back. The creatives unblock path executes before stamping and should
     stay recoverable — pass ``PENDING_CREATIVES`` there.
     """
-    logger.error("[APPROVAL] Adapter creation failed for %s: %s", media_buy_id, error_msg)
+    from src.core.logging_config import log_safe
+
+    logger.error(
+        "[APPROVAL] Adapter creation failed for %s: %s",
+        log_safe(media_buy_id),
+        log_safe(error_msg),
+    )
     with get_db_session() as session:
         repo = MediaBuyRepository(session, tenant_id)
         if repo.update_status(media_buy_id, status):
@@ -337,9 +346,17 @@ def compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
 
     Returns AdCP 3.1.1 lifecycle tokens that ``MEDIA_BUY_STATE_MACHINE`` /
     ``valid_actions_for_status`` understand: ``pending_start`` before flight,
-    ``active`` in flight. Past end-of-flight stays ``active`` here — the wire
-    refines to ``completed`` via ``resolve_canonical_status``; persisting
-    ``completed`` (or legacy ``scheduled``) would skip the update-path gate.
+    ``active`` in flight (including past end-of-flight).
+
+    Past-end stays ``active`` here so the wire can refine to ``completed`` via
+    ``resolve_canonical_status``. Persisting ``completed`` would hit the
+    update-path terminal gate (``INVALID_STATE``); that is the opposite of
+    legacy ``scheduled``, which the update path still accepts. Spec
+    ``index.mdx @ 3.1.1`` L325 initial-status set also omits ``completed`` /
+    ``scheduled`` as the approve-arm write.
+
+    End-of-flight is owned by the wire refine / scheduler completed arm — this
+    stamp only compares ``start_time`` (or ``start_date``) against now.
     """
     now = datetime.now(UTC)
 
@@ -350,16 +367,6 @@ def compute_media_buy_status_from_flight_dates(media_buy: MediaBuy) -> str:
         cast(date | None, media_buy.start_date),
         end_of_day=False,
     )
-    end_time = _coerce_flight_boundary(
-        media_buy.end_time,
-        cast(date | None, media_buy.end_date),
-        end_of_day=True,
-    )
-
-    if start_time and end_time:
-        if now >= start_time:
-            return "active"
-        return "pending_start"
 
     if start_time and now < start_time:
         return "pending_start"

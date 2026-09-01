@@ -600,9 +600,65 @@ def echo_context(request_data: dict) -> ContextObject | None:
 def session_operator_email() -> str:
     """Authenticated operator email from Flask session (approve provenance source).
 
-    Shared by operations / workflows / creatives approve routes so the fallback
-    sentinel (``\"system\"``) and session key live in one place. Distinct from
-    creative-row ``approved_by`` body fields, which name a different actor.
+    Shared by operations / workflows / creatives approve routes for the session
+    key and empty-session fallback (``\"system\"``). Production auth writers set
+    ``session[\"user\"]`` to a bare email string; tests often set a dict with an
+    ``email`` key — both shapes are accepted. Falsy values (``None``, ``\"\"``,
+    empty dict without email) fall back to ``\"system\"``.
+
+    Does not claim uniqueness of the sentinel across all admin surfaces —
+    ``audit_decorator`` / ``tenants`` still use their own fallbacks (follow-up).
+    Distinct from creative-row ``approved_by`` body fields, which name a
+    different actor.
     """
-    user_info = session.get("user", {})
-    return user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+    user_info = session.get("user")
+    if isinstance(user_info, dict):
+        email = user_info.get("email")
+        return email if email else "system"
+    if isinstance(user_info, str) and user_info:
+        return user_info
+    return "system"
+
+
+def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, approved_by: str) -> ApprovalResult:
+    """Run an approval through the single post-adapter writer and report it to the user.
+
+    Every admin approval route reaches the same three outcomes and says the same thing
+    about two of them; only the response shape differs (JSON on one route, a redirect on
+    another). Leaving the call and its flash in each route is how three routes came to
+    disagree about approval in the first place, so the shared part lives here and each
+    caller is left with just its own ``return``.
+
+    Returns the ``ApprovalResult`` so the caller can branch on ``outcome``: it is told
+    what happened rather than re-reading the row to find out, which is what stops a route
+    holding a media buy across the adapter call.
+
+    Prefer ``finalize_media_buy_approval`` (#1696) for admin approve routes that must
+    apply the shared creative-hold predicate before the writer; this helper remains for
+    callers that only need the writer + flash seam.
+    """
+    from datetime import UTC, datetime
+
+    from flask import flash
+
+    from src.core.tools.media_buy_create import ApprovalOutcome, execute_approved_media_buy
+
+    logger.info(log_safe(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}"))
+    approval: ApprovalResult = execute_approved_media_buy(
+        media_buy_id,
+        tenant_id,
+        approved_by=approved_by,
+        approved_at=datetime.now(UTC),
+    )
+
+    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES:
+        flash(
+            f"Media buy approved! Waiting for creative approval before creating in the ad server "
+            f"({approval.error_msg}).",
+            "info",
+        )
+    elif not approval.ok:
+        logger.error(log_safe(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {approval.error_msg}"))
+        flash(f"Media buy approved but adapter creation failed: {approval.error_msg}", "error")
+
+    return approval

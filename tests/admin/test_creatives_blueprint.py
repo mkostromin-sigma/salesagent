@@ -524,6 +524,30 @@ class TestCreativeApprovalRetroactivePush:
             tenant_id=test_tenant,
         )
 
+    def test_pending_start_buy_triggers_retroactive_push(self, client, test_tenant, factory_session):
+        """Buys in 'pending_start' (AdCP pre-flight) also get the retroactive push."""
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="pending_start")
+        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_PUSH_PATCH, return_value=(True, None)) as mock_push,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 200
+        mock_push.assert_called_once_with(
+            creative_id=creative_id,
+            media_buy_id=media_buy_id,
+            tenant_id=test_tenant,
+        )
+
     def test_paused_buy_triggers_retroactive_push(self, client, test_tenant, factory_session):
         """Buys in 'paused' status are live in the ad server and also get the push."""
         _auth_session(client, test_tenant)

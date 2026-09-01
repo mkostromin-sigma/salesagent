@@ -150,7 +150,7 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
 
 
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/approve", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(api_mode=True)
 @log_admin_action("approve_workflow_step")
 def approve_workflow_step(tenant_id, workflow_id, step_id):
     """Approve a workflow step."""
@@ -238,7 +238,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
 
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/reject", methods=["POST"])
-@require_tenant_access()
+@require_tenant_access(api_mode=True)
 @log_admin_action("reject_workflow_step")
 def reject_workflow_step(tenant_id, workflow_id, step_id):
     """Reject a workflow step with a reason."""

@@ -713,10 +713,15 @@ class TestAdminWorkflowApproveHold:
         with patch(
             "src.core.tools.media_buy_create.execute_approved_media_buy",
         ) as mock_execute:
-            _post_workflow_approve(authenticated_admin_session, ids)
+            body = _post_workflow_approve(authenticated_admin_session, ids)
 
         mock_execute.assert_not_called()
         _assert_persisted_hold(ids, approved_by="test@example.com")
+        assert body.get("held") is True, f"hold arm must announce held=True, got {body!r}"
+        assert body.get("hold_reason") == expected_hold, (
+            f"hold_reason must be {expected_hold!r}, got {body.get('hold_reason')!r}"
+        )
+        assert body.get("message"), f"hold arm must carry a non-empty message, got {body!r}"
 
     def test_workflow_approve_ready_persists_flight_status_and_executes(
         self,
