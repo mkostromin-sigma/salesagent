@@ -16,8 +16,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from tests.harness._base import IntegrationEnv
-from tests.harness.transport import DeliverResult
-from tests.utils.workflow_task_seed import create_principal_owned_workflow_step
 
 
 class GetTaskWireResponse(BaseModel):
