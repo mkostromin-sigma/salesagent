@@ -304,10 +304,6 @@ def finalize_media_buy_approval(
             hold_reason=readiness.hold_reason,
         )
 
-    # Capture canonical wire status while media_buy is still session-bound.
-    # Do not persist here — execute_approved_media_buy is the sole writer.
-    webhook_media_buy_status = resolve_canonical_status(media_buy, approved_at.date())
-
     logger.info("[APPROVAL] Executing adapter creation for approved media buy %s", media_buy_id)
     approval = _execute_media_buy_adapter(
         media_buy_id,
@@ -321,14 +317,17 @@ def finalize_media_buy_approval(
             kind="held",
             hold_message=approval.error_msg,
             hold_reason="unapproved_creatives",
-            webhook_media_buy_status=webhook_media_buy_status,
         )
     if not approval.ok:
         return FinalizeOutcome(
             kind="adapter_failed",
             error_msg=approval.error_msg,
-            webhook_media_buy_status=webhook_media_buy_status,
         )
+
+    # Wire status must reflect what execute persisted (get_media_buys parity).
+    session.expire_all()
+    fresh = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+    webhook_media_buy_status = resolve_canonical_status(fresh, approved_at.date()) if fresh is not None else None
 
     logger.info("[APPROVAL] Adapter creation succeeded for %s", media_buy_id)
     return FinalizeOutcome(

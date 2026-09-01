@@ -333,9 +333,12 @@ class TestFinalizeMediaBuyApproval:
             ),
             patch("src.services.media_buy_creative_readiness.apply_creative_finalize_ready") as mock_ready,
             patch(
+                "src.services.media_buy_creative_readiness.MediaBuyRepository",
+            ) as mock_repo_cls,
+            patch(
                 "src.core.media_buy_status.resolve_canonical_status",
                 return_value="pending_start",
-            ),
+            ) as mock_resolve,
             patch(
                 "src.core.tools.media_buy_create.execute_approved_media_buy",
                 return_value=_approval_executed(
@@ -346,10 +349,16 @@ class TestFinalizeMediaBuyApproval:
             ) as mock_execute,
             patch("src.services.media_buy_creative_readiness.mark_media_buy_adapter_failed") as mock_fail,
         ):
+            fresh = MagicMock()
+            mock_repo_cls.return_value.get_by_id.return_value = fresh
             outcome = finalize_media_buy_approval(session, "t1", media_buy, approved_by="op@example.com")
 
         mock_ready.assert_not_called()
         session.commit.assert_not_called()
+        session.expire_all.assert_called_once_with()
+        mock_repo_cls.assert_called_once_with(session, "t1")
+        mock_repo_cls.return_value.get_by_id.assert_called_once_with("mb_ok")
+        mock_resolve.assert_called_once_with(fresh, ANY)
         mock_execute.assert_called_once_with(
             "mb_ok",
             "t1",
