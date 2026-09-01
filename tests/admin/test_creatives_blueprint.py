@@ -6,6 +6,7 @@ Requires PostgreSQL (integration_db fixture).
 
 import uuid
 from datetime import UTC, datetime
+from typing import NamedTuple
 from unittest.mock import call, patch
 
 import pytest

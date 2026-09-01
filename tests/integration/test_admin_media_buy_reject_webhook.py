@@ -22,6 +22,11 @@ from src.core.context_manager import ContextManager
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.tools.media_buy_create import ApprovalOutcome, ApprovalResult
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.helpers.media_buy_write_seam import (
+    MediaBuyState,
+    assert_status_move_carried_bookkeeping,
+    read_media_buy_state,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -249,6 +254,19 @@ def _post_approval_action(admin_session, ids: dict, data: dict):
     assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
 
 
+def _parse_instant(value: str):
+    """Parse a wire ISO-8601 timestamp into an aware datetime.
+
+    Both sides of the confirmed_at comparison go through a parse: the wire carries a
+    string (with a trailing "Z" that fromisoformat wants spelled "+00:00"), the column
+    carries a datetime, and comparing the two textually would grade formatting rather
+    than the instant.
+    """
+    from datetime import datetime
+
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _a2a_artifact_datas(payload) -> list[dict]:
     """Unwrap ``create_a2a_webhook_payload`` framing into artifact part data dicts.
 
@@ -384,6 +402,7 @@ class TestAdminMediaBuyRejectWebhook:
 
         _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
         body = _webhook_body(webhook_capture)
+        persisted = read_media_buy_state(tenant_id, media_buy_id)
 
         assert body["status"] == "completed", f"outer status should be completed, got {body.get('status')!r}"
         embedded = body.get("result") or {}
