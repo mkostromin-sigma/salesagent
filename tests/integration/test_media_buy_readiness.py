@@ -237,10 +237,14 @@ class TestMediaBuyReadinessService:
             session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
             session.commit()
 
-    def test_live_state(self, test_tenant, test_principal):
-        """Media buy during flight with approved creatives should be 'live'."""
-        media_buy_id = "mb_live"
-        creative_id = "cr_live"
+    @pytest.mark.parametrize("creative_status", ["approved", "active"])
+    def test_live_state(self, test_tenant, test_principal, creative_status):
+        """Media buy during flight with finalize-ready creatives should be 'live'.
+
+        ``active`` is legacy storage but still counts via FINALIZE_READY (Chris C5).
+        """
+        media_buy_id = f"mb_live_{creative_status}"
+        creative_id = f"cr_live_{creative_status}"
         now = datetime.now(UTC)
 
         with get_db_session() as session:
@@ -262,7 +266,6 @@ class TestMediaBuyReadinessService:
             session.add(media_buy)
             session.flush()  # Ensure media buy exists before creating creative assignment
 
-            # Create approved creative
             creative = Creative(
                 creative_id=creative_id,
                 tenant_id=test_tenant,
@@ -270,7 +273,7 @@ class TestMediaBuyReadinessService:
                 name="Live Creative",
                 agent_url="https://test-agent.example.com",
                 format="display_300x250",
-                status="approved",
+                status=creative_status,
                 data={},
             )
             session.add(creative)
@@ -287,74 +290,13 @@ class TestMediaBuyReadinessService:
             session.add(assignment)
             session.commit()
 
-        # Check readiness
         readiness = MediaBuyReadinessService.get_readiness_state(media_buy_id, test_tenant)
         assert readiness["state"] == "live"
         assert readiness["is_ready_to_activate"]
-
-        # Cleanup
-        with get_db_session() as session:
-            session.execute(delete(CreativeAssignment).where(CreativeAssignment.media_buy_id == media_buy_id))
-            session.execute(delete(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id))
-            session.commit()
-
-    def test_live_state_legacy_active_creative(self, test_tenant, test_principal):
-        """Legacy ``active`` creative rows count toward readiness (Chris Aug-28 C5).
-
-        Grades ``FINALIZE_READY_CREATIVE_STATUSES`` at the readiness counter:
-        reverting to ``c.status == \"approved\"`` alone would not redden the
-        ``approved``-only sibling but would strand legacy ``active`` rows.
-        """
-        media_buy_id = "mb_live_legacy_active"
-        creative_id = "cr_legacy_active"
-        now = datetime.now(UTC)
-
-        with get_db_session() as session:
-            media_buy = MediaBuy(
-                media_buy_id=media_buy_id,
-                tenant_id=test_tenant,
-                principal_id=test_principal,
-                order_name="Live Legacy Active Order",
-                advertiser_name="Test Advertiser",
-                budget=1000.0,
-                start_date=(now - timedelta(days=1)).date(),
-                end_date=(now + timedelta(days=6)).date(),
-                start_time=now - timedelta(days=1),
-                end_time=now + timedelta(days=6),
-                status="active",
-                raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
-            )
-            session.add(media_buy)
-            session.flush()
-
-            creative = Creative(
-                creative_id=creative_id,
-                tenant_id=test_tenant,
-                principal_id=test_principal,
-                name="Legacy Active Creative",
-                agent_url="https://test-agent.example.com",
-                format="display_300x250",
-                status="active",
-                data={},
-            )
-            session.add(creative)
-
-            assignment = CreativeAssignment(
-                assignment_id="assign_legacy_active",
-                tenant_id=test_tenant,
-                principal_id=test_principal,
-                creative_id=creative_id,
-                media_buy_id=media_buy_id,
-                package_id="pkg_1",
-            )
-            session.add(assignment)
-            session.commit()
-
-        readiness = MediaBuyReadinessService.get_readiness_state(media_buy_id, test_tenant)
-        assert readiness["state"] == "live"
         assert readiness["creatives_approved"] == 1
         assert readiness["creatives_total"] == 1
 
+        # Cleanup
         with get_db_session() as session:
             session.execute(delete(CreativeAssignment).where(CreativeAssignment.media_buy_id == media_buy_id))
             session.execute(delete(Creative).where(Creative.creative_id == creative_id))
