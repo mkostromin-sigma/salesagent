@@ -1073,33 +1073,6 @@ class AdCPTaskNotFoundError(AdCPNotFoundError):
 
     _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
 
-    def __init__(
-        self,
-        message: str = "",
-        *,
-        error_code: str | None = None,
-        status_code: int | None = None,
-        details: dict[str, Any] | None = None,
-        recovery: RecoveryHint | None = None,
-        field: str | None = None,
-        suggestion: str | None = None,
-        retry_after: int | None = None,
-        context: ContextObject | dict[str, Any] | None = None,
-    ) -> None:
-        if not message:
-            message = _SPEC_SUPPLEMENT_CODES["REFERENCE_NOT_FOUND"]["message"]
-        super().__init__(
-            message,
-            error_code=error_code,
-            status_code=status_code,
-            details=details,
-            recovery=recovery,
-            field=field,
-            suggestion=suggestion,
-            retry_after=retry_after,
-            context=context,
-        )
-
 
 class AdCPBudgetTooLowError(AdCPError):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
