@@ -85,6 +85,7 @@ def make_pending_media_buy(integration_db):
         *,
         include_assignment: bool = True,
         creative_approved: bool = True,
+        starts_in_days: int = 7,
         tenant_id: str = "reject_wh_tenant",
         media_buy_id: str = "mb_reject_wh",
         principal_id: str = "reject_wh_principal",
@@ -102,18 +103,20 @@ def make_pending_media_buy(integration_db):
         product = ProductFactory(tenant=tenant, product_id=f"prod_{media_buy_id}")
         PricingOptionFactory(product=product)
         now = datetime.now(UTC)
+        start_time = now + timedelta(days=starts_in_days)
+        end_time = start_time + timedelta(days=30)
         media_buy = MediaBuyFactory(
             tenant=tenant,
             principal=principal,
             media_buy_id=media_buy_id,
             status="pending_approval",
-            start_time=now + timedelta(days=7),
-            end_time=now + timedelta(days=37),
+            start_time=start_time,
+            end_time=end_time,
             raw_request={
                 "brand": {"domain": "reject-wh.example.com"},
                 "po_number": "REJECT-WH-1",
-                "start_time": (now + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "end_time": (now + timedelta(days=37)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "start_time": start_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_time": end_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "packages": [
                     {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
                 ],
@@ -449,6 +452,35 @@ class TestAdminMediaBuyRejectWebhook:
         )
         # Ready-arm provenance: session operator email on the MediaBuy row.
         _assert_persisted_status(pending_reject_media_buy, "pending_start", approved_by="test@example.com")
+
+    def test_approve_in_flight_webhook_persists_active_and_wire_matches(
+        self, authenticated_admin_session, make_pending_media_buy, webhook_capture
+    ):
+        """In-flight approve: column and wire both grade ``active`` (Chris Aug-28 B2).
+
+        Pre-flight fixtures cannot discriminate ``pending_start`` from legacy
+        ``scheduled`` on the wire; an in-flight window pins both the persisted
+        column and ``media_buy_status`` on the webhook.
+        """
+        ids = make_pending_media_buy(
+            starts_in_days=-1,
+            media_buy_id="mb_inflight_wh",
+            tenant_id="reject_wh_inflight",
+            principal_id="reject_wh_inflight_principal",
+        )
+        tenant_id = ids["tenant_id"]
+        media_buy_id = ids["media_buy_id"]
+
+        _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+        body = _webhook_body(webhook_capture)
+        persisted = read_media_buy_state(tenant_id, media_buy_id)
+
+        embedded = body.get("result") or {}
+        assert persisted.status == "active", f"in-flight approve must persist active, got {persisted.status!r}"
+        assert embedded.get("media_buy_status") == "active", (
+            f"in-flight approve webhook must embed media_buy_status=active, got {embedded.get('media_buy_status')!r}"
+        )
+        _assert_persisted_status(ids, "active", approved_by="test@example.com")
 
     def test_reject_bumps_revision_without_confirming(
         self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
