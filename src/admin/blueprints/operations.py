@@ -17,7 +17,7 @@ from src.core.database.models import PersistedMediaBuyStatus, PushNotificationCo
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
-from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -305,12 +305,12 @@ def _media_buy_webhook_task(
     task_type/tenant_id/principal_id/media_buy_id for delivery logging and the
     audit trail, and a dict lets a caller omit one silently — which is how the
     admin sync_creatives sender came to write no delivery-log row at all
-    (salesagent-pldmk.39). Shared by the approve and reject branches
+    (#1567). Shared by the approve and reject branches
     (PR #1567 round-2 cleanup).
 
     task_type carries step_data["tool_name"] VERBATIM. notify() coerces its own
     copy for the SDK payload, so the untrusted DB label never reaches the wire and
-    the original still keys the guards (salesagent-yi3s, salesagent-yk7o).
+    the original still keys the guards (#1567).
     """
     return WebhookTaskContext(
         task_id=step_data["step_id"],
@@ -466,27 +466,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             context=approve_context,
                             media_buy_status=webhook_media_buy_status,
                         )
-                        metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
-
+                        webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
+                        # The dialect fork moved into notify(); this site passes the protocol it
+                        # already read from the workflow step (#1567).
                         protocol = step_data["request_data"].get("protocol", "mcp")
-
-                        if protocol == "a2a":
-                            create_media_buy_approved_payload = create_a2a_webhook_payload(
-                                task_id=step_data["step_id"],
-                                status=AdcpTaskStatus.completed,
-                                result=create_media_buy_approved_result,
-                                context_id=step_data["context_id"],
-                            )
-                        else:
-                            # tool_name is untrusted (workflow_steps DB column).
-                            # Validate a COPY for the SDK payload; metadata keeps
-                            # the original label (#1567).
-                            create_media_buy_approved_payload = create_mcp_webhook_payload(
-                                task_id=step_data["step_id"],
-                                task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
-                                result=create_media_buy_approved_result,
-                                status=AdcpTaskStatus.completed,
-                            )
 
                         try:
                             service = get_protocol_webhook_service()
@@ -565,7 +548,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     )
                     webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
                     # The dialect fork moved into notify(); this site passes the protocol it
-                    # already read from the workflow step (salesagent-pldmk.39).
+                    # already read from the workflow step (#1567).
                     protocol = step_data["request_data"].get("protocol", "mcp")
 
                     try:
