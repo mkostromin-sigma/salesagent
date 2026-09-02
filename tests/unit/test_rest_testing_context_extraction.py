@@ -99,7 +99,7 @@ class TestMediaBuyListHonorsMockTime:
         )
         captured: dict[str, object] = {}
 
-        def _capture_fetch(_req, _principal_id, _uow, today, *, simulate=False):
+        def _capture_fetch(_req, _principal_id, _uow, today, _row_advisories, *, simulate=False):
             captured["today"] = today
             captured["simulate"] = simulate
             return []

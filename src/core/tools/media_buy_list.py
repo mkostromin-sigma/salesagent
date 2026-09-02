@@ -215,7 +215,7 @@ def _get_media_buys_impl(
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
         # Resolve which media buys to return
-        target_media_buys = _fetch_target_media_buys(req, principal_id, uow, today, row_advisories)
+        target_media_buys = _fetch_target_media_buys(req, principal_id, uow, today, row_advisories, simulate=simulate)
 
         # Resolve creative approvals for all packages in one batch query
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
@@ -280,7 +280,7 @@ def _get_media_buys_impl(
 
             # Materialize targeting_overlay from package_config so callers can verify
             # what was persisted. Tolerates the legacy "targeting" key for data written
-            # before the targeting_overlay rename.
+            # before the targeting_overlay rename (see media_buy_create.py:638-642).
             # OPTIONAL-field branch of the module's per-row failure policy (see the
             # module docstring): targeting_overlay has a legal empty value, so a
             # single corrupted package_config row renders as None with a non-fatal
@@ -602,6 +602,8 @@ def _fetch_target_media_buys(
     uow: MediaBuyUoW,
     today: date,
     row_advisories: list[Error],
+    *,
+    simulate: bool = False,
 ) -> list[_MediaBuyData]:
     """Fetch media buys from database matching the request filters.
 
@@ -636,7 +638,7 @@ def _fetch_target_media_buys(
             # evaluated the call -- the row reached the build loop carrying an unchecked
             # status, and the duplicated policy there was the only thing refusing it.
             # Computing first makes this seam the single site the module claims it is.
-            wire_status = _compute_status(buy, today)
+            wire_status = _compute_status(buy, today, simulate=simulate)
             if filter_statuses is not None and wire_status not in filter_statuses:
                 continue
             revision = _persisted_revision(buy)
@@ -731,7 +733,12 @@ def _persisted_revision(buy) -> int:
     return revision
 
 
-def _compute_status(buy: MediaBuy, today: date) -> MediaBuyStatus:
+def _compute_status(
+    buy: MediaBuy,
+    today: date,
+    *,
+    simulate: bool = False,
+) -> MediaBuyStatus:
     """Resolve a media buy's AdCP status for the get_media_buys read path.
 
     Delegates the persisted-status map + flight-window refinement to the shared
@@ -742,6 +749,14 @@ def _compute_status(buy: MediaBuy, today: date) -> MediaBuyStatus:
     "failed" has no AdCP lifecycle equivalent, so it collapses to the closest
     terminal state, "rejected" (enums/media-buy-status.json).
 
+    When ``simulate=True`` (delivery ``jump_to_event`` path), non-terminal
+    persisted states also refine against the flight window. List reads under
+    ``mock_time`` keep ``simulate=False`` (#1830 clock-only scope).
+
+    Note: the update-response dual-emit takes a DIFFERENT path —
+    ``normalize_persisted_media_buy_status`` above — which is a pure column
+    coercion with no date refinement, so the two surfaces read the same column
+    but only the read path refines against the flight window (#1417 / #1545).
     """
     canonical = resolve_canonical_status(buy, today, simulate=simulate)
     if canonical == "failed":

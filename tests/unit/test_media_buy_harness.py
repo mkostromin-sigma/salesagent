@@ -79,16 +79,19 @@ class TestMediaBuyListEnvExists:
         """UC-019 wire_field needs MCP structured_content stashed as wire_response.
 
         Legacy ``_run_mcp_wrapper`` never set ``_last_wire_response``; list env
-        must use ``_run_mcp_client`` like create/dual.
+        must use ``_run_mcp_client`` like create/dual. ``call_mcp`` unwraps
+        ``DeliverResult.payload`` (base contract after the transport-generic client).
         """
         from unittest.mock import patch
 
         from src.core.schemas._base import GetMediaBuysResponse
         from tests.harness.media_buy_list import MediaBuyListEnv
+        from tests.harness.transport import DeliverResult
 
         env = MediaBuyListEnv.__new__(MediaBuyListEnv)
+        delivered = DeliverResult(payload="wired", wire_response={"status": "completed"})
         with (
-            patch.object(MediaBuyListEnv, "_run_mcp_client", return_value="wired") as mock_client,
+            patch.object(MediaBuyListEnv, "_run_mcp_client", return_value=delivered) as mock_client,
             patch.object(MediaBuyListEnv, "_run_mcp_wrapper") as mock_wrapper,
         ):
             assert env.call_mcp(status_filter=["active"]) == "wired"
