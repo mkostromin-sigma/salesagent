@@ -589,6 +589,31 @@ async def test_owner_row_without_task_is_not_found(request_cls, method_name):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
+    TASK_METHOD_PAIRS,
+)
+async def test_task_without_owner_record_is_not_found(request_cls, method_name):
+    """Task present with no ``_task_owners`` row must fail closed (same as unknown id).
+
+    Inverse of ``test_owner_row_without_task_is_not_found``. A denied cancel
+    must not mutate the stored Task — there is no recorded owner who could
+    poll it on the wire.
+    """
+    handler = seeded_owned_a2a_handler(record_owner=False)
+    assert OWNED_TASK_ID in handler.tasks
+    assert OWNED_TASK_ID not in handler._task_owners
+    prior = handler.tasks[OWNED_TASK_ID].status.state
+
+    with a2a_auth_as(handler, owned_task_owner_identity()):
+        with pytest.raises(TaskNotFoundError) as exc_info:
+            await invoke_owned_task_method(handler, method_name, request_cls, OWNED_TASK_ID)
+
+    assert_task_not_found_nondisclosure(exc_info.value, OWNED_TASK_ID)
+    assert handler.tasks[OWNED_TASK_ID].status.state == prior
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_cls, method_name",
     [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
 )
 async def test_ownership_lookup_is_unconditional_on_unknown_id(request_cls, method_name):

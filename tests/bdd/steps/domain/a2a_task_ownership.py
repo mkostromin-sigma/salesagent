@@ -126,18 +126,18 @@ def then_auth_failure_not_task_not_found(ctx: dict) -> None:
 
 @then(parsers.parse('the stored task "{task_id}" should be in state {state}'))
 def then_stored_task_state(ctx: dict, task_id: str, state: str) -> None:
-    """Poll the task as its owner and grade the wire result, not in-process state.
+    """Grade in-memory store state after a fail-closed deny.
 
-    A denied cancel must leave the task servable and unmutated to its owner —
-    checked at the same altitude ``then_task_served`` grades, by re-dispatching
-    ``tasks/get`` rather than reaching into ``handler.tasks`` (#1720 review).
+    Only the no-owner-record cancel scenario uses this Then. Missing
+    ``_task_owners`` denies everyone (including the seed identity), so a
+    follow-up ``tasks/get`` as "owner" is itself not-found — that wire path
+    is already graded by ``no-owner-get``. Non-mutation is not visible on
+    the buyer wire; it is graded through ``a2a_task_state`` (harness public
+    accessor). Owned denials that stay servable to the recorded owner use
+    an explicit ``When the "owner" calls tasks/get`` + ``then_task_served``.
     """
     env = ctx["env"]
-    env.run_a2a_task_method("tasks/get", task_id, identity=env.identity_for_role("owner"))
-    assert env.last_a2a_task_error is None, (
-        f"Expected task {task_id} to still be servable to its owner, got error: {env.last_a2a_task_error}"
-    )
-    task = env.last_a2a_task
-    assert task is not None, f"No Task returned for {task_id}"
-    assert task.id == task_id
-    assert task.status.state == _task_state(state)
+    stored = env.a2a_task_state(task_id)
+    expected = _task_state(state)
+    assert stored is not None, f"Expected stored task {task_id} to still exist"
+    assert stored == expected, f"Expected stored task {task_id} in state {state}, got {stored}"
