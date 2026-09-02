@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 from unittest.mock import patch
 
 from a2a.server.context import ServerCallContext
@@ -99,6 +99,11 @@ TASK_METHOD_WITH_OPS: tuple[tuple[TaskRequestCls, str, str], ...] = tuple(
     (row.request_cls, row.method_name, row.operation) for row in TASK_METHOD_MATRIX
 )
 TASK_JSONRPC_METHODS: tuple[str, ...] = tuple(row.jsonrpc_method for row in TASK_METHOD_MATRIX)
+
+
+def auth_operation_wire_phrase(operation: str) -> str:
+    """Buyer-facing InternalError phrase for an ``_authenticate`` op id."""
+    return f"{operation.replace('_', ' ')} failed"
 
 
 def post_a2a_task_method(
@@ -211,6 +216,16 @@ def seeded_owned_a2a_handler(
     if record_owner:
         record_a2a_task_owner(handler, task_id, tenant_id=tenant_id, principal_id=principal_id)
     return handler
+
+
+def seeded_owner_sibling_resolver() -> Callable[..., ResolvedIdentity]:
+    """Token → owner/sibling identity map used by real-auth unit + wire altitudes."""
+    return token_identity_resolver(
+        {
+            OWNED_TASK_SIBLING_TOK: owned_task_sibling_identity(),
+            OWNED_TASK_OWNER_TOK: owned_task_owner_identity(),
+        }
+    )
 
 
 def token_identity_resolver(

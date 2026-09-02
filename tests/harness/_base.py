@@ -38,7 +38,7 @@ os.environ.setdefault("ADCP_RUN_BACKGROUND_SCHEDULERS", "false")
 
 # Runtime import: DeliverResult is CONSTRUCTED here (the dispatch return contract),
 # not merely annotated, so it cannot live in the TYPE_CHECKING block below.
-from tests.harness.transport import DeliverResult, strip_a2a_protocol_fields
+from tests.harness.transport import NO_IDENTITY_OVERRIDE, DeliverResult, strip_a2a_protocol_fields
 
 if TYPE_CHECKING:
     from a2a.compat.v0_3.types import Task as WireTask
@@ -508,6 +508,8 @@ class BaseTestEnv:
         # in the shape the v0.3 compat adapter puts on the wire. Task methods
         # have no AdCP envelope — their failure IS the JSON-RPC error.
         self._last_a2a_task_error: dict[str, Any] | None = None
+        # v0.3 compat wire Task from the last ``run_a2a_task_method`` success.
+        self._last_a2a_wire_task: Any = None
         # One AdCPRequestHandler per env: the handler owns the in-memory task
         # store, so create → tasks/get / tasks/cancel must hit the same instance.
         self._a2a_handler: AdCPRequestHandler | None = None
@@ -566,14 +568,14 @@ class BaseTestEnv:
     def _resolve_dispatch_identity(
         self,
         transport: Transport,
-        identity: ResolvedIdentity | None | Literal[_Sentinel.USE_DEFAULT] = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | object = NO_IDENTITY_OVERRIDE,
     ) -> ResolvedIdentity | None:
         """Override-or-default identity for a dispatcher.
 
-        ``_NO_OVERRIDE`` → ``identity_for(transport)``; any other value
+        ``NO_IDENTITY_OVERRIDE`` → ``identity_for(transport)``; any other value
         (including explicit ``None`` for unauthenticated) is returned as-is.
         """
-        if identity is _NO_OVERRIDE:
+        if identity is NO_IDENTITY_OVERRIDE:
             return self.identity_for(transport)
         return identity
 
@@ -728,6 +730,40 @@ class BaseTestEnv:
         compat wire ``Task`` class with its own ``.status.state`` enum.
         """
         return self._last_a2a_task
+
+    @property
+    def last_a2a_wire_task(self) -> WireTask | None:
+        """v0.3 compat wire ``Task`` from the last ``run_a2a_task_method`` success.
+
+        Distinct from ``last_a2a_task`` (protobuf skills-path Task). Ownership
+        get/cancel Then steps grade this slot.
+        """
+        return self._last_a2a_wire_task
+
+    @property
+    def last_a2a_task_error(self) -> dict[str, Any] | None:
+        """Live JSON-RPC error body from the last ``run_a2a_task_method``.
+
+        ``tasks/get`` / ``tasks/cancel`` are protocol methods, not AdCP skills:
+        a denial has no artifact and no two-layer envelope, so it must NOT be
+        graded through ``wire_error_envelope``.
+        """
+        return self._last_a2a_task_error
+
+    @property
+    def a2a_handler(self) -> AdCPRequestHandler:
+        """The one ``AdCPRequestHandler`` this env dispatches A2A through.
+
+        In-memory task state (``tasks`` and the ``_task_owners`` recorded at
+        create, #1702) lives on the handler instance. Building a fresh handler
+        per dispatch would drop that state between a create and the subsequent
+        ``tasks/get`` / ``tasks/cancel``, so ownership could never be graded.
+        """
+        if self._a2a_handler is None:
+            from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+            self._a2a_handler = AdCPRequestHandler()
+        return self._a2a_handler
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch through the real FastMCP Client pipeline, returning payload AND wire.
@@ -1002,7 +1038,7 @@ class BaseTestEnv:
         method: str,
         task_id: str,
         *,
-        identity: ResolvedIdentity | None | Literal[_Sentinel.USE_DEFAULT] = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | object = NO_IDENTITY_OVERRIDE,
     ) -> WireTask | None:
         """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
 
@@ -1077,7 +1113,7 @@ class BaseTestEnv:
         self,
         task_id: str,
         *,
-        identity: ResolvedIdentity | None | Literal[_Sentinel.USE_DEFAULT] = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | object = NO_IDENTITY_OVERRIDE,
         state: TaskState | None = None,
         record_owner: bool = True,
     ) -> Task:

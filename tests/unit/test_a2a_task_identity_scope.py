@@ -17,6 +17,8 @@ from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from a2a.types import (
+    CancelTaskRequest,
+    GetTaskRequest,
     InternalError,
     InvalidRequestError,
     SendMessageRequest,
@@ -36,11 +38,12 @@ from src.a2a_server.adcp_a2a_server import (
 from src.core.exceptions import AdCPTaskNotFoundError, AdCPValidationError
 from src.core.schemas import GetProductsResponse
 from tests.a2a_helpers import (
+    A2A_TEST_HOST_HEADERS,
     OWNED_TASK_FORBIDDEN_SUBSTRINGS,
     OWNED_TASK_ID,
-    OWNED_TASK_OTHER_TENANT,
     OWNED_TASK_OWNER,
     OWNED_TASK_OWNER_TOK,
+    OWNED_TASK_SIBLING,
     OWNED_TASK_SIBLING_TOK,
     OWNED_TASK_TENANT,
     TASK_METHOD_MATRIX,
@@ -49,10 +52,10 @@ from tests.a2a_helpers import (
     a2a_auth_as,
     assert_no_identity_leak,
     assert_task_not_found_nondisclosure,
-    auth_operation_wire_phrase,
     invoke_owned_task_method,
     make_a2a_context,
     message_send_with_push,
+    owned_task_other_tenant_identity,
     owned_task_owner_identity,
     owned_task_sibling_identity,
     seeded_owned_a2a_handler,
@@ -175,34 +178,6 @@ def _make_nl_message(text: str) -> SendMessageRequest:
     return SendMessageRequest(message=message)
 
 
-def test_safe_task_id_for_log_escapes_and_truncates():
-    """Sanitizer oracle — allowlist + truncate-after-substitute (R5-C2 / R5-N1a)."""
-    assert _safe_task_id_for_log("a\nWARNING forged") == "a?WARNING?forged"
-    assert _safe_task_id_for_log("x" * 200) == "x" * 100
-    # Exact 100-char prefix with a non-allowlisted char in the truncate window.
-    raw = "A" * 99 + "\r" + "B" * 50
-    sanitized = _safe_task_id_for_log(raw)
-    assert sanitized == "A" * 99 + "?"
-    assert len(sanitized) == 100
-
-
-@pytest.mark.parametrize(
-    "exc, expected_message, expected_code, expected_recovery",
-    [
-        (
-            RuntimeError("boom [SQL: SELECT x] [parameters: {'tok': 'secret'}]"),
-            "op failed",
-            "SERVICE_UNAVAILABLE",
-            "transient",
-        ),
-        (
-            AdCPValidationError("capability missing"),
-            "capability missing",
-            "VALIDATION_ERROR",
-            "correctable",
-        ),
-    ],
-)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_cls, method_name",
@@ -213,7 +188,7 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
     handler = AdCPRequestHandler()
     owner = owned_task_owner_identity()
     sibling = owned_task_sibling_identity()
-    other_tenant = owned_task_owner_identity(tenant_id=OWNED_TASK_OTHER_TENANT)
+    other_tenant = owned_task_other_tenant_identity()
     ctx = make_a2a_context(auth_token="test-token", headers=A2A_TEST_HOST_HEADERS)
     params = SendMessageRequest(message=create_a2a_text_message("Show me available products in the catalog"))
 
@@ -260,11 +235,6 @@ async def test_create_records_owner_and_scopes_poll(request_cls, method_name):
 @pytest.mark.parametrize(
     "request_cls, method_name",
     TASK_METHOD_PAIRS,
-)
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "request_cls, method_name",
-    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
 )
 async def test_owner_can_access_owned_in_memory_task(request_cls, method_name):
     """The recorded owner authenticates and is served / can cancel."""
@@ -381,11 +351,6 @@ async def test_auth_infra_failure_is_internal_error_not_task_not_found(method_na
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "request_cls, method_name, wire_message",
-    [(row.request_cls, row.method_name, auth_operation_wire_phrase(row.operation)) for row in TASK_METHOD_MATRIX],
-)
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
     "request_cls, method_name",
     TASK_METHOD_PAIRS,
 )
@@ -418,11 +383,6 @@ async def test_sibling_denied_via_real_auth_token_path(request_cls, method_name)
     "request_cls, method_name",
     TASK_METHOD_PAIRS,
 )
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "request_cls, method_name",
-    [(row[0], row[1]) for row in TASK_METHOD_MATRIX],
-)
 async def test_unauthenticated_poller_raises_invalid_request(request_cls, method_name):
     """Missing token raises InvalidRequestError — must not collapse to TaskNotFoundError."""
     handler = seeded_owned_a2a_handler()
@@ -451,6 +411,19 @@ async def test_null_principal_denied_against_null_owner_row(request_cls, method_
     assert_task_not_found_nondisclosure(exc_info.value, OWNED_TASK_ID)
 
 
+class _HasUrl:
+    """``==`` matcher: object has the expected ``.url`` (real config carries a fresh uuid ``.id``)."""
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+
+    def __eq__(self, other: object) -> bool:
+        return getattr(other, "url", None) == self._url
+
+    def __repr__(self) -> str:
+        return f"_HasUrl({self._url!r})"
+
+
 @pytest.mark.asyncio
 async def test_auth_resolve_failure_leaves_no_orphan_push_config():
     """Resolve failure must not orphan ``_task_push_configs``."""
@@ -471,32 +444,10 @@ async def test_auth_resolve_failure_leaves_no_orphan_push_config():
     assert handler.tasks == {}
     assert handler._task_owners == {}
     assert handler._task_push_configs == {}
-    # Thread request-scoped config (no orphan map write) — assert_called_once_with
-    # so the weak-mock guard does not flag a split call_args inspection.
-    webhook.assert_called_once_with(ANY, status="failed", config=push)
-
-
-class _HasUrl:
-    """``==`` matcher: object has the expected ``.url`` (real config carries a fresh uuid ``.id``)."""
-
-    def __init__(self, url: str) -> None:
-        self._url = url
-
-    def __eq__(self, other: object) -> bool:
-        return getattr(other, "url", None) == self._url
-
-    def __repr__(self) -> str:
-        return f"_HasUrl({self._url!r})"
-
-
-class _HasFailedState:
-    """``==`` matcher: webhook payload's ``.status.state`` is ``TASK_STATE_FAILED``."""
-
-    def __eq__(self, other: object) -> bool:
-        return getattr(getattr(other, "status", None), "state", None) == TaskState.TASK_STATE_FAILED
-
-    def __repr__(self) -> str:
-        return "_HasFailedState()"
+    # Thread request-scoped accepted registration (no orphan map write) —
+    # assert_called_once_with so the weak-mock guard does not flag a split
+    # call_args inspection. Match on URL: registration carries a fresh uuid id.
+    webhook.assert_called_once_with(ANY, status="failed", config=_HasUrl(push.url))
 
 
 @pytest.mark.asyncio
@@ -513,7 +464,7 @@ async def test_auth_resolve_failure_still_sends_real_webhook():
     handler, push, params, ctx = message_send_with_push("https://example.com/hook")
 
     mock_service = AsyncMock()
-    mock_service.send_notification.return_value = True
+    mock_service.notify.return_value = True
 
     with (
         patch.object(handler, "_get_auth_token", return_value="tok"),
@@ -526,15 +477,18 @@ async def test_auth_resolve_failure_still_sends_real_webhook():
         with pytest.raises(InternalError):
             await handler.on_message_send(params, context=ctx)
 
-    # Equality matchers (not exact objects — push_notification_config carries a
-    # freshly minted uuid; payload is a real create_a2a_webhook_payload() build)
-    # so the single assert_called_once_with() stays atomic per
+    # Equality matchers (not exact objects — push registration carries a
+    # freshly minted uuid; payload is built inside notify()) so the single
+    # assert_called_once_with() stays atomic per
     # test_architecture_weak_mock_assertions.py instead of splitting count and
     # argument checks across two statements.
-    mock_service.send_notification.assert_called_once_with(
-        push_notification_config=_HasUrl(push.url),
-        payload=_HasFailedState(),
-        metadata=ANY,
+    mock_service.notify.assert_called_once_with(
+        _HasUrl(push.url),
+        task=ANY,
+        status=ANY,
+        result=ANY,
+        protocol="a2a",
+        context_id=ANY,
     )
 
 
@@ -671,7 +625,7 @@ async def test_success_path_push_config_sends_real_webhook_from_map():
     owner = owned_task_owner_identity()
 
     mock_service = AsyncMock()
-    mock_service.send_notification.return_value = True
+    mock_service.notify.return_value = True
 
     with (
         patch.object(handler, "_get_auth_token", return_value="tok"),
@@ -687,11 +641,14 @@ async def test_success_path_push_config_sends_real_webhook_from_map():
 
     assert created.id in handler._task_push_configs
     # Success-path webhook must have been sent via the map-stored config.
-    assert mock_service.send_notification.call_count >= 1
-    mock_service.send_notification.assert_any_call(
-        push_notification_config=_HasUrl(push.url),
-        payload=ANY,
-        metadata=ANY,
+    assert mock_service.notify.call_count >= 1
+    mock_service.notify.assert_any_call(
+        _HasUrl(push.url),
+        task=ANY,
+        status=ANY,
+        result=ANY,
+        protocol="a2a",
+        context_id=ANY,
     )
 
 

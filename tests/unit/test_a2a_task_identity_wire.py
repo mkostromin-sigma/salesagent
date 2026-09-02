@@ -19,10 +19,12 @@ from a2a.server.routes.common import ServerCallContextBuilder
 from starlette.requests import Request
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from tests.a2a_helpers import (
     OWNED_TASK_ID,
     OWNED_TASK_OWNER_TOK,
     OWNED_TASK_SIBLING_TOK,
+    TASK_JSONRPC_METHODS,
     assert_wire_auth_failure,
     assert_wire_task_not_found,
     auth_headers_mapping,
@@ -30,6 +32,7 @@ from tests.a2a_helpers import (
     owned_task_sibling_identity,
     post_a2a_task_method,
     seeded_owned_a2a_handler,
+    token_identity_resolver,
 )
 
 

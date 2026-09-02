@@ -536,7 +536,7 @@ class AdCPRequestHandler(RequestHandler):
         result: dict[str, Any] | None = None,
         error: str | None = None,
         *,
-        config: TaskPushNotificationConfig | None = None,
+        config: ValidatedWebhookRegistration | TaskPushNotificationConfig | None = None,
     ):
         """Send protocol-level push notification if configured.
 
@@ -702,6 +702,9 @@ class AdCPRequestHandler(RequestHandler):
         # among them — used to raise UnboundLocalError from the error handler and
         # replace the real error with a confusing one.
         identity: ResolvedIdentity | None = None
+        # Accepted push receipt (local until identity succeeds). Except path threads
+        # it via ``config=`` so resolve failure never orphans ``_task_push_configs``.
+        push_config_registration: ValidatedWebhookRegistration | None = None
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
@@ -730,12 +733,11 @@ class AdCPRequestHandler(RequestHandler):
 
             # SSRF-reject unsafe push URLs after the auth-required gate so callers
             # that need credentials see AUTH_REQUIRED before scheme/blocked-host checks.
-            # ONE branch: stash iff a registration was built. Previously the gate ran
-            # under `config and config.url` while the stash ran under `config` alone,
-            # so a blank-url config was stashed ungated (the reader then early-returned
-            # on it). Observably equivalent, minus the ungated stash.
+            # Accept into a local receipt ONLY — do not stash on ``_task_push_configs``
+            # until identity resolution succeeds. Auth/resolve failure must leave no
+            # orphan map entry (#1702); the failure webhook threads ``config=`` instead.
             if push_notification_config and push_notification_config.url:
-                registration = _accept_a2a_push_config(
+                push_config_registration = _accept_a2a_push_config(
                     push_notification_config.url,
                     *_a2a_push_config_auth(push_notification_config),
                 )
@@ -744,7 +746,6 @@ class AdCPRequestHandler(RequestHandler):
                     task_id,
                     webhook_url_for_log(push_notification_config.url),
                 )
-                self._task_push_configs[task_id] = registration
 
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
@@ -769,6 +770,8 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=identity.tenant_id,
                 principal_id=identity.principal_id,
             )
+            if push_config_registration is not None:
+                self._task_push_configs[task_id] = push_config_registration
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
@@ -1133,7 +1136,7 @@ class AdCPRequestHandler(RequestHandler):
             await self._send_protocol_webhook(
                 task,
                 status="failed",
-                config=push_notification_config,
+                config=push_config_registration,
             )
 
             # Raise A2A error — ``_internal_error_for`` keeps SQL out of the
