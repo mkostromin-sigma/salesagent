@@ -38,7 +38,7 @@ os.environ.setdefault("ADCP_RUN_BACKGROUND_SCHEDULERS", "false")
 
 # Runtime import: DeliverResult is CONSTRUCTED here (the dispatch return contract),
 # not merely annotated, so it cannot live in the TYPE_CHECKING block below.
-from tests.harness.transport import DeliverResult, strip_a2a_protocol_fields
+from tests.harness.transport import NO_IDENTITY_OVERRIDE, DeliverResult, strip_a2a_protocol_fields
 
 if TYPE_CHECKING:
     from a2a.server.routes.common import ServerCallContext
@@ -782,7 +782,6 @@ class BaseTestEnv:
 
         from a2a.types import SendMessageRequest, Task
 
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
         from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
@@ -962,7 +961,7 @@ class BaseTestEnv:
         method: str,
         task_id: str,
         *,
-        identity: ResolvedIdentity | None | _NoOverride = _NO_OVERRIDE,
+        identity: ResolvedIdentity | None | Any = NO_IDENTITY_OVERRIDE,
     ) -> Task | None:
         """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
 
@@ -991,10 +990,10 @@ class BaseTestEnv:
         from starlette.requests import Request
 
         from tests.a2a_helpers import post_a2a_task_method
-        from tests.harness.transport import Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
         self._commit_factory_data()
-        a2a_identity = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
+        a2a_identity = self.identity_for(Transport.A2A) if identity is NO_IDENTITY_OVERRIDE else identity
         if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
             self._ensure_tenant_for_audit(a2a_identity.tenant_id)
 
@@ -1042,7 +1041,7 @@ class BaseTestEnv:
         self,
         task_id: str,
         *,
-        identity: ResolvedIdentity | _NoOverride = _NO_OVERRIDE,
+        identity: ResolvedIdentity | Any = NO_IDENTITY_OVERRIDE,
         state: TaskState.ValueType | None = None,
         record_owner: bool = True,
     ) -> Task:
@@ -1064,9 +1063,9 @@ class BaseTestEnv:
         from a2a.types import Task, TaskState, TaskStatus
 
         from tests.a2a_helpers import record_a2a_task_owner
-        from tests.harness.transport import Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
-        owner = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
+        owner = self.identity_for(Transport.A2A) if identity is NO_IDENTITY_OVERRIDE else identity
         if record_owner and owner is None:
             raise ValueError("seed_a2a_task with record_owner=True requires a ResolvedIdentity")
         handler = self.a2a_handler

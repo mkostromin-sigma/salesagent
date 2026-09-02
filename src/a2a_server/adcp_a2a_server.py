@@ -243,6 +243,10 @@ def _safe_id_for_log(task_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.:-]", "?", task_id)[:100]
 
 
+# Tests and helpers still import the pre-rename symbol from #1720 review rounds.
+_safe_task_id_for_log = _safe_id_for_log
+
+
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """Canonical InternalError shape for non-skill A2A boundary failures.
 
@@ -716,12 +720,10 @@ class AdCPRequestHandler(RequestHandler):
 
             # SSRF-reject unsafe push URLs after the auth-required gate so callers
             # that need credentials see AUTH_REQUIRED before scheme/blocked-host checks.
-            # ONE branch: stash iff a registration was built. Previously the gate ran
-            # under `config and config.url` while the stash ran under `config` alone,
-            # so a blank-url config was stashed ungated (the reader then early-returned
-            # on it). Observably equivalent, minus the ungated stash.
+            # Validate here; stash only after identity resolves (R5-A1 — no orphan map).
+            push_registration: ValidatedWebhookRegistration | None = None
             if push_notification_config and push_notification_config.url:
-                registration = _accept_a2a_push_config(
+                push_registration = _accept_a2a_push_config(
                     push_notification_config.url,
                     *_a2a_push_config_auth(push_notification_config),
                 )
@@ -730,7 +732,6 @@ class AdCPRequestHandler(RequestHandler):
                     task_id,
                     webhook_url_for_log(push_notification_config.url),
                 )
-                self._task_push_configs[task_id] = registration
 
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
@@ -750,6 +751,8 @@ class AdCPRequestHandler(RequestHandler):
             # Push config lives outside protobuf metadata (not JSON-serializable).
             # Failure webhooks before this point thread ``config=`` into
             # ``_send_protocol_webhook`` rather than writing the map early.
+            if push_registration is not None:
+                self._task_push_configs[task_id] = push_registration
             self.tasks[task_id] = task
             self._task_owners[task_id] = _TaskOwner(
                 tenant_id=identity.tenant_id,
