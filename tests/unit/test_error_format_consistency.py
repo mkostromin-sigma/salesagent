@@ -21,6 +21,10 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 
+# CreateMediaBuyRequest.packages has min_length=1 — auth-path tests need a
+# schema-valid request so construction reaches _impl (not Pydantic too_short).
+_MIN_PACKAGE = {"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "test_pricing"}
+
 
 class TestMCPErrorShapes:
     """Test that MCP tool errors have consistent structure."""
