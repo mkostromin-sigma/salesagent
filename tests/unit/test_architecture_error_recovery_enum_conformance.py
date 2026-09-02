@@ -209,10 +209,12 @@ def test_internal_only_codes_are_documented() -> None:
 # wire, and it must be the ONLY table in exceptions.py that answers a recovery
 # question (WIRE_STANDARD_CODES answers membership only).
 
-# The two spec codes the SDK helper table has not caught up to; the pinned enum
-# defines both (CREATIVE_NOT_FOUND correctable, CONFIGURATION_ERROR terminal),
-# so they are wire codes src can emit and must therefore be classified.
-_SUPPLEMENT_WIRE_CODES = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
+# Spec codes the SDK helper table has not caught up to; the pinned enum defines
+# them (CREATIVE_NOT_FOUND correctable, CONFIGURATION_ERROR terminal,
+# REFERENCE_NOT_FOUND correctable), so they are wire codes src can emit and must
+# therefore be classified. REFERENCE_NOT_FOUND is also the ERROR_CODE_MAPPING
+# target for FORMAT_NOT_FOUND / TASK_NOT_FOUND.
+_SUPPLEMENT_WIRE_CODES = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
 
 
 def _src_recovery_by_wire_code() -> dict[str, str]:
@@ -320,9 +322,9 @@ def test_wire_standard_codes_carry_no_classification() -> None:
         f"The recovery table must be TOTAL over the wire set."
     )
 
-    assert len(WIRE_STANDARD_CODES) == 39, (
-        f"WIRE_STANDARD_CODES has {len(WIRE_STANDARD_CODES)} entries, not 39 (38 SDK "
-        f"+ 2 supplement - 1 demoted). If the SDK pin moves, the demoted-set comment "
+    assert len(WIRE_STANDARD_CODES) == 40, (
+        f"WIRE_STANDARD_CODES has {len(WIRE_STANDARD_CODES)} entries, not 40 (38 SDK "
+        f"+ 3 supplement - 1 demoted). If the SDK pin moves, the demoted-set comment "
         f"in src/core/exceptions.py is where the reason lives; update it there."
     )
 

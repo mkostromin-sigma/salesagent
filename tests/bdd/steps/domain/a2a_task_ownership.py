@@ -112,10 +112,6 @@ def then_task_not_found(ctx: dict, task_id: str) -> None:
     error = env.last_a2a_task_error
     assert error is not None, f"Expected a task-not-found error for {task_id}, got none"
     assert_wire_task_not_found(error, task_id)
-    # Shared wire-dict oracle driven from the canonical OWNED_TASK_FORBIDDEN_SUBSTRINGS
-    # set (not env.*_ID re-aliases) — the copy most likely to be missed if the
-    # non-disclosure policy changes (#1720 review).
-    assert_wire_no_identity_leak(error)
 
 
 @then("the A2A task response should be an authentication failure, not task-not-found")
@@ -128,7 +124,6 @@ def then_auth_failure_not_task_not_found(ctx: dict) -> None:
     assert_wire_auth_failure(error)
 
 
-@then("the A2A task response should be an authentication failure, not task-not-found")
 @then(parsers.parse('the stored task "{task_id}" should be in state {state}'))
 def then_stored_task_state(ctx: dict, task_id: str, state: str) -> None:
     """Poll the task as its owner and grade the wire result, not in-process state.

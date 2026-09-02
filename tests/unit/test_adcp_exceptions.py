@@ -898,20 +898,29 @@ class TestRetryAfterSerializerParity:
 
 
 def test_spec_supplement_codes_match_class_defaults():
-    """Supplement recovery/message values stay aligned with the typed classes.
+    """Supplement code NAMES stay in the wire set; recovery comes from the pin.
 
-    Membership in WIRE_STANDARD_CODES is load-bearing; the dict values are
-    documentation-only but must not drift from class defaults / enum intent.
+    ``_SPEC_SUPPLEMENT_CODES`` is membership-only (frozenset of names). Recovery
+    lives in ``RECOVERY_BY_WIRE_CODE`` (pinned enumMetadata). ClassVar
+    ``_default_recovery`` is only a fallback for unpinned codes — instance
+    ``.recovery`` must match the pin for every supplement-backed wire code.
     """
     from src.core.exceptions import (
         _SPEC_SUPPLEMENT_CODES,
+        RECOVERY_BY_WIRE_CODE,
+        WIRE_STANDARD_CODES,
         AdCPConfigurationError,
         AdCPCreativeNotFoundError,
         AdCPTaskNotFoundError,
     )
 
-    assert _SPEC_SUPPLEMENT_CODES["CREATIVE_NOT_FOUND"]["recovery"] == AdCPCreativeNotFoundError._default_recovery
-    assert _SPEC_SUPPLEMENT_CODES["CONFIGURATION_ERROR"]["recovery"] == AdCPConfigurationError._default_recovery
+    assert _SPEC_SUPPLEMENT_CODES == frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
+    assert _SPEC_SUPPLEMENT_CODES <= set(WIRE_STANDARD_CODES)
+
+    assert AdCPCreativeNotFoundError("x").recovery == RECOVERY_BY_WIRE_CODE["CREATIVE_NOT_FOUND"]
+    assert AdCPConfigurationError("x").recovery == RECOVERY_BY_WIRE_CODE["CONFIGURATION_ERROR"]
     # REFERENCE_NOT_FOUND is the wire target for TASK_NOT_FOUND (and FORMAT).
-    assert _SPEC_SUPPLEMENT_CODES["REFERENCE_NOT_FOUND"]["recovery"] == AdCPTaskNotFoundError._default_recovery
-    assert _SPEC_SUPPLEMENT_CODES["REFERENCE_NOT_FOUND"]["message"] == "Reference not found"
+    task_exc = AdCPTaskNotFoundError("x")
+    assert task_exc.wire_error_code == "REFERENCE_NOT_FOUND"
+    assert task_exc.recovery == RECOVERY_BY_WIRE_CODE["REFERENCE_NOT_FOUND"]
+    assert RECOVERY_BY_WIRE_CODE["REFERENCE_NOT_FOUND"] == "correctable"

@@ -82,6 +82,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.a2a_task_ownership",
 ]
 
 # ---------------------------------------------------------------------------
@@ -3657,6 +3658,20 @@ def _seed_uc019(ctx: dict, env: object) -> None:
     ctx["principal"] = principal
 
 
+def _build_a2a_task_ownership_env(e2e_config: object | None) -> AbstractContextManager:
+    """In-memory A2A tasks/get + tasks/cancel ownership gate (#1702 / #1959)."""
+    from tests.harness.a2a_task_ownership import A2ATaskOwnershipEnv
+
+    return A2ATaskOwnershipEnv(e2e_config=e2e_config)
+
+
+def _seed_a2a_task_ownership(ctx: dict, env: object) -> None:
+    """Seed owner + sibling + cross-tenant principals for ownership grading."""
+    tenant, principal = env.setup_principals()
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+
+
 # ── Seeds extracted from the former _harness_env elif chain ────
 # Each was an inline body inside a marker-keyed branch. As rows they are visible
 # to storyboard_spec.resolve_env_route, which is what lets scripts/audit resolve
@@ -3835,17 +3850,23 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
-    # The five rows below are keyed by the coarse `uc` bucket (from
+    # The rows below are keyed by the coarse `uc` bucket (from
     # _detect_uc), not a per-scenario tag: they are what a scenario in these
     # UCs falls back to when no predicate row above claims it. ADMIN, COMPAT,
-    # UC-GET-PRODUCTS and UC-005 have no predicate rows at all — one env + one
-    # seed serves every scenario. UC-019 does have one (@post-create-poll needs
-    # create + list in a single scenario), so its bucket row is the remainder.
+    # UC-GET-PRODUCTS, UC-005 and A2A-TASK-OWNERSHIP have no predicate rows at
+    # all — one env + one seed serves every scenario. UC-019 does have one
+    # (@post-create-poll needs create + list in a single scenario), so its
+    # bucket row is the remainder.
     "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
     "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_uc005),
     "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_uc019),
+    "A2A-TASK-OWNERSHIP": EnvRoute(
+        tag="A2A-TASK-OWNERSHIP",
+        env_builder=_build_a2a_task_ownership_env,
+        seed=_seed_a2a_task_ownership,
+    ),
 }
 
 # Tag sets the routing predicates below key on. They were inline `if` conditions
