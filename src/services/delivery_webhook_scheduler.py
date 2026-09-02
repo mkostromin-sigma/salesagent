@@ -20,7 +20,6 @@ from sqlalchemy import func, select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PersistedMediaBuyStatus, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
@@ -214,27 +213,28 @@ class DeliveryWebhookScheduler:
             # Create a ResolvedIdentity for the delivery call
             from src.core.resolved_identity import ResolvedIdentity
 
-        req = GetMediaBuyDeliveryRequest(
-            media_buy_ids=[media_buy.media_buy_id],
-            status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
-            start_date=start_date_obj.strftime("%Y-%m-%d"),
-            end_date=end_date_obj.strftime("%Y-%m-%d"),
-            context=None,
-        )
-
-        delivery_response = _get_media_buy_delivery_impl(req, identity)
-
-        if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
-            logger.warning(
-                f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
+            identity = ResolvedIdentity(
+                principal_id=media_buy.principal_id,
+                tenant_id=media_buy.tenant_id,
+                tenant={"tenant_id": media_buy.tenant_id},
+                protocol="rest",
             )
-            return
 
-        if delivery_response.errors is not None:
-            logger.warning(
-                f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
+            # Include active + completed statuses: the scheduler already filters
+            # by DB status (active/approved) at query time, so the delivery impl
+            # should include ended campaigns (dynamic status=completed) rather
+            # than filtering them out and reporting "not found" errors.
+            # We exclude "pending_start" (ready) to avoid returning delivery
+            # data for future-dated campaigns that haven't started yet.
+            from adcp.types import MediaBuyStatus
+
+            req = GetMediaBuyDeliveryRequest(
+                media_buy_ids=[media_buy.media_buy_id],
+                status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
+                start_date=start_date_obj.strftime("%Y-%m-%d"),
+                end_date=end_date_obj.strftime("%Y-%m-%d"),
+                context=None,
             )
-            return
 
             delivery_response = _get_media_buy_delivery_impl(req, identity)
 
@@ -362,7 +362,7 @@ class DeliveryWebhookScheduler:
             # buyer that registered over A2A received an MCP-shaped delivery report.
             # It had no way to do better until push_notification_configs recorded the
             # protocol: this job fires long after the request and carries no identity
-            # (salesagent-pldmk.39).
+            # (#1802).
             #
             # NULL means a row written before that column existed. Falling back to
             # "mcp" reproduces exactly the previous behaviour for those rows rather
@@ -381,188 +381,6 @@ class DeliveryWebhookScheduler:
                 status=AdcpTaskStatus.completed,
                 result=delivery_response,
                 protocol=protocol,
-            )
-
-            logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
-
-        except Exception as e:
-            logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
-
-        # Calculate next_expected_at for daily frequency: start of next day (UTC)
-        next_day = datetime.now(UTC).date() + timedelta(days=1)
-        next_expected_at = utc_flight_start(next_day)
-
-        # Set webhook-specific metadata directly on the response model
-        # These fields are defined on the library's GetMediaBuyDeliveryResponse
-        delivery_response.notification_type = NotificationType.scheduled
-        delivery_response.next_expected_at = next_expected_at
-        delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
-        delivery_response.unavailable_count = 0  # TODO: Count reporting_delayed/failed deliveries
-
-        # Extract webhook URL and authentication
-        webhook_url = reporting_webhook.get("url")
-        if not webhook_url:
-            logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
-            return
-
-        # Try to find existing push notification config or create a temporary one
-        auth_config = reporting_webhook.get("authentication", {})
-        auth_type = None
-        auth_token = None
-
-        if auth_config:
-            schemes = auth_config.get("schemes", [])
-            auth_type = schemes[0] if schemes else None
-            auth_token = auth_config.get("credentials")
-
-        # Query for existing push notification config for this media buy
-        config_stmt = select(DBPushNotificationConfig).where(
-            DBPushNotificationConfig.principal_id == media_buy.principal_id,
-            DBPushNotificationConfig.tenant_id == media_buy.tenant_id,
-            DBPushNotificationConfig.url == webhook_url,
-            DBPushNotificationConfig.is_active,
-        )
-        push_notification_config = session.scalars(config_stmt).first()
-
-        # Extract webhook config data before session closes
-        if push_notification_config:
-            # Detach from session and extract data
-            session.expunge(push_notification_config)
-        else:
-            # Create a detached temporary config (not attached to session)
-            push_notification_config = DBPushNotificationConfig(
-                id=f"temp_{media_buy.media_buy_id}",
-                tenant_id=media_buy.tenant_id,
-                principal_id=media_buy.principal_id,
-                tenant_id=media_buy.tenant_id,
-                tenant={"tenant_id": media_buy.tenant_id},
-                protocol="rest",
-            )
-
-            # Include active + completed statuses: the scheduler already filters
-            # by DB status (active/approved) at query time, so the delivery impl
-            # should include ended campaigns (dynamic status=completed) rather
-            # than filtering them out and reporting "not found" errors.
-            # We exclude "pending_start" (ready) to avoid returning delivery
-            # data for future-dated campaigns that haven't started yet.
-            from adcp.types import MediaBuyStatus
-
-            req = GetMediaBuyDeliveryRequest(
-                media_buy_ids=[media_buy.media_buy_id],
-                status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
-                start_date=start_date_obj.strftime("%Y-%m-%d"),
-                end_date=end_date_obj.strftime("%Y-%m-%d"),
-                context=None,
-            )
-
-            delivery_response = _get_media_buy_delivery_impl(req, identity)
-
-            if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
-                logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
-                )
-                return
-
-            if delivery_response.errors is not None:
-                logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
-                )
-                return
-
-            # Get sequence number for this webhook (get max sequence + 1)
-            sequence_number = 1
-            try:
-                stmt = select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
-                    WebhookDeliveryLog.media_buy_id == media_buy.media_buy_id,
-                    WebhookDeliveryLog.task_type == "media_buy_delivery",
-                )
-                max_seq = session.scalar(stmt)
-                sequence_number = (max_seq or 0) + 1
-            except Exception as e:
-                logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
-
-            # Calculate next_expected_at for daily frequency: start of next day (UTC)
-            next_day = datetime.now(UTC).date() + timedelta(days=1)
-            next_expected_at = utc_flight_start(next_day)
-
-            # Set webhook-specific metadata directly on the response model
-            # These fields are defined on the library's GetMediaBuyDeliveryResponse
-            delivery_response.notification_type = NotificationType.scheduled
-            delivery_response.next_expected_at = next_expected_at
-            delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
-            delivery_response.unavailable_count = 0  # TODO: Count reporting_delayed/failed deliveries
-
-            # Extract webhook URL and authentication
-            webhook_url = reporting_webhook.get("url")
-            if not webhook_url:
-                logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
-                return
-
-            # Try to find existing push notification config or create a temporary one
-            auth_config = reporting_webhook.get("authentication", {})
-            auth_type = None
-            auth_token = None
-
-            if auth_config:
-                schemes = auth_config.get("schemes", [])
-                auth_type = schemes[0] if schemes else None
-                auth_token = auth_config.get("credentials")
-
-            # Query for existing push notification config for this media buy
-            config_stmt = select(DBPushNotificationConfig).where(
-                DBPushNotificationConfig.principal_id == media_buy.principal_id,
-                DBPushNotificationConfig.tenant_id == media_buy.tenant_id,
-                DBPushNotificationConfig.url == webhook_url,
-                DBPushNotificationConfig.is_active,
-            )
-            push_notification_config = session.scalars(config_stmt).first()
-
-            # Extract webhook config data before session closes
-            if push_notification_config:
-                # Detach from session and extract data
-                session.expunge(push_notification_config)
-            else:
-                # Create a detached temporary config (not attached to session)
-                push_notification_config = DBPushNotificationConfig(
-                    id=f"temp_{media_buy.media_buy_id}",
-                    tenant_id=media_buy.tenant_id,
-                    principal_id=media_buy.principal_id,
-                    url=webhook_url,
-                    authentication_type=auth_type,
-                    authentication_token=auth_token,
-                    is_active=True,
-                )
-
-            # Wire vs internal task_type distinction:
-            # - metadata["task_type"] = "media_buy_delivery" -- internal logging/dedup label
-            #   used by protocol_webhook_service guards and WebhookDeliveryLog queries.
-            # - SDK task_type = "update_media_buy" -- AdCP spec TaskType enum value
-            #   for the wire payload (delivery reports are status updates on media buys).
-            # These are intentionally different: the internal label predates the SDK enum
-            # and is used for DB filtering, while the wire value must be spec-compliant.
-            # Renaming the metadata key is not safe without migrating DB records and
-            # updating all 6 protocol_webhook_service guard checks.
-            metadata = {
-                "task_type": "media_buy_delivery",
-                "tenant_id": media_buy.tenant_id,
-                "principal_id": media_buy.principal_id,
-                "media_buy_id": media_buy.media_buy_id,
-            }
-
-            # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
-            # Delivery reports are status updates on existing media buys,
-            # so we use update_media_buy as the canonical task type.
-            media_buy_delivery_payload = create_mcp_webhook_payload(
-                task_id=media_buy.media_buy_id,
-                task_type="update_media_buy",
-                result=delivery_response,
-                status=AdcpTaskStatus.completed,
-            )
-
-            # Send webhook notification OUTSIDE the session context
-            # This ensures the session is closed before async webhook call
-            await self.webhook_service.send_notification(
-                push_notification_config=push_notification_config, payload=media_buy_delivery_payload, metadata=metadata
             )
 
             logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
