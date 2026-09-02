@@ -693,6 +693,27 @@ class BaseTestEnv:
         """
         return self._last_a2a_task
 
+    @property
+    def a2a_handler(self) -> AdCPRequestHandler:
+        """The one ``AdCPRequestHandler`` this env dispatches A2A through.
+
+        In-memory task state (``tasks`` and the ``_task_owners`` recorded at
+        create, #1702) lives on the handler instance. Building a fresh handler
+        per dispatch would drop that state between a create and the subsequent
+        ``tasks/get`` / ``tasks/cancel``, so ownership could never be graded.
+
+        Side effect: every A2A skill dispatch on this env reuses the same
+        handler, so in-scenario multi-call paths can accumulate tasks. Clear
+        or replace the handler per scenario once any UC dispatches more than
+        one A2A skill call in one scenario (shared-handler reuse stops being
+        acceptable at that point).
+        """
+        if self._a2a_handler is None:
+            from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+            self._a2a_handler = AdCPRequestHandler()
+        return self._a2a_handler
+
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch through the real FastMCP Client pipeline, returning payload AND wire.
 

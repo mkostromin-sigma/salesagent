@@ -82,6 +82,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.a2a_task_ownership",
 ]
 
 # ---------------------------------------------------------------------------
@@ -3806,6 +3807,20 @@ def _run_env_route(
         yield
 
 
+def _build_a2a_task_ownership_env(e2e_config: object | None) -> AbstractContextManager:
+    """In-memory A2A tasks/get + tasks/cancel ownership gate (#1702 / #1959)."""
+    from tests.harness.a2a_task_ownership import A2ATaskOwnershipEnv
+
+    return A2ATaskOwnershipEnv(e2e_config=e2e_config)
+
+
+def _seed_a2a_task_ownership(ctx: dict, env: object) -> None:
+    """Seed owner + sibling + cross-tenant principals for ownership grading."""
+    tenant, principal = env.setup_principals()
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+
+
 _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     "T-UC-003-storyboard-media-buy-not-found": EnvRoute(
         tag="T-UC-003-storyboard-media-buy-not-found",
@@ -3832,6 +3847,11 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
     "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_uc005),
     "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_uc019),
+    "A2A-TASK-OWNERSHIP": EnvRoute(
+        tag="A2A-TASK-OWNERSHIP",
+        env_builder=_build_a2a_task_ownership_env,
+        seed=_seed_a2a_task_ownership,
+    ),
 }
 
 # Tag sets the routing predicates below key on. They were inline `if` conditions
