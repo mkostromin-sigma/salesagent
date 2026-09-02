@@ -498,7 +498,7 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
         result = ctx.get("result")
         wire_is_proxy = bool(getattr(result, "envelope", None) and result.envelope.get("wire_response_is_proxy"))
         # Payload grading on CreativeSyncEnv A2A model_dump proxy stays allowed
-        # until #1919 (Chris R3-04); require_real_wire=True would refuse that arm.
+        # until #1919 (Chris GH #1802); require_real_wire=True would refuse that arm.
         from tests.harness.transport import assert_wire_advisory
 
         assert_wire_advisory(

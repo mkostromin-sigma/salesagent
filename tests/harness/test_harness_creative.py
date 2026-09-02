@@ -183,31 +183,40 @@ class TestCreativeSyncEnvContract:
             assert a2a.tenant["gemini_api_key"] == "shared-key"
             assert rest.tenant["gemini_api_key"] == "shared-key"
 
-    def test_call_a2a_stashes_wire_response(self, monkeypatch):
-        """_raw() A2A path must stash model_dump wire for nested-advisory grading."""
-        from unittest.mock import MagicMock
+    def test_deliver_a2a_carries_wire_on_result(self, monkeypatch):
+        """A2A wire rides DeliverResult — not a deleted per-env ``_last_wire_response`` stash.
 
+        After the single-dispatch migration, ``call_a2a`` is ``deliver_a2a(...).payload`` and
+        dispatchers read ``DeliverResult.wire_response``. The old unit contract mocked
+        ``sync_creatives_raw`` and asserted ``env._last_wire_response``; that bypass and
+        attribute are gone. Pin the return-value contract instead.
+        """
         from tests.harness.creative_sync import CreativeSyncEnv
+        from tests.harness.transport import DeliverResult
 
-        fake = MagicMock()
-        fake.model_dump.return_value = {
+        wire = {
             "creatives": [
-                {"creative_id": "c1", "action": "failed", "errors": [{"code": "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"}]}
+                {
+                    "creative_id": "c1",
+                    "action": "failed",
+                    "errors": [{"code": "X_PREBID_CREATIVE_GEMINI_KEY_MISSING"}],
+                }
             ],
         }
-        monkeypatch.setattr(
-            "src.core.tools.creatives.sync_wrappers.sync_creatives_raw",
-            lambda **_kwargs: fake,
-        )
+        payload = object()
+
+        def _fake_handler(self, skill_name, response_cls, **kwargs):
+            return DeliverResult(payload=payload, wire_response=wire)
+
+        monkeypatch.setattr(CreativeSyncEnv, "_run_a2a_handler", _fake_handler)
         with _unit_mode(CreativeSyncEnv)() as env:
             env._commit_factory_data = lambda: None  # noqa: E731 — unit stub
+            delivered = env.deliver_a2a(creatives=[])
             out = env.call_a2a(creatives=[])
-        assert out is fake
-        assert env._last_wire_response == fake.model_dump.return_value
-        assert env._wire_response_is_proxy is True, (
-            "stashed wire must be flagged as a model_dump proxy, not real A2A framing"
-        )
-        fake.model_dump.assert_called_once_with(mode="json")
+        assert delivered.wire_response == wire
+        assert delivered.payload is payload
+        assert out is payload
+        assert not hasattr(env, "_last_wire_response")
 
 
 class TestNestedCreativeAdvisoryAccessor:
@@ -405,7 +414,7 @@ class TestNestedCreativeAdvisoryAccessor:
             _nested_creative_advisory_error({"transport": Transport.A2A, "wire_response": None, "response": resp})
 
     def test_nested_bdd_helper_grades_a2a_model_dump_proxy_payload(self):
-        """BDD grades proxy *payload* until real A2A framing lands (#1919 / Chris R3-04).
+        """BDD grades proxy *payload* until real A2A framing lands (#1919).
 
         Framing refusal is ``require_real_wire=True`` (integration +
         ``test_assert_wire_advisory_refuses_proxy_when_require_real_wire``).
