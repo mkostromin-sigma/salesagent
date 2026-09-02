@@ -15,12 +15,8 @@ creative-formats-refresh:
 quality-ci:
 	uv run ruff format --check .
 	uv run ruff check .
-<<<<<<< HEAD
 	uv run ruff check --config ruff-egress.toml --ignore-noqa --no-respect-gitignore src/ scripts/
 	uv run mypy src/ --config-file=mypy.ini
-=======
-	uv run mypy src/ .claude/scripts/ scripts/graduate_pending.py --config-file=mypy.ini
->>>>>>> 2a84b89cd (fix(chore): close #1665 Aug-03 KM review — grade bucket/outcomes seam)
 	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
