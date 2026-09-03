@@ -381,7 +381,7 @@ class TestA2ASkillInvocation:
     ):
         """A short webhook credential on the A2A protocol-layer config REFUSES the create.
 
-        INVERTED by salesagent-pldmk.8, deliberately. This test previously asserted
+        INVERTED by GH #1802, deliberately. This test previously asserted
         the opposite -- that an 18-character credential still created the buy --
         on the premise that ``params.configuration`` is a TRANSPORT-layer parameter
         outside request-body validation, citing gh-#1299.
@@ -689,7 +689,10 @@ class TestA2ASkillInvocation:
         from src.a2a_server.adcp_a2a_server import create_agent_card
 
         advertised = {skill.name for skill in create_agent_card().skills}
-        handlers = set(handler._skill_handlers)
+        # Dispatch SSOT is `_build_skill_handlers()` (rebuilt each call; no cached
+        # `self._skill_handlers` attribute after #1802 error-API alignment).
+        skill_handlers = handler._build_skill_handlers()
+        handlers = set(skill_handlers)
         # Docstring contract: every advertised skill is dispatchable. Handlers may
         # include unadvertised internal skills (create_creative / assign_creative);
         # equality would force advertising UnsupportedOperation stubs.
@@ -699,10 +702,10 @@ class TestA2ASkillInvocation:
         # would leave `missing` empty, making the skill undiscoverable to buyers.
         # Pin this PR's two new skills as a floor so that regression reddens.
         assert {"get_task", "complete_task"} <= advertised
-        # Value-type contract: `_skill_handlers` values are plain strings resolved
-        # via `getattr` at dispatch, so a typo'd handler name is invisible to the
-        # key-only checks above — assert every value actually resolves.
-        unresolvable = [name for name in handler._skill_handlers.values() if not hasattr(handler, name)]
+        # Value-type contract: map values are plain strings resolved via `getattr`
+        # at dispatch, so a typo'd handler name is invisible to the key-only checks
+        # above — assert every value actually resolves.
+        unresolvable = [name for name in skill_handlers.values() if not hasattr(handler, name)]
         assert not unresolvable, f"Skill handler map has unresolvable method names: {unresolvable}"
 
     # Phase 2: Tests for previously untested skills
