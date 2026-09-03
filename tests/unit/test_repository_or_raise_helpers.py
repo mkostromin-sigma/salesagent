@@ -199,11 +199,11 @@ class TestWorkflowOrRaise:
 
     def test_get_by_step_id_or_raise_default_message_from_spec_supplement(self):
         """Argument-less raise must still emit the REFERENCE_NOT_FOUND uniform message."""
-        from src.core.exceptions import _SPEC_SUPPLEMENT_CODES
+        from src.core.exceptions import REFERENCE_NOT_FOUND_MESSAGE
 
         repo = _workflow_repo_with_execute_row(None)
         with pytest.raises(AdCPTaskNotFoundError) as exc:
             repo.get_by_step_id_or_raise("step-missing", principal_id="principal-a")
         # Literal sibling grades the constant; this pins the raise uses it.
         assert str(exc.value) == "Reference not found"
-        assert str(exc.value) == _SPEC_SUPPLEMENT_CODES["REFERENCE_NOT_FOUND"]["message"]
+        assert str(exc.value) == REFERENCE_NOT_FOUND_MESSAGE

@@ -223,13 +223,20 @@ A2A_PROTOCOL_ENVELOPE_FIELDS = ("message", "success")
 
 
 def strip_a2a_protocol_fields(data: dict[str, Any]) -> dict[str, Any]:
-    """A copy of *data* without the A2A protocol-envelope fields.
+    """A copy of *data* without A2A protocol-envelope fields, when stamped.
 
     One definition, three call sites (``_run_a2a_handler``, the client's
     ``_deliver_a2a``, and ``BaseTestEnv._deliver_via_client``). Each used to
     spell the same two ``pop`` calls itself, so adding a third protocol field
     would have needed finding all of them.
+
+    Dict-returning skills (e.g. complete_task) emit a business ``message``
+    without stamping ``success``. Only strip envelope fields when the stamp
+    signature (``success``) is present — otherwise a real payload field is
+    lost and typed success parsing fails under ``extra="forbid"`` (#1812).
     """
+    if "success" not in data:
+        return dict(data)
     return {k: v for k, v in data.items() if k not in A2A_PROTOCOL_ENVELOPE_FIELDS}
 
 
