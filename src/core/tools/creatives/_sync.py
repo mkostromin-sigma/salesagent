@@ -117,12 +117,14 @@ def _sync_creatives_impl(
     # SEND-time gate and re-checks with DNS when the callback is actually dialed —
     # so no second address check belongs on this path.
     webhook_url = None
+    normalized_push_notification_config: PushNotificationConfig | None = None
     if push_notification_config:
         registration = accept_push_notification_config(
             push_notification_config,
             field_prefix="push_notification_config",
             context=context,
         )
+        normalized_push_notification_config = registration
         webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
             # Log scheme+host+path only — never credentials / full auth blob.
@@ -459,7 +461,7 @@ def _sync_creatives_impl(
             principal_id=principal_id,
             tenant=tenant,
             approval_mode=approval_mode,
-            push_notification_config=push_notification_config,
+            push_notification_config=normalized_push_notification_config,
             context=context,
             identity=identity,
         )
