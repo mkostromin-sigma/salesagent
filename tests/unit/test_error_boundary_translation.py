@@ -849,7 +849,7 @@ class TestCustomRecoveryOverrideMCPBoundary:
     """Custom recovery= override must propagate through MCP boundary (with_error_logging)."""
 
     def test_not_found_maps_to_invalid_request_through_mcp_boundary(self):
-        """AdCPNotFoundError -> ToolError carrying the wire code INVALID_REQUEST.
+        """AdCPNotFoundError -> ToolError carrying wire ``REFERENCE_NOT_FOUND``.
 
         This used to also assert that a hand-passed ``recovery="transient"``
         survived to the wire, on a code the pinned enumMetadata classifies
@@ -861,12 +861,13 @@ class TestCustomRecoveryOverrideMCPBoundary:
         ``tests/integration/test_error_paths.py`` — until the kwarg goes.
 
         What this pins is the half that outlives the kwarg: the internal
-        ``NOT_FOUND`` code is translated to the spec-standard ``INVALID_REQUEST``
-        at the boundary, with the message intact and the pinned recovery.
+        ``NOT_FOUND`` code is translated to spec ``REFERENCE_NOT_FOUND`` at the
+        boundary (typed identifier miss, AdCP L3), with the uniform buyer
+        message (raise-site text must not leak) and the pinned recovery.
         """
         from fastmcp.exceptions import ToolError
 
-        from src.core.exceptions import AdCPNotFoundError
+        from src.core.exceptions import REFERENCE_NOT_FOUND_MESSAGE, AdCPNotFoundError
         from src.core.tool_error_logging import with_error_logging
 
         def failing_tool():
@@ -882,7 +883,7 @@ class TestCustomRecoveryOverrideMCPBoundary:
             "REFERENCE_NOT_FOUND",
             check_mcp_tool_error=True,
             recovery="correctable",
-            message_substr="temporarily missing",
+            message_substr=REFERENCE_NOT_FOUND_MESSAGE,
         )
 
     def test_extract_error_info_reports_the_derived_recovery(self):
@@ -925,7 +926,7 @@ class TestTypedErrorA2ABoundary:
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
             with pytest.raises(AdCPNotFoundError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
-            # NOT_FOUND translates to INVALID_REQUEST on the wire, which the pin
+            # NOT_FOUND translates to REFERENCE_NOT_FOUND on the wire, which the pin
             # classifies correctable — the buyer can fix the reference and resend.
             assert exc_info.value.recovery == "correctable"
 
