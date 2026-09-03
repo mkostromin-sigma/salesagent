@@ -82,6 +82,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.uc027_manage_async_tasks",
 ]
 
 # ---------------------------------------------------------------------------
@@ -4077,6 +4078,22 @@ ENV_ROUTES: list[EnvRoute] = [
         when=_uc("UC-019", lambda m: "post-create-poll" in m),
         env_builder=_build_media_buy_create_list_env,
         seed=_seed_media_buy_chain,
+    ),
+    # ── UC-027 ──────────────────────────────────────────────────────────────
+    # get_task / complete_task — TaskEnv against a real DB.
+    # Wired today: @sibling-principal isolation (#1812) — same-tenant sibling
+    # denial is wire-indistinguishable from unknown task_id (REFERENCE_NOT_FOUND).
+    # Remaining BR-UC-027 scenarios stay on the not-wired catch-all.
+    EnvRoute(
+        tag="uc027-sibling-principal",
+        when=_uc("UC-027", lambda m: "sibling-principal" in m),
+        env_builder=_env("tests.harness.task_management.TaskEnv"),
+    ),
+    EnvRoute(
+        tag="uc027-not-wired",
+        when=_uc("UC-027", lambda m: True),
+        env_builder=_env("tests.harness.task_management.TaskEnv"),
+        xfail_reason="UC-027 harness wired only for the @sibling-principal isolation scenarios (#1812)",
     ),
 ]
 

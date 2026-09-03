@@ -124,6 +124,11 @@ RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
 # the same treatment in #1602.
 _SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
 
+# Repo-authored uniform buyer message for REFERENCE_NOT_FOUND (enumMetadata has
+# suggestion + recovery only — no canonical message field).
+REFERENCE_NOT_FOUND_MESSAGE = "Reference not found"
+REFERENCE_NOT_FOUND_SUGGESTION = "verify the referenced identifier exists and is accessible to the caller"
+
 # Codes the SDK helper ships that the PINNED spec does not define. The pin is the
 # authority and the helper is a cross-check (CLAUDE.md spec-grounding gate), so a
 # helper-only code is not a wire code -- it has no normative recovery
@@ -1072,6 +1077,8 @@ class AdCPTaskNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
+    _default_message: ClassVar[str | None] = REFERENCE_NOT_FOUND_MESSAGE
+    _default_suggestion: ClassVar[str | None] = REFERENCE_NOT_FOUND_SUGGESTION
 
 
 class AdCPBudgetTooLowError(AdCPError):
@@ -1294,10 +1301,21 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     so they always land in ``WIRE_STANDARD_CODES`` (the SDK's
     ``STANDARD_ERROR_CODES`` plus the pinned-spec supplement, e.g.
     ``CREATIVE_NOT_FOUND``).
+
+    Uniform-response wire codes (``REFERENCE_NOT_FOUND``): the buyer-facing
+    ``message`` is the repo-authored ``REFERENCE_NOT_FOUND_MESSAGE``, not
+    ``exc.message``. Raise-site positionals must not override the generic
+    message on the wire (AdCP L3 inaccessible-references rule; review A1 /
+    KM finding 2).
     """
+    wire_code = exc.wire_error_code
+    if wire_code == "REFERENCE_NOT_FOUND":
+        buyer_message = REFERENCE_NOT_FOUND_MESSAGE
+    else:
+        buyer_message = exc.message
     payload = adcp_error(
-        exc.wire_error_code,
-        exc.message,
+        wire_code,
+        buyer_message,
         recovery=exc.recovery,
         field=exc.field,
         suggestion=exc.suggestion,

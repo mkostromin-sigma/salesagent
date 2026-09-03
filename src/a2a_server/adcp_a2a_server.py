@@ -267,41 +267,40 @@ class AdCPRequestHandler(RequestHandler):
     def _build_skill_handlers(self) -> dict[str, str]:
         """Map skill names to handler method names (dispatch + card oracle SSOT).
 
-        Values are derived from the real bound-method references
-        (``.__name__``) rather than hand-typed strings, so a typo'd handler
-        name is a ``mypy``/attribute error at definition time instead of a
-        silent ``getattr`` ``AttributeError`` at dispatch — while the stored
-        value is still the plain method-name string ``getattr`` resolves at
-        call time, keeping ``patch.object`` visible for tests.
+        Values are plain method-name strings resolved via ``getattr`` at call
+        time so ``unittest.mock.patch.object`` on the handler remains visible.
+        Do **not** derive names from ``bound_method.__name__`` here: that map is
+        rebuilt on every dispatch, and a patched mock's ``__name__`` (e.g.
+        ``mock_skill``) would make ``getattr`` miss the real attribute.
         """
         return {
             # Core AdCP Discovery Skills
-            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill.__name__,
+            "get_adcp_capabilities": "_handle_get_adcp_capabilities_skill",
             # Core AdCP Media Buy Skills
-            "get_products": self._handle_get_products_skill.__name__,
-            "create_media_buy": self._handle_create_media_buy_skill.__name__,
+            "get_products": "_handle_get_products_skill",
+            "create_media_buy": "_handle_create_media_buy_skill",
             # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
-            "list_creative_formats": self._handle_list_creative_formats_skill.__name__,
-            "list_accounts": self._handle_list_accounts_skill.__name__,
-            "sync_accounts": self._handle_sync_accounts_skill.__name__,
-            "list_authorized_properties": self._handle_list_authorized_properties_skill.__name__,
+            "list_creative_formats": "_handle_list_creative_formats_skill",
+            "list_accounts": "_handle_list_accounts_skill",
+            "sync_accounts": "_handle_sync_accounts_skill",
+            "list_authorized_properties": "_handle_list_authorized_properties_skill",
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
-            "update_media_buy": self._handle_update_media_buy_skill.__name__,
-            "get_media_buys": self._handle_get_media_buys_skill.__name__,
-            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill.__name__,
-            "update_performance_index": self._handle_update_performance_index_skill.__name__,
+            "update_media_buy": "_handle_update_media_buy_skill",
+            "get_media_buys": "_handle_get_media_buys_skill",
+            "get_media_buy_delivery": "_handle_get_media_buy_delivery_skill",
+            "update_performance_index": "_handle_update_performance_index_skill",
             # AdCP Spec Creative Management (centralized library approach)
-            "sync_creatives": self._handle_sync_creatives_skill.__name__,
-            "list_creatives": self._handle_list_creatives_skill.__name__,
-            "create_creative": self._handle_create_creative_skill.__name__,
-            "assign_creative": self._handle_assign_creative_skill.__name__,
+            "sync_creatives": "_handle_sync_creatives_skill",
+            "list_creatives": "_handle_list_creatives_skill",
+            "create_creative": "_handle_create_creative_skill",
+            "assign_creative": "_handle_assign_creative_skill",
             # Creative Management & Approval
-            "approve_creative": self._handle_approve_creative_skill.__name__,
-            "get_media_buy_status": self._handle_get_media_buy_status_skill.__name__,
-            "optimize_media_buy": self._handle_optimize_media_buy_skill.__name__,
+            "approve_creative": "_handle_approve_creative_skill",
+            "get_media_buy_status": "_handle_get_media_buy_status_skill",
+            "optimize_media_buy": "_handle_optimize_media_buy_skill",
             # Durable AdCP task tools (principal-scoped get / complete)
-            "get_task": self._handle_get_task_skill.__name__,
-            "complete_task": self._handle_complete_task_skill.__name__,
+            "get_task": "_handle_get_task_skill",
+            "complete_task": "_handle_complete_task_skill",
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         }
