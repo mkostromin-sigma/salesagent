@@ -124,7 +124,7 @@ def _sync_creatives_impl(
             field_prefix="push_notification_config",
             context=context,
         )
-        normalized_push_notification_config = registration
+        normalized_push_notification_config = registration.config
         webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
             # Log scheme+host+path only — never credentials / full auth blob.
