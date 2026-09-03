@@ -14,7 +14,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.schemas._base import GetMediaBuysRequest
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_dict, wire_field
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_dict, wire_field, wire_objects
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
