@@ -21,7 +21,8 @@ from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
-from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
+from src.core.webhook_validator import webhook_url_for_log
+from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
 from ._processing import (
@@ -103,18 +104,26 @@ def _sync_creatives_impl(
     identity = require_identity(identity, context=context)
     tenant = require_tenant(identity, context=context)
 
-    # Registration SSRF gate before any DB / workflow writes that stash the URL.
+    # Registration SSRF gate on the buyer-supplied webhook URL, taken HERE: before
+    # any DB / workflow write stashes the URL, and before the per-creative loop,
+    # whose per-item `try` would turn this correctable VALIDATION_ERROR into a
+    # per-item transient failure and tell the buyer to retry a URL that will never
+    # be allowed. The AI-review callback fires from a background worker, so ingest
+    # is the only gate with a request left to refuse into.
+    #
+    # Deliberately the no-DNS registration gate (gh-#1697), NOT the outbound seam's
+    # validate_url (gh-#1589): validate_url always resolves, so at registration it
+    # would reject a buyer whose hostname has not yet propagated. The seam stays the
+    # SEND-time gate and re-checks with DNS when the callback is actually dialed —
+    # so no second address check belongs on this path.
     webhook_url = None
     if push_notification_config:
-        if isinstance(push_notification_config, dict):
-            webhook_url = push_notification_config.get("url")
-        else:
-            webhook_url = str(push_notification_config.url) if push_notification_config.url else None
-        reject_unsafe_webhook_registration_url(
-            webhook_url,
-            field="push_notification_config.url",
+        registration = accept_push_notification_config(
+            push_notification_config,
+            field_prefix="push_notification_config",
             context=context,
         )
+        webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
             # Log scheme+host+path only — never credentials / full auth blob.
             logger.info(

@@ -18,9 +18,11 @@ from adcp.types import CreativeAsset
 from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
-from src.core.exceptions import RecoveryHint
+from src.core.exceptions import AdCPConfigurationError, RecoveryHint
 from src.core.helpers import _extract_format_info, _validate_creative_assets
+from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
+from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.validation_helpers import run_async_in_sync_context
 
 from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
@@ -530,6 +532,36 @@ def _update_existing_creative(
                         False,
                     )
 
+        except AdCPConfigurationError as config_error:
+            # Seller-side misconfiguration raised by the dial/registry (not the
+            # GEMINI early-return path, which uses _gemini_key_missing_result).
+            # CONFIGURATION_ERROR / terminal — buyer must not retry.
+            error_msg = str(config_error)
+            logger.error(
+                "[sync_creatives] %s for update of %s",
+                error_msg,
+                existing_creative.creative_id,
+                exc_info=True,
+            )
+            return (
+                _failed_sync_result(
+                    existing_creative.creative_id,
+                    error_msg,
+                    recovery="terminal",
+                    code="CONFIGURATION_ERROR",
+                ),
+                False,
+            )
+        except OutboundError as outbound_error:
+            # A refused/undeliverable egress request is already classified by the
+            # seam — do not launder into the generic "Retry recommended" transient
+            # message below. raise_mapped_outbound_error always raises; the mapped
+            # AdCPError propagates to _sync.py's per-creative except AdCPError.
+            raise_mapped_outbound_error(
+                outbound_error,
+                provenance=OperatorEndpoint("the creative agent"),
+                logger=logger,
+            )
         except Exception as validation_error:
             # Creative agent validation failed for update (network error, agent down, etc.)
             # Do NOT update the creative - it needs validation before acceptance
@@ -809,6 +841,36 @@ def _create_new_creative(
                             False,
                         )
 
+        except AdCPConfigurationError as config_error:
+            # Seller-side misconfiguration raised by the dial/registry (not the
+            # GEMINI early-return path, which uses _gemini_key_missing_result).
+            # CONFIGURATION_ERROR / terminal — buyer must not retry.
+            error_msg = str(config_error)
+            logger.error(
+                "[sync_creatives] %s - rejecting creative %s",
+                error_msg,
+                creative_id,
+                exc_info=True,
+            )
+            return (
+                _failed_sync_result(
+                    creative_id,
+                    error_msg,
+                    recovery="terminal",
+                    code="CONFIGURATION_ERROR",
+                ),
+                False,
+            )
+        except OutboundError as outbound_error:
+            # A refused/undeliverable egress request is already classified by the
+            # seam — do not launder into the generic "Retry recommended" transient
+            # message below. raise_mapped_outbound_error always raises; the mapped
+            # AdCPError propagates to _sync.py's per-creative except AdCPError.
+            raise_mapped_outbound_error(
+                outbound_error,
+                provenance=OperatorEndpoint("the creative agent"),
+                logger=logger,
+            )
         except Exception as validation_error:
             # Creative agent validation failed (network error, agent down, etc.)
             # Do NOT store the creative - it needs validation before acceptance

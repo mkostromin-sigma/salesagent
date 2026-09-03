@@ -33,7 +33,7 @@ def _nested_creative_advisory_error(ctx: dict) -> dict | None:
     fallback — they never stash success-path wire.
 
     When ``wire_response`` is a dict, ``ctx["transport"]`` MUST be set — defaulting
-    to ``Transport.IMPL`` would disarm the loud guards.
+    to an in-process / no-wire transport would disarm the loud guards.
 
     CreativeSyncEnv A2A stashes a ``model_dump`` proxy (``wire_response_is_proxy``),
     not Task/Artifact DataPart framing (#1919). BDD still grades that proxy's
@@ -49,14 +49,14 @@ def _nested_creative_advisory_error(ctx: dict) -> dict | None:
 
     wire = ctx.get("wire_response")
     transport = ctx.get("transport")
-    response = ctx.get("response")
+    response = payload_or_none(ctx)
     result = ctx.get("result")
     wire_is_proxy = bool(getattr(result, "envelope", None) and result.envelope.get("wire_response_is_proxy"))
     if isinstance(wire, dict):
         if transport is None:
             raise AssertionError(
                 "wire_response present but ctx['transport'] unset — "
-                "refusing Transport.IMPL default that would disarm loud guards"
+                "refusing an implicit no-wire default that would disarm loud guards"
             )
         return first_failed_creative_advisory(
             wire,
@@ -66,7 +66,7 @@ def _nested_creative_advisory_error(ctx: dict) -> dict | None:
             # Payload content OK until #1919; framing-sensitive callers use True.
             require_real_wire=False,
         )
-    # IMPL / unset: no success-path wire to require.
+    # No-wire / unset: no success-path wire to require.
     if transport is None or _transport_has_no_wire(transport):
         return None
     if _response_has_failed_creative(response):
@@ -506,7 +506,7 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
             code,
             recovery=recovery,
             transport=transport,
-            response=ctx.get("response"),
+            response=payload_or_none(ctx),
             wire_is_proxy=wire_is_proxy,
             require_real_wire=False,
         )
