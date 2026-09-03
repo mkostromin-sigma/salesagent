@@ -645,7 +645,7 @@ class TestGetMediaBuysResponseFields:
         from src.core.tools.creatives import sync_creatives_raw
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_list import _get_media_buys_impl
-        from tests.helpers.adcp_factories import create_test_format
+        from tests.helpers.adcp_factories import create_test_format_id
 
         create_req = _make_create_request(
             packages=[
@@ -661,13 +661,15 @@ class TestGetMediaBuysResponseFields:
         media_buy_id = create_result.response.media_buy_id
         package_id = create_result.response.packages[0].package_id
 
-        # Mock format lookup + preview_creative so sync never dials the live
-        # creative agent (CI 429/403 there leaves creative_approvals empty).
-        mock_format = create_test_format(
-            format_id="display_300x250",
-            name="Display 300x250",
-            type="display",
-        )
+        # Offline creative-agent stubs. Use a MagicMock with local-Format
+        # semantics (``.agent_url`` property) — ``create_test_format`` returns
+        # the library Format, which has no ``agent_url`` and blows up in
+        # ``is_agent_backed`` / preview dial (CI: SERVICE_UNAVAILABLE).
+        agent = "https://creative.adcontextprotocol.org"
+        mock_format = MagicMock()
+        mock_format.format_id = create_test_format_id("display_300x250", agent_url=agent)
+        mock_format.agent_url = agent
+        mock_format.output_format_ids = None  # static → preview_creative, not build
         mock_preview = {
             "previews": [
                 {
@@ -704,7 +706,7 @@ class TestGetMediaBuysResponseFields:
                         "creative_id": "c_approval_test",
                         "name": "Approval Test Creative",
                         "format_id": {
-                            "agent_url": "https://creative.adcontextprotocol.org",
+                            "agent_url": agent,
                             "id": "display_300x250",
                         },
                         "assets": {},
