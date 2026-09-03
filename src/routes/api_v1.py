@@ -409,17 +409,13 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
 @router.post("/media-buys/query")
 async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = require_auth):
     """Query media buys (auth required) — REST transport for get_media_buys."""
+    # Do not enrich identity from account: list _impl rejects account before any
+    # DB read (UNSUPPORTED_FEATURE). Enrichment would 404 ACCOUNT_NOT_FOUND on
+    # REST only. Coerce and forward so A2A/MCP/REST share that rejection.
+    account = None
     if body.account is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
         with adcp_validation_boundary(context="get_media_buys request"):
-            account_ref = to_account_reference(body.account)
-        enriched = enrich_identity_with_account(identity, account_ref)
-        assert enriched is not None  # identity is non-None (from require_auth)
-        identity = enriched
-        account = account_ref
-    else:
-        account = None
+            account = to_account_reference(body.account)
 
     response = media_buy_list_module.get_media_buys_raw(
         media_buy_ids=body.media_buy_ids,

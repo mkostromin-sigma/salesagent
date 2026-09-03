@@ -170,6 +170,30 @@ class TestGetMediaBuysQueryEndpoint:
             identity=_MOCK_IDENTITY,
         )
 
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.transport_helpers.enrich_identity_with_account")
+    @patch("src.core.tools.media_buy_list.get_media_buys_raw")
+    def test_account_is_forwarded_without_identity_enrichment(self, mock_raw, mock_enrich, mock_resolve):
+        """Query must not DB-enrich identity; list _impl rejects account first."""
+        mock_raw.return_value = MagicMock(model_dump=lambda **kw: {"media_buys": []})
+        account_payload = {"brand": {"domain": "example.com"}, "operator": "op-1", "sandbox": False}
+        response = client.post(
+            "/api/v1/media-buys/query",
+            json={"media_buy_ids": ["mb1"], "account": account_payload},
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 200, response.text
+        mock_enrich.assert_not_called()
+        expected_account = LibraryAccountReference.model_validate(account_payload)
+        mock_raw.assert_called_once_with(
+            media_buy_ids=["mb1"],
+            status_filter=None,
+            include_snapshot=False,
+            account=expected_account,
+            context=None,
+            identity=_MOCK_IDENTITY,
+        )
+
 
 class TestGetMediaBuyDeliveryEndpoint:
     """Verify POST /api/v1/media-buys/delivery endpoint."""
