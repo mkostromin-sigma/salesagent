@@ -53,6 +53,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
 
@@ -60,6 +61,26 @@ from tests.harness.transport import DeliverResult
 # push config, request model) rather than forwarding as skill parameters — see
 # tests/harness/_base.py. They must reach it untouched.
 _A2A_RESERVED_KWARGS = frozenset({"identity", "a2a_push_notification_config", "req"})
+
+
+def _clear_gemini_api_key_e2e(env: IntegrationEnv) -> None:
+    """Null the shared-DB tenant ``gemini_api_key`` so live e2e sees a keyless seller.
+
+    Production creative-sync advisories are account-scoped (tenant dict / DB
+    column only), so clearing the process env is unnecessary — the live server
+    re-reads the tenant row on each request.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+
+    tenant = env.get_session().scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
+    if tenant is not None:
+        tenant.gemini_api_key = None
+        env._commit_factory_data()
+    tenant_dict = getattr(env.identity, "tenant", None)
+    if isinstance(tenant_dict, dict):
+        tenant_dict["gemini_api_key"] = None
 
 
 class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
